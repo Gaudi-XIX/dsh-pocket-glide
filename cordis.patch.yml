@@ -1,0 +1,13 @@
+# One package: Pocket DSH. Install it into a dsh profile
+# (`dsh plugin --profile <name> add link:F:/defws/dsh-pocket`) — the patch
+# layer below inserts the single plugin row that mounts the host half: the
+# independent lightweight bridge, the pairing gate, the device registry,
+# the tunnel manager and the phone routes.
+#
+# There is deliberately NO browser half: the phone pages are plain HTML strings
+# produced by the host and served over the bridge's own routes, so there is no
+# React bundle, no client inject, and no tsdown build step.
+
+- insert:
+    - id: pocket
+      name: '@defws/dsh-pocket'

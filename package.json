@@ -1,0 +1,32 @@
+{
+  "name": "@defws/dsh-pocket",
+  "version": "0.1.0",
+  "description": "Pocket DSH — a minimal, phone-native remote control for DSH. Independent lightweight bridge (not a desktop mirror): pair by QR/PIN, read sessions and history, send messages, stream replies. LAN + Cloudflare quick tunnel.",
+  "type": "module",
+  "main": "lib/index.js",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.js"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.0-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "cloudflared": "^0.7.3",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  },
+  "files": [
+    "lib/**/*.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "license": "Apache-2.0"
+}
