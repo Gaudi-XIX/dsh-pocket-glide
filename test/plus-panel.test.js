@@ -58,13 +58,17 @@ test('command.execute forwards agentId, line and submittedAttachments in args', 
       line: '/goal ship',
       submittedAttachments,
     })
-    // No attachments key when the composer holds none.
+    // Plain invocation still carries an empty submittedAttachments数组（宿主
+    // 无条件读 .length，缺失会抛错）。
     await rpcCall(t, cookie, 'command.execute', { sessionId: 'sess-9', line: '/compact' })
     const plain = t.harness.records.calls
       .filter((c) => c.url === '/api/commands/execute')
       .at(-1)
-    assert.deepEqual(plain.args, { agentId: 'sess-9', line: '/compact' })
-    assert.ok(!('submittedAttachments' in plain.args))
+    assert.deepEqual(plain.args, {
+      agentId: 'sess-9',
+      line: '/compact',
+      submittedAttachments: [],
+    })
   } finally {
     await t.stop()
   }
