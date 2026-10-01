@@ -69,6 +69,13 @@ test('the bridge serves the shell assets with a long private lifetime', async ()
     assert.match(pageBody, /<link rel="stylesheet" href="\/app\.css\?h=[0-9a-f]{12}">/)
     assert.match(pageBody, /<script src="\/app\.js\?l=zh&h=[0-9a-f]{12}"><\/script>/)
     assert(pageBody.length < 60000, `the phone document should be small, saw ${pageBody.length}`)
+
+    // The page references its own assets, so the policy must allow them: a CSP
+    // without 'self' on these directives renders bare, inert markup on a phone
+    // (observed live 2026-10-01, right after the split).
+    const csp = page.headers.get('content-security-policy') ?? ''
+    assert.match(csp, /style-src[^;]*'self'/, 'style-src must allow the hashed stylesheet')
+    assert.match(csp, /script-src[^;]*'self'/, 'script-src must allow the hashed script')
   } finally {
     await t.stop()
   }
