@@ -211,7 +211,7 @@ async function main() {
   const page = await fetchWithTimeout(`${innerBase}/phone`)
   const pageText = await page.text()
   assert.equal(page.status, 200)
-  assert.match(pageText, /DSH 手机|DSH Mobile/)
+  assert.match(pageText, /DSH Pocket/)
   assert.match(pageText, /<select[^>]*id="model"/, 'the model picker must exist in the page')
   assert.equal(pageText.includes('</script>'), true, 'the page must close its script tag')
   assert.equal(/\$\{/.test(pageText), false, 'the page must not leak a template placeholder')
