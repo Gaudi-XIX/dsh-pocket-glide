@@ -198,6 +198,18 @@ test('the mobile document is never compressed at the origin', () => {
   assert.equal(Buffer.concat(response.chunks).toString('utf8'), body)
 })
 
+test('the boot payload tells the handoff where the shell lives', async () => {
+  // The pairing page pulls these before it navigates; if the payload stops
+  // advertising them (or the hashes drift), the phone sits on an unstyled,
+  // inert skeleton for another tunnel round trip after the last step.
+  const bridge = makeBridge({ items: candidate })
+  const payload = await bridge.buildMobileBoot({ history: false })
+
+  assert.match(payload.assets.cssUrl, /^\/app\.css\?h=[0-9a-f]{12}$/)
+  assert.match(payload.assets.jsUrl, /^\/app\.js\?l=zh&h=[0-9a-f]{12}$/)
+  assert.equal(bridge.mobileAssetBodies('zh').urls.jsUrl, payload.assets.jsUrl, 'the advertised URLs must be the ones the document uses')
+})
+
 test('session.history retries when the aligned page comes back empty', async () => {
   // 2026-10-01: the phone's fallback history fetch got an empty aligned page and
   // blanked the conversation it had just painted. A second request shape must be

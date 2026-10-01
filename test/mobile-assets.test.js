@@ -76,6 +76,13 @@ test('the bridge serves the shell assets with a long private lifetime', async ()
     const csp = page.headers.get('content-security-policy') ?? ''
     assert.match(csp, /style-src[^;]*'self'/, 'style-src must allow the hashed stylesheet')
     assert.match(csp, /script-src[^;]*'self'/, 'script-src must allow the hashed script')
+
+    // The handoff prefetches exactly these URLs, so the document must reference
+    // them and nothing else — a mismatch means the phone re-downloads the shell
+    // after the last step instead of painting at once.
+    const urls = t.bridge.mobileAssetBodies('zh').urls
+    assert(pageBody.includes(`<link rel="stylesheet" href="${urls.cssUrl}">`), `document must reference ${urls.cssUrl}`)
+    assert(pageBody.includes(`<script src="${urls.jsUrl}"></script>`), `document must reference ${urls.jsUrl}`)
   } finally {
     await t.stop()
   }
