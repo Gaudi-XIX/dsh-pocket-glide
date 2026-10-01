@@ -59,6 +59,37 @@ test('SSE maps assistant-stream -> token, snapshot -> snapshot, other -> event',
   }
 })
 
+test('the stream also carries connection state, so the phone stops polling', async () => {
+  // No prepared frames: the fake Harness leaves the stream open, which is the
+  // state a phone sits in while it reads.
+  const t = await startBridge({ harness: 'fake' })
+  try {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(`${t.base}/api/session/stream?sessionId=sess-1`, { headers: { cookie } })
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let raw = ''
+    // The status frame arrives on its own cadence; the stream stays open.
+    const deadline = Date.now() + 9000
+    while (Date.now() < deadline && !raw.includes('event: status')) {
+      const { value, done } = await reader.read()
+      if (done) break
+      raw += decoder.decode(value, { stream: true })
+    }
+    await reader.cancel().catch(() => {})
+
+    const match = raw.match(/event: status\ndata: (\{[^\n]*\})\n\n/)
+    assert(match, 'a status frame must reach the phone')
+    const body = JSON.parse(match[1])
+    assert.equal(body.connected, true)
+    assert.equal(typeof body.expiresAt, 'number', 'the paired session expiry rides along')
+    // No tunnel is running in this test, so tunnelExpiresAt is absent — the
+    // client only reacts when it is a number.
+  } finally {
+    await t.stop()
+  }
+})
+
 test('SSE requires a sessionId', async () => {
   const t = await startBridge()
   try {
