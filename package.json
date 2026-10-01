@@ -31,9 +31,7 @@
     }
   },
   "dependencies": {
-    "cloudflared": "^0.7.3",
-    "qrcode": "^1.5.4",
-    "ws": "^8.18.0"
+    "pngjs": "^5.0.0"
   },
   "files": [
     "lib/**/*.js",

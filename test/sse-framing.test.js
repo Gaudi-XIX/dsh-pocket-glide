@@ -61,16 +61,17 @@ test('SSE maps assistant-stream -> token, snapshot -> snapshot, other -> event',
 
 test('the stream also carries connection state, so the phone stops polling', async () => {
   // No prepared frames: the fake Harness leaves the stream open, which is the
-  // state a phone sits in while it reads.
-  const t = await startBridge({ harness: 'fake' })
+  // state a phone sits in while it reads. The bridge ticks status frames fast
+  // (sseStatusMs) so the test never waits for the production 30s cadence.
+  const t = await startBridge({ harness: 'fake', bridgeOptions: { sseStatusMs: 25 } })
   try {
     const cookie = await t.pairMobile()
     const res = await httpFetch(`${t.base}/api/session/stream?sessionId=sess-1`, { headers: { cookie } })
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
     let raw = ''
-    // The status frame arrives on its own cadence; the stream stays open.
-    const deadline = Date.now() + 9000
+    // The status frame arrives on its own (fast, test-only) cadence.
+    const deadline = Date.now() + 2000
     while (Date.now() < deadline && !raw.includes('event: status')) {
       const { value, done } = await reader.read()
       if (done) break

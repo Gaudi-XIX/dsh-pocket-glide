@@ -64,11 +64,11 @@ test('JSON string literal body is rejected with 400', async () => {
   }
 })
 
-test('body over 64KB is rejected with 413', async () => {
+test('normal-tier body over 64KB is rejected with 413', async () => {
   const t = await startBridge({ harness: 'fake' })
   try {
     const cookie = await t.pairMobile()
-    const oversized = JSON.stringify({ method: 'session.prompt', pad: 'x'.repeat(70 * 1024) })
+    const oversized = JSON.stringify({ method: 'settings.describe', payload: { pad: 'x'.repeat(70 * 1024) } })
     assert.ok(oversized.length > 64 * 1024)
     const res = await rpc(t, cookie, oversized, { 'content-type': 'application/json' })
     assert.equal(res.status, 413)

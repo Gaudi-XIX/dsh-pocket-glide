@@ -73,7 +73,8 @@ process.env.DSH_MOBILE_PORT = ''
 
 /**
  * Start a real bridge on an ephemeral port.
- * @param {{ harness?: 'fake' }} [opts]
+ * @param {{ harness?: 'fake', harnessOptions?: object, bridgeOptions?: object }} [opts]
+ *   bridgeOptions: extra LanMobileBridge options (e.g. { sseStatusMs: 25 }).
  */
 export async function startBridge(opts = {}) {
   const harness = opts.harness === 'fake' ? await startFakeHarness(opts.harnessOptions) : null
@@ -84,6 +85,7 @@ export async function startBridge(opts = {}) {
     port: 0,
     pairingPinStore: { load: () => ({}), save: () => true },
     tunnelLog: () => {},
+    ...(opts.bridgeOptions ?? {}),
   })
   const snap = await bridge.start()
   assert.notEqual(snap.port, 43127, 'bridge must not bind the hardcoded default')
@@ -181,16 +183,30 @@ function wsReadFrames(socket, onText) {
 }
 
 /**
- * @param {{ frames?: unknown[], record?: (args: unknown) => void }} [options]
+ * @param {{
+ *   frames?: unknown[],
+ *   record?: (args: unknown) => void,
+ *   respond?: (pathname: string, args: unknown, body: unknown) => unknown,
+ *   get?: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, url: URL) => boolean|void|Promise<boolean|void>,
+ * }} [options]
  *   frames: durable `value` items to push on a session/follow open, then end.
  *   record: captures the args of POST /api/session/prompt.
+ *   respond: per-POST override; return an envelope `result`
+ *     ({ok:true,value} or {ok:false,error:{message}}), undefined for default.
+ *   get: handles GET/HEAD requests (e.g. /api/session.export); truthy = handled.
  */
 export function startFakeHarness(options = {}) {
   const wsSockets = new Set()
-  const records = { promptArgs: undefined, lastBody: undefined }
+  const records = { promptArgs: undefined, lastBody: undefined, calls: [] }
 
   const server = http.createServer(async (req, res) => {
-    if (req.method !== 'POST' || !req.url?.startsWith('/api/')) {
+    const parsedUrl = new URL(req.url ?? '/', 'http://fake-harness')
+    if (req.method === 'GET' || req.method === 'HEAD') {
+      if (options.get && (await options.get(req, res, parsedUrl))) return
+      res.writeHead(404).end()
+      return
+    }
+    if (req.method !== 'POST' || !parsedUrl.pathname.startsWith('/api/')) {
       res.writeHead(404).end()
       return
     }
@@ -198,9 +214,16 @@ export function startFakeHarness(options = {}) {
     for await (const chunk of req) chunks.push(chunk)
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
     records.lastBody = body
-    if (req.url === '/api/session/prompt') {
+    records.calls.push({ url: parsedUrl.pathname, args: body.payload?.args })
+    if (parsedUrl.pathname === '/api/session/prompt') {
       records.promptArgs = body.payload?.args
       options.record?.(body.payload?.args)
+    }
+    const override = options.respond?.(parsedUrl.pathname, body.payload?.args, body)
+    if (override !== undefined) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ rpcId: body.rpcId, result: override }))
+      return
     }
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ rpcId: body.rpcId, result: { ok: true, value: { echoed: true } } }))
