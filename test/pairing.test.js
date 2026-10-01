@@ -157,3 +157,44 @@ test('PIN verify outside tunnel mode is refused with 400', async () => {
     await t.stop()
   }
 })
+
+test('manual refresh: /desktop/pairing/rotate issues a new token within the TTL', async () => {
+  const t = await startBridge()
+  try {
+    const desktopCookie = await t.pairDesktop()
+    const oldToken = new URL(t.snap.pairingUrl).searchParams.get('token')
+
+    const res = await httpFetch(`${t.base}/desktop/pairing/rotate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Cookie: desktopCookie },
+    })
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.ok, true)
+
+    // The bridge now holds a different token.
+    const newToken = new URL(t.bridge.snapshot().pairingUrl).searchParams.get('token')
+    assert.notEqual(newToken, oldToken)
+    // The returned expiry is a full TTL out (the point of refreshing).
+    const remaining = body.expiresAt - Date.now()
+    assert.ok(remaining > 4 * 60_000, `expected fresh TTL, got ${remaining}ms`)
+  } finally {
+    await t.stop()
+  }
+})
+
+test('rotate without a desktop session is rejected with 403', async () => {
+  const t = await startBridge()
+  try {
+    const res = await httpFetch(`${t.base}/desktop/pairing/rotate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    })
+    assert.equal(res.status, 403)
+    // The token did not rotate.
+    const token = new URL(t.bridge.snapshot().pairingUrl).searchParams.get('token')
+    assert.equal(token, new URL(t.snap.pairingUrl).searchParams.get('token'))
+  } finally {
+    await t.stop()
+  }
+})
