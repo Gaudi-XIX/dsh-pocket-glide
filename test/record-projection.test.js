@@ -4,7 +4,7 @@
 // anything the renderer reads.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { compactSessionRecords, compactSessionFrame, stripRecordsThrough } from '../lib/bridge.js'
+import { compactSessionRecords, compactSessionFrame, stripRecordsThrough, compactSessionRows } from '../lib/bridge.js'
 
 const assistantMessage = {
   type: 'assistant/message',
@@ -94,4 +94,74 @@ test('no sinceSeq means the full page, as before', () => {
   const frame = { type: 'snapshot', records: [{ seq: 1 }, { seq: 2 }] }
 
   assert.equal(stripRecordsThrough(frame, -1), frame)
+})
+
+// ---------------------------------------------------------------------------
+// Session-list rows: a row carries the session's whole turn history inside
+// projections.values. The phone downloaded ~1 MB of that on every pairing
+// (2026-10-01: the document it embedded was 878 KB).
+// ---------------------------------------------------------------------------
+
+const fatRow = {
+  sessionId: 's1',
+  workspaceId: 'w1',
+  updatedAt: 1790820000000,
+  blank: false,
+  missingSummary: false,
+  running: true,
+  awaitingQuestion: false,
+  agentPreset: 'standard',
+  status: 'ok',
+  subagentCatalog: [{ mode: 'one-shot', label: 'x'.repeat(120), id: 'abc' }],
+  projections: {
+    asOfSeq: 1548,
+    values: {
+      title: '清理外部插件',
+      todos: [{ id: 't1', text: 'a', done: true }],
+      modelSelection: { provider: 'p', model: 'm' },
+      history: Array.from({ length: 40 }, (_, i) => ({ turn: i, prompt: 'p'.repeat(300), response: 'r'.repeat(600) })),
+      longNote: 'n'.repeat(5000)
+    }
+  }
+}
+
+test('a session row keeps what the phone renders and drops the history blob', () => {
+  const [row] = compactSessionRows([fatRow])
+
+  // Everything the list, the focus picker and the settings panel read.
+  assert.equal(row.sessionId, 's1')
+  assert.equal(row.workspaceId, 'w1')
+  assert.equal(row.updatedAt, 1790820000000)
+  assert.equal(row.blank, false)
+  assert.equal(row.missingSummary, false)
+  assert.equal(row.running, true)
+  assert.equal(row.awaitingQuestion, false)
+  assert.equal(row.agentPreset, 'standard')
+  assert.equal(row.status, 'ok')
+  assert.equal(row.projections.asOfSeq, 1548)
+  assert.equal(row.projections.values.title, '清理外部插件')
+  assert.deepEqual(row.projections.values.todos, [{ id: 't1', text: 'a', done: true }])
+  assert.deepEqual(row.projections.values.modelSelection, { provider: 'p', model: 'm' })
+
+  // The bulk is gone.
+  assert.equal(row.projections.values.history, undefined)
+  assert.equal(row.projections.values.longNote, undefined)
+  assert.equal(row.subagentCatalog, undefined)
+  assert(Buffer.byteLength(JSON.stringify([row])) < 1024, 'a row must fit in a kilobyte')
+})
+
+test('the projection never mutates the list it was given', () => {
+  compactSessionRows([fatRow])
+
+  assert.equal(fatRow.projections.values.history.length, 40)
+  assert.equal(fatRow.subagentCatalog.length, 1)
+})
+
+test('rows without projections and non-row values survive', () => {
+  const rows = compactSessionRows([{ sessionId: 'x', updatedAt: 1 }, null, 'nope'])
+
+  assert.deepEqual(rows[0], { sessionId: 'x', updatedAt: 1 })
+  assert.equal(rows[1], null)
+  assert.equal(rows[2], 'nope')
+  assert.equal(compactSessionRows(undefined), undefined)
 })
