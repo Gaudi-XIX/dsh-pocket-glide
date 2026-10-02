@@ -1,0 +1,670 @@
+// WP-A2 回归断言（change 2026-10-02-fix-pocket-audit-remediation — P0-C 掉线可见 + 半开 SSE）。
+//
+// The page script lives inside one template literal and cannot be imported, so every
+// assertion here pulls the REAL text out of the rendered asset (extractFunction /
+// between) and runs it against synthetic state — the house pattern. Behaviour-level
+// assertions come first because a literal-only assertion "passes" as soon as somebody
+// renames the variable (LEAD §D).
+//
+// Covered: AC-C1 (a disconnect names itself), AC-C2 (a good poll cannot erase a better
+// message), AC-C3 (a half-open stream is noticed and handed to the poll), AC-D4
+// (tokenStream is dropped on disconnect and on snapshot), AC-X2 (handoffPainted cannot
+// survive the same-session early exit), the one-notice-per-drop latch, the three
+// disconnect tiers, the readable copy beside the status dot, checkConnection counting a
+// non-OK answer as unreachable, the rpc errorCode consumer, and the pull gesture brought
+// in line with the button and the auto-fill path (WP-A1's leftover asymmetry).
+//
+// File-ownership note for LEAD: the tasks checklist sends AC-X2 to
+// test/stream-watermark.test.js and AC-D4 to test/empty-buffer-bootstrap.test.js.
+// Neither file is writable by this worker (the first is WP-A1's committed guard set, the
+// second was never created), so both assertions live here instead — the same
+// disposition LEAD approved for WP-A1 in handoff/lead-decisions-1.md D-1. Nothing below
+// depends on the file name.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mobilePageAssets, renderMobilePage } from '../lib/pages.js'
+
+const { js } = mobilePageAssets({ locale: 'zh' })
+const { js: jsEn } = mobilePageAssets({ locale: 'en' })
+const BOOT = JSON.stringify({ ws: { items: [] }, sess: { items: [] } })
+
+function extractFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`)
+  assert.notEqual(start, -1, `${name} must exist in the rendered asset`)
+  let depth = 0
+  for (let i = start; i < source.length; i++) {
+    const char = source[i]
+    if (char === '{') depth++
+    else if (char === '}') {
+      depth--
+      if (depth === 0) return source.slice(start, i + 1)
+    }
+  }
+  throw new Error(`unbalanced braces after ${name}`)
+}
+
+function between(startAnchor, endAnchor, source = js) {
+  const start = source.indexOf(startAnchor)
+  const end = source.indexOf(endAnchor, start)
+  assert.notEqual(start, -1, `anchor ${startAnchor} must exist in the page script`)
+  assert.notEqual(end, -1, `anchor ${endAnchor} must exist in the page script`)
+  return source.slice(start, end)
+}
+
+// extractFunction counts braces from the signature, so a parameter with an object
+// default (function rpc(method,payload={},timeoutMs)) closes the count early. For those
+// the slice runs to the next definition instead — still the real text, just wider.
+function extractUntil(name, endAnchor, source = js) {
+  return between(`function ${name}(`, endAnchor, source).replace(/\s+$/, '')
+}
+
+// The page's own label tables, so every copy asserted below is what the phone renders.
+function pageLabels(source) {
+  const line = source.match(/^const L=(\{.*\});/m)
+  assert(line, 'the page label table must render as one JSON line')
+  return JSON.parse(line[1])
+}
+
+const L = pageLabels(js)
+const LEN = pageLabels(jsEn)
+
+function element(initial = '') {
+  const classes = new Set()
+  const el = {
+    textContent: initial,
+    hidden: true,
+    attrs: {},
+    classList: {
+      add: (...names) => names.forEach((name) => classes.add(name)),
+      remove: (...names) => names.forEach((name) => classes.delete(name)),
+      contains: (name) => classes.has(name),
+      toggle: (name, on) => { if (on) classes.add(name); else classes.delete(name) },
+    },
+    setAttribute: (name, value) => { el.attrs[name] = value },
+    getAttribute: (name) => (name in el.attrs ? el.attrs[name] : null),
+  }
+  return el
+}
+
+function fakeContainers() {
+  return {
+    chatError: element(),
+    listError: element(),
+    settingsError: element(),
+    questionError: element(),
+    statusText: element(),
+    status: element(),
+    tunnelWarn: element(),
+  }
+}
+
+const NOTICE_ORGANS = [
+  'isStreamDownCopy',
+  'importantChatCopy',
+  'showError',
+  'clearTransientError',
+  'streamDownCopy',
+  'notifyStreamDown',
+  'noteStreamRecovery',
+  'setStatusCopy',
+]
+
+// The flags the notice organs share. Every sandbox that runs one of them has to own
+// them, or the page code throws on a missing global and the test proves nothing.
+const NOTICE_STATE = (state = {}) => `
+    let importantErrorActive=${JSON.stringify(Boolean(state.importantErrorActive))}
+    let streamDownNoticeShown=${JSON.stringify(Boolean(state.streamDownNoticeShown))}
+    let tunnelLinkActive=${JSON.stringify(Boolean(state.tunnelLinkActive))}
+    const L=${JSON.stringify(L)}
+    const $=(id)=>containers[id]
+`
+
+// showError, the disconnect notice and the transient-clear guard share the page flags
+// importantErrorActive / streamDownNoticeShown / tunnelLinkActive, so the sandbox owns
+// them exactly as the page does and the latch is exercised rather than described.
+function buildNoticeSandbox(state = {}) {
+  const containers = fakeContainers()
+  const body = NOTICE_ORGANS.map((name) => extractFunction(js, name)).join('\n')
+  const make = new Function(
+    'containers',
+    'document',
+    `
+    ${NOTICE_STATE(state)}
+    ${body}
+    return {
+      showError, clearTransientError, notifyStreamDown, noteStreamRecovery, streamDownCopy, setStatusCopy,
+      get importantErrorActive(){return importantErrorActive},
+      get streamDownNoticeShown(){return streamDownNoticeShown},
+      set tunnelLinkActive(value){tunnelLinkActive=value},
+      containers,
+    }
+  `,
+  )
+  return make(containers, state.document || { hidden: false })
+}
+
+// The mandated shape: what one rendered error line actually shows.
+function renderedError(error, fallback) {
+  const sandbox = buildNoticeSandbox()
+  sandbox.showError('chatError', error, fallback)
+  return sandbox.containers.chatError.textContent
+}
+
+// ----------------------------------------------------------------------- AC-C1
+
+test('AC-C1 a disconnect names itself in both locales', () => {
+  assert.equal(L.disconnectedRetry, '连接已断开，正在重试…', 'the zh copy is the one the audit asked for')
+  assert.equal(LEN.disconnectedRetry, 'Connection lost, retrying…', 'and the en branch exists beside it')
+  assert.equal(renderedError({ disconnected: true }), '连接已断开，正在重试…')
+  assert.equal(renderedError({ disconnected: true }), L.disconnectedRetry, 'the page label, not a test copy')
+})
+
+test('AC-C1 no disconnected-to-empty mapping survives anywhere in the script', () => {
+  // Acceptance criterion at source level. A rename would hide it from a variable check,
+  // so the empty-string branch itself is what must be gone.
+  assert.ok(!js.includes("error?.disconnected?'':"), 'the zh asset is clean')
+  assert.ok(!jsEn.includes("error?.disconnected?'':"), 'the en asset is clean')
+  assert.match(js, /function showError\(id,error,fallback\)\{const text=error\?\.disconnected\?L\.disconnectedRetry/)
+})
+
+test('AC-C1 every other showError branch is untouched', () => {
+  assert.equal(renderedError({ message: '上一轮没能跑完' }), '上一轮没能跑完', 'a message still wins')
+  assert.equal(renderedError(null, '指令执行失败'), '指令执行失败', 'then the caller fallback')
+  assert.equal(renderedError(null), L.failed, 'and only then the generic failure')
+  assert.equal(renderedError({ timeout: true, message: L.requestTimeout }), L.requestTimeout, 'a timeout is not a disconnect')
+})
+
+// ----------------------------------------------------------------------- AC-C2
+
+test('AC-C2 a successful poll keeps the stream failure copy', () => {
+  const sandbox = buildNoticeSandbox()
+  const copy = `${L.streamFailure} (E_STREAM)`
+  sandbox.showError('chatError', { message: copy, important: true })
+  assert.equal(sandbox.importantErrorActive, true, 'a failed stream outranks a clean poll')
+  sandbox.clearTransientError('chatError')
+  assert.equal(sandbox.containers.chatError.textContent, copy, 'so the poll leaves it alone')
+  assert.equal(sandbox.containers.chatError.textContent, '连接中断 (E_STREAM)', 'the copy the audit asked to keep')
+})
+
+test('AC-C2 loadHistory clears through the guard instead of an assignment', () => {
+  const loading = between('async function loadHistory(initial,force)', 'const FALLBACK_IMAGE_LIMITS')
+  assert.ok(loading.includes("clearTransientError('chatError')"), 'the success path asks the guard')
+  assert.ok(!loading.includes("$('chatError').textContent=''"), 'a bare assignment would silence the disconnect again')
+})
+
+test('AC-C2 loadHistory stopped folding its own disconnect into a generic failure', () => {
+  // Live probe 2026-10-03: with the RPC path broken, tapping send showed 请求失败 —
+  // the catch below was passing `''` for a disconnected error, exactly the mapping
+  // showError was fixed from doing.
+  const loading = between('async function loadHistory(initial,force)', 'const FALLBACK_IMAGE_LIMITS')
+  assert.ok(loading.includes("showError('chatError',e)"), 'the real error reaches showError')
+  assert.ok(!loading.includes("e?.disconnected&&!e?.timeout?'':e"), 'the hand-rolled fold is gone')
+})
+
+test('AC-C2 the status poll clears through the same guard', () => {
+  const checking = 'async ' + extractFunction(js, 'checkConnection')
+  assert.ok(!checking.includes("$('chatError').textContent=''"), 'no bare erasure beside the dot')
+  assert.equal((checking.match(/clearTransientError\('chatError'\)/g) || []).length, 2, 'both failure branches ask the guard')
+})
+
+test('AC-C2 an ordinary copy is still cleared, and only the named line is touched', () => {
+  const sandbox = buildNoticeSandbox()
+  sandbox.showError('chatError', { message: '指令执行失败' })
+  assert.equal(sandbox.importantErrorActive, false, 'an ordinary failure is not a standing alarm')
+  sandbox.containers.listError.textContent = '会话列表加载失败'
+  sandbox.clearTransientError('chatError')
+  assert.equal(sandbox.containers.chatError.textContent, '', 'the clean poll may clear it')
+  assert.equal(sandbox.containers.listError.textContent, '会话列表加载失败', 'and nothing else is erased')
+})
+
+// ------------------------------------------------- 每轮断开最多一次（闩锁，不是绝对计数）
+
+test('the disconnect notice speaks once per drop and re-arms on the first frame back', () => {
+  const sandbox = buildNoticeSandbox({ tunnelLinkActive: true })
+  sandbox.notifyStreamDown()
+  const first = sandbox.containers.chatError.textContent
+  assert.equal(first, L.streamDownTunnel, 'a tunnel drop names the tunnel')
+  assert.equal(sandbox.containers.statusText.textContent, L.statusReconnecting, 'and the dot gains words')
+  assert.equal(sandbox.streamDownNoticeShown, true)
+  // Further retry ticks of the same outage must not rewrite or stack the message.
+  sandbox.containers.chatError.textContent = '别的消息'
+  sandbox.notifyStreamDown()
+  assert.equal(sandbox.containers.chatError.textContent, '别的消息', 'the latch swallowed the repeat')
+  // The first frame that proves delivery closes the latch and retires the copy it answered.
+  sandbox.containers.chatError.textContent = first
+  sandbox.noteStreamRecovery()
+  assert.equal(sandbox.streamDownNoticeShown, false, 'recovered')
+  assert.equal(sandbox.containers.chatError.textContent, '', 'and the notice it answered is gone')
+  assert.equal(sandbox.containers.statusText.textContent, L.statusConnected)
+  sandbox.notifyStreamDown()
+  assert.equal(sandbox.containers.chatError.textContent, L.streamDownTunnel, 'a new drop is a new round')
+})
+
+test('the latch is a per-round limit, not a lifetime quota', () => {
+  const sandbox = buildNoticeSandbox()
+  for (let round = 0; round < 3; round += 1) {
+    sandbox.notifyStreamDown()
+    sandbox.notifyStreamDown()
+    sandbox.notifyStreamDown()
+    assert.equal(sandbox.importantErrorActive, true, 'the copy is standing through the outage')
+    sandbox.noteStreamRecovery()
+    assert.equal(sandbox.importantErrorActive, false, 'and the recovery releases the guard')
+  }
+})
+
+// ---------------------------------------------------------------- 断线原因三档标签
+
+test('the three disconnect tiers exist in both locales and are picked by cause', () => {
+  for (const [key, zh, en] of [
+    ['streamDownTunnel', '远程链接断了，正在自动重试…', 'The remote link dropped, retrying on its own…'],
+    ['streamDownHost', '桌面端在重启或暂时联系不上，正在重试…', 'The desktop is restarting or unreachable, retrying…'],
+    ['streamDownBackground', '会话被移到后台，回到前台会自动继续', 'This chat moved to the background; it resumes when you return'],
+  ]) {
+    assert.equal(L[key], zh, `zh tier ${key}`)
+    assert.equal(LEN[key], en, `en tier ${key}`)
+  }
+  assert.equal(buildNoticeSandbox().streamDownCopy(), L.streamDownHost, 'a LAN page blames the desktop')
+  assert.equal(buildNoticeSandbox({ tunnelLinkActive: true }).streamDownCopy(), L.streamDownTunnel, 'a tunnel page blames the link')
+  const hidden = buildNoticeSandbox({ document: { hidden: true }, tunnelLinkActive: true })
+  assert.equal(hidden.streamDownCopy(), L.streamDownBackground, 'and a backgrounded tab says it moved to the background')
+})
+
+test('the tunnel tier comes from the status payload, not from a guess', () => {
+  const warning = between('function renderTunnelWarning(expiresAt)', 'function formatDeviceExpiryTime')
+  assert.ok(warning.includes('tunnelLinkActive=typeof expiresAt==='), 'the copy is derived from the frame it already reads')
+  assert.ok(warning.includes('expiresAt>Date.now()'), 'and an expired link is not an active one')
+})
+
+// --------------------------------------------------------------------- #status 文案位
+
+test('the status dot gained a readable copy slot beside it', () => {
+  const zhPage = renderMobilePage({ locale: 'zh', boot: BOOT, initialChat: true })
+  const enPage = renderMobilePage({ locale: 'en', boot: BOOT, initialChat: true })
+  assert.match(zhPage, /<span id="statusText" class="status-text" aria-hidden="true">正在连接<\/span>/, 'the slot ships with the header')
+  assert.match(enPage, /<span id="statusText" class="status-text" aria-hidden="true">Connecting<\/span>/, 'in both locales')
+  assert.match(zhPage, /\.status-text\{/, 'and is styled instead of inheriting the dot')
+  assert.ok(zhPage.includes('<div id="status" class="status connecting" role="status"'), 'the dot keeps its role')
+  const setter = between('function setStatusCopy(text)', 'function renderTunnelWarning')
+  assert.ok(setter.includes("$('statusText')"), 'the writer targets the slot only')
+  const sandbox = buildNoticeSandbox()
+  sandbox.setStatusCopy(L.statusDisconnected)
+  assert.equal(sandbox.containers.statusText.textContent, '已断开')
+  sandbox.setStatusCopy('')
+  assert.equal(sandbox.containers.statusText.textContent, '', 'an empty copy is allowed')
+})
+
+test('the aria-label logic stayed where it was and the copy is written beside it', () => {
+  const checking = 'async ' + extractFunction(js, 'checkConnection')
+  assert.equal((checking.match(/status\.setAttribute\('aria-label',/g) || []).length, 3, 'three branches still set the label')
+  assert.ok(between('function applyLiveStatus(body)', '(async()=>{').includes('setStatusCopy(L.statusConnected)'), 'the live status frame writes the copy too')
+})
+
+// -------------------------------------------------------------------- checkConnection
+
+function buildConnectionSandbox(state = {}) {
+  const containers = fakeContainers()
+  const events = []
+  const source = 'async ' + extractFunction(js, 'checkConnection')
+  // checkConnection clears through clearTransientError, so the notice organs and their
+  // flags have to be present in this sandbox too — otherwise the missing global would
+  // throw inside the try and the test would measure the catch branch by accident.
+  const organs = NOTICE_ORGANS.map((name) => extractFunction(js, name)).join('\n')
+  const make = new Function(
+    'containers',
+    'fetch',
+    'document',
+    'location',
+    'showUnreachableOverlay',
+    'hideUnreachableOverlay',
+    'applyInheritedSettings',
+    'renderTunnelWarning',
+    'renderDeviceExpiry',
+    `
+    ${NOTICE_STATE(state)}
+    ${organs}
+    let lastLiveStatusAt=0,unreachableStreak=0
+    ${source}
+    return {
+      checkConnection,
+      notifyStreamDown,
+      showError,
+      containers,
+      copy: () => containers.statusText.textContent,
+      get unreachableStreak(){return unreachableStreak},
+      set unreachableStreak(value){unreachableStreak=value},
+      set lastLiveStatusAt(value){lastLiveStatusAt=value},
+      set streamDownNoticeShown(value){streamDownNoticeShown=value},
+      get importantErrorActive(){return importantErrorActive},
+    }
+  `,
+  )
+  const sandbox = make(
+    containers,
+    state.fetch,
+    state.document || { hidden: false },
+    state.location || { replace: (target) => events.push(`replace:${target}`) },
+    () => events.push('overlay'),
+    () => events.push('hide-overlay'),
+    () => {},
+    () => {},
+    () => {},
+  )
+  sandbox.events = events
+  return sandbox
+}
+
+const statusReply = (init) => async () => ({
+  ok: init.ok,
+  status: init.status,
+  json: async () => init.body ?? {},
+})
+
+test('a non-OK answer from /api/status counts as unreachable and says so', async () => {
+  const sandbox = buildConnectionSandbox({ fetch: statusReply({ ok: false, status: 500, body: {} }) })
+  await sandbox.checkConnection()
+  assert.equal(sandbox.unreachableStreak, 1, 'the !response.ok branch must accumulate the streak')
+  assert.equal(sandbox.copy(), L.statusDisconnected, 'and the header reads 已断开')
+  assert.ok(sandbox.containers.status.classList.contains('error-state'), 'the dot still turns red')
+  await sandbox.checkConnection()
+  await sandbox.checkConnection()
+  assert.equal(sandbox.unreachableStreak, 3, 'three strikes, not an instant full-screen alarm')
+  assert.ok(sandbox.events.includes('overlay'), 'the overlay arrives on the third')
+})
+
+test('the 401 path is byte-for-byte the old behaviour: redirect, no added notice', async () => {
+  const sandbox = buildConnectionSandbox({ fetch: statusReply({ ok: false, status: 401, body: {} }) })
+  await sandbox.checkConnection()
+  assert.deepEqual(sandbox.events.filter((event) => event.startsWith('replace:')), ['replace:/disconnected'])
+  assert.equal(sandbox.unreachableStreak, 0, 'a redirect is not an unreachable round')
+  assert.equal(sandbox.events.includes('overlay'), false, 'and it stacks no prompt')
+  assert.ok(!js.includes("location.replace('/disconnected');return}unreachableStreak"), 'the 401 return is not decorated')
+})
+
+test('the eight-second live-status exemption is still there (it is anti-flicker)', async () => {
+  let calls = 0
+  const sandbox = buildConnectionSandbox({
+    fetch: async () => {
+      calls += 1
+      return { ok: true, status: 200, json: async () => ({}) }
+    },
+  })
+  sandbox.lastLiveStatusAt = Date.now()
+  await sandbox.checkConnection()
+  assert.equal(calls, 0, 'a live status frame suppresses the poll')
+})
+
+test('a healthy poll does not shout over a standing stream notice', async () => {
+  const sandbox = buildConnectionSandbox({ fetch: statusReply({ ok: true, status: 200, body: { settings: null } }) })
+  sandbox.streamDownNoticeShown = true
+  await sandbox.checkConnection()
+  assert.equal(sandbox.unreachableStreak, 0, 'the bridge answered, so the transport is not unreachable')
+  assert.equal(sandbox.copy(), L.statusReconnecting, 'but the words still say 重连中')
+})
+
+test('the status poll leaves a standing notice alone instead of blanking it', async () => {
+  const sandbox = buildConnectionSandbox({ fetch: () => Promise.reject(new TypeError('Failed to fetch')) })
+  // The outage itself puts the copy on screen, exactly as the page does: through the
+  // notice, which is what flags it as the message a later poll must not erase.
+  sandbox.notifyStreamDown()
+  sandbox.containers.listError.textContent = '会话列表加载失败'
+  assert.equal(sandbox.containers.chatError.textContent, L.streamDownHost, 'the notice is on screen')
+  await sandbox.checkConnection()
+  assert.equal(sandbox.containers.chatError.textContent, L.streamDownHost, 'the outage poll leaves it alone')
+  assert.equal(sandbox.importantErrorActive, true, 'and the page still treats it as the important message')
+  assert.equal(sandbox.containers.listError.textContent, '', 'an ordinary list error is still cleared')
+})
+
+// ------------------------------------------------------------------------ AC-C3 (X2)
+
+const staleLine = () => js.match(/const SSE_KEEPALIVE_MS=[^\n]*/)[0]
+
+test('AC-C3 every frame branch refreshes the staleness clock', () => {
+  const open = between('function openSessionStream(sessionId)', 'async function showSessionList()')
+  for (const branch of ['snapshot', 'event', 'token']) {
+    const start = open.indexOf(`source.addEventListener('${branch}'`)
+    assert.notEqual(start, -1, `the ${branch} listener must exist`)
+    const next = open.indexOf("source.addEventListener('", start + 10)
+    const slice = open.slice(start, next === -1 ? open.length : next)
+    assert.ok(slice.includes('lastStreamFrameAt=Date.now()'), `the ${branch} listener must feed the clock`)
+    assert.ok(slice.includes('noteStreamRecovery()'), `the ${branch} listener must also close the latch`)
+  }
+  // The status frame is the only periodic frame a healthy idle chat receives, so it
+  // feeds the clock too — otherwise the watchdog would fire on every quiet conversation.
+  const status = between("source.addEventListener('status'", "source.addEventListener('snapshot'")
+  assert.ok(status.includes('lastStreamFrameAt=Date.now()'), 'the status branch feeds the clock as well')
+})
+
+test('AC-C3 the threshold is a multiple of the server keepalive period', () => {
+  assert.match(staleLine(), /const SSE_KEEPALIVE_MS=15000,STREAM_STALE_MS=SSE_KEEPALIVE_MS\*4/)
+  assert.ok(js.includes('},SSE_KEEPALIVE_MS)}'), 'the watch ticks on the keepalive period')
+  // Deviation registered in the handoff: two keepalive cycles (30s) is the same length
+  // as the status frame the page can actually see (lib/constants.js SSE_STATUS_MS), so
+  // it would tear down every healthy idle chat twice a minute.
+  const [, multiplier] = staleLine().match(/SSE_KEEPALIVE_MS\*(\d+)/)
+  assert.ok(Number(multiplier) >= 4, `threshold must cover two status cycles, got ${multiplier} keepalive periods`)
+})
+
+function buildStaleSandbox({ hidden = false, clock = 1_000 } = {}) {
+  const containers = fakeContainers()
+  const world = { clock, tick: null, calls: [], retryAt: null, retry: null }
+  const body = ['streamDownCopy', 'notifyStreamDown', 'noteStreamRecovery', 'setStatusCopy', 'clearStreamStaleWatch', 'armStreamRetry', 'armStreamStaleWatch']
+    .map((name) => extractFunction(js, name))
+    .join('\n')
+  const make = new Function(
+    'containers',
+    'document',
+    'Date',
+    'setInterval',
+    'clearInterval',
+    'setTimeout',
+    'clearTimeout',
+    'closeSessionStream',
+    'schedulePoll',
+    'openSessionStream',
+    'world',
+    `
+    let activeSession='s1',streamConnected=true,sessionStream=null,lastStreamFrameAt=0,streamDownNoticeShown=false,streamStaleTimer=null,streamRetryTimer=null,tunnelLinkActive=false,importantErrorActive=false
+    ${staleLine()}
+    const L=${JSON.stringify(L)}
+    const $=(id)=>containers[id]
+    function isStreamDownCopy(){return false}
+    function importantChatCopy(){return false}
+    ${body}
+    return {
+      armStreamStaleWatch,
+      tick(){ if(typeof world.tick==='function') world.tick() },
+      runRetry(){ if(typeof world.retry==='function') world.retry() },
+      state: () => ({ lastStreamFrameAt, streamDownNoticeShown, armed: streamStaleTimer !== null, retryScheduled: world.retryAt !== null }),
+    }
+  `,
+  )
+  const sandbox = make(
+    containers,
+    { hidden },
+    { now: () => world.clock },
+    (callback) => { world.tick = callback; return 1 },
+    () => { world.tick = null },
+    (callback, ms) => { world.retry = callback; world.retryAt = ms; return 2 },
+    () => { world.retry = null; world.retryAt = null },
+    () => world.calls.push('closeSessionStream'),
+    () => world.calls.push('schedulePoll'),
+    () => world.calls.push('openSessionStream'),
+    world,
+  )
+  sandbox.world = world
+  sandbox.containers = containers
+  return sandbox
+}
+
+test('AC-C3 a half-open stream is dropped to the poll and reported once', () => {
+  const sandbox = buildStaleSandbox()
+  sandbox.armStreamStaleWatch('s1')
+  assert.equal(typeof sandbox.world.tick, 'function', 'opening a stream arms the watch')
+  assert.equal(sandbox.state().armed, true)
+  sandbox.world.clock = 16_000
+  sandbox.tick()
+  assert.deepEqual(sandbox.world.calls, [], 'one keepalive period of silence is normal')
+  sandbox.world.clock = 31_000
+  sandbox.tick()
+  assert.deepEqual(sandbox.world.calls, [], 'two periods is still normal — the page cannot see a ping')
+  sandbox.world.clock = 61_001
+  sandbox.tick()
+  assert.deepEqual(sandbox.world.calls, ['closeSessionStream', 'schedulePoll'], 'beyond the threshold the stream yields to the poll')
+  assert.equal(sandbox.containers.chatError.textContent, L.streamDownHost, 'and the reason is on screen')
+  assert.equal(sandbox.containers.statusText.textContent, L.statusReconnecting, 'and the dot says so too')
+  assert.equal(sandbox.state().streamDownNoticeShown, true, 'the latch is what keeps it to one notice')
+  // The line promises a retry, so one has to be scheduled — on the stale bound, not sooner.
+  assert.equal(sandbox.state().retryScheduled, true, 'the downgrade arms a retry')
+  assert.equal(sandbox.world.retryAt, 60_000, 'at the stale threshold as its cadence')
+  sandbox.runRetry()
+  assert.deepEqual(sandbox.world.calls, ['closeSessionStream', 'schedulePoll', 'openSessionStream'], 'and the retry re-opens the stream')
+  // The interval itself is taken down by closeSessionStream — asserted separately at
+  // source level below, because the stub here stands in for that function.
+})
+
+test('AC-C3 the retry does not fire on another session or a hidden tab', () => {
+  const hidden = buildStaleSandbox({ hidden: true })
+  hidden.armStreamStaleWatch('s1')
+  hidden.world.clock = 61_001
+  hidden.tick()
+  assert.deepEqual(hidden.world.calls, [], 'a hidden tab is not declared stale')
+  assert.equal(hidden.state().retryScheduled, false, 'and nothing is scheduled behind it')
+})
+
+test('AC-C3 closing the stream disarms the watch, so it cannot repeat', () => {
+  const closing = between('function closeSessionStream()', 'function applyHistory(')
+  assert.ok(closing.includes('clearStreamStaleWatch();'), 'no orphan interval after a session leaves')
+  const armed = between('function armStreamStaleWatch(sessionId)', 'function showTranscriptRetry()', js)
+  assert.ok(armed.startsWith('function armStreamStaleWatch(sessionId){clearStreamStaleWatch();'), 'and re-arming replaces the old watch')
+})
+
+test('AC-C3 a backgrounded tab holds the clock instead of reporting a false drop', () => {
+  const watching = between('function armStreamStaleWatch(sessionId)', 'function loadingShell()')
+  assert.ok(watching.includes('if(document.hidden){lastStreamFrameAt=Date.now();return}'), 'hidden means no verdict')
+})
+
+// --------------------------------------------------------------------- AC-D4 (X3-2)
+
+test('AC-D4 a disconnect and a snapshot both drop the half-finished token bubble', () => {
+  const onError = between('source.onerror=()=>{', 'armStreamStaleWatch(sessionId)')
+  assert.ok(onError.includes('tokenStream=null'), 'otherwise a reconnect appends a second copy of the answer')
+  assert.ok(onError.includes('notifyStreamDown()'), 'and the drop is finally visible')
+  const snapshot = between("source.addEventListener('snapshot'", "source.addEventListener('event'")
+  assert.ok(snapshot.includes('tokenStream=null'), 'a durable snapshot must not leave the partial behind')
+})
+
+// ----------------------------------------------------------------------- AC-X2 (X3-1)
+
+test('AC-X2 the same-session early exit clears handoffPainted', async () => {
+  // Behaviour level: run the real early return and watch the flag.
+  const source = 'async ' + extractFunction(js, 'openSession')
+  const make = new Function(`
+    let activeSession='s1',streamConnected=true,handoffPainted=true,poll=null
+    function closeSessionStream(){throw new Error('the early exit must not tear the stream down')}
+    function clearTimeout(){return 0}
+    ${source}
+    return { openSession, get handoffPainted(){return handoffPainted} }
+  `)
+  const sandbox = make()
+  await sandbox.openSession('s1', '标题')
+  assert.equal(sandbox.handoffPainted, false, 'the flag may not survive a no-op openSession')
+})
+
+test('AC-X2 the handoff fast path still keeps its flag', () => {
+  // The reset belongs on the early exit only: noteHandoffCoverage sets the flag before
+  // openSession is entered, so a blanket reset at the top would make every handoff pay
+  // the 900ms history RPC again (WP-A1 AC-A5).
+  const open = between('async function openSession(id,title', 'function armSkeletonWatchdog')
+  const early = open.indexOf('if(activeSession===id&&streamConnected&&!fromHistory)')
+  assert.notEqual(early, -1, 'the early exit is still there')
+  const reset = open.indexOf('handoffPainted=false', early)
+  assert.ok(reset > -1 && reset < open.indexOf('return', early), 'the reset runs on that path')
+  assert.ok(js.includes('if(activeSession===id&&firstFrame!==true&&!handoffPainted)await loadHistory(true);'), 'the skip it protects is intact')
+})
+
+// -------------------------------------- 三条更早消息的路径必须同构（WP-A1 残留不对称）
+
+test('the pull gesture gates on the same condition as the button and the auto fill', () => {
+  const gesture = between("box.addEventListener('touchstart'", "box.addEventListener('touchmove'")
+  assert.ok(
+    gesture.includes('if(!olderHasMore&&!olderEvents.length&&transcriptHasContent())return'),
+    'an empty transcript must be allowed to start a pull',
+  )
+  assert.ok(!gesture.includes('if(!olderHasMore&&!olderEvents.length)return'), 'the old veto is gone')
+  const row = between('function olderButtonHtml()', 'function paintMessages(')
+  assert.ok(row.includes('if(!olderHasMore&&!olderEvents.length&&transcriptHasContent())return'), 'same gate as the older row')
+  const fill = between('async function ensureTranscriptFilled()', 'function oldestEventSeq()')
+  assert.ok(fill.includes('if(!olderHasMore&&transcriptHasContent())return'), 'and the auto fill agrees')
+  assert.ok(fill.includes('(olderHasMore||!transcriptHasContent())'), 'the fill loop keeps running while nothing is painted')
+})
+
+// ------------------------------------------------------------------ X4-9 errorCode
+
+function buildRpcSandbox(response) {
+  const codesLine = js.match(/const BRIDGE_TRANSPORT_CODES=[^\n]*/)[0]
+  const source = 'async ' + extractUntil('rpc', '// A dropped stream')
+  const make = new Function('fetch', 'setTimeout', 'clearTimeout', `
+    const L=${JSON.stringify(L)}
+    const RPC_TIMEOUT_MS=12000,RPC_SLOW_TIMEOUT_MS=180000
+    ${codesLine}
+    ${extractFunction(js, 'rpcFailure')}
+    ${source}
+    return rpc
+  `)
+  return make(
+    async () => response,
+    () => 0,
+    () => {},
+  )
+}
+
+const rpcReply = (status, body, { broken = false } = {}) => ({
+  status,
+  ok: status >= 200 && status < 300,
+  json: async () => {
+    if (broken) throw new TypeError('Unexpected token')
+    return body
+  },
+})
+
+test('the rpc consumer reads errorCode and names the transport family', async () => {
+  const rpc = buildRpcSandbox(rpcReply(502, { ok: false, error: 'Harness is not reachable.', errorCode: '__bridge/transport' }))
+  await assert.rejects(
+    () => rpc('session.history', { sessionId: 's1' }),
+    (error) => {
+      assert.equal(error.message, L.streamDownHost, 'a desktop that cannot be reached is not a generic failure')
+      assert.equal(error.errorCode, '__bridge/transport', 'and the code is carried for whoever asks next')
+      return true
+    },
+  )
+})
+
+test('an unknown code keeps the bridge own words, and no code keeps the old copy', async () => {
+  const refused = buildRpcSandbox(rpcReply(400, { ok: false, error: 'sessionId must be a string.', errorCode: '__bridge/invalid-arguments' }))
+  await assert.rejects(
+    () => refused('session.history', {}),
+    (error) => {
+      assert.equal(error.message, 'sessionId must be a string.', 'the bridge prose stays the answer')
+      assert.equal(error.errorCode, '__bridge/invalid-arguments')
+      return true
+    },
+  )
+  const legacy = buildRpcSandbox(rpcReply(400, { ok: false, error: 'Session id is required.' }))
+  await assert.rejects(() => legacy('session.history', {}), (error) => error.message === 'Session id is required.')
+  const plain = buildRpcSandbox(rpcReply(400, {}, { broken: true }))
+  await assert.rejects(() => plain('session.history', {}), (error) => error.message === L.failed, 'a body that is not json still falls back')
+  const down = buildRpcSandbox(rpcReply(503, {}, { broken: true }))
+  await assert.rejects(() => down('session.history', {}), (error) => error.message === L.streamDownHost, 'a plain-text 503 is the desktop family')
+})
+
+test('a successful rpc still returns its value and a 401 is still a disconnect', async () => {
+  const ok = buildRpcSandbox(rpcReply(200, { ok: true, value: { events: [1] } }))
+  assert.deepEqual(await ok('session.history', {}), { events: [1] })
+  const unauthorized = buildRpcSandbox(rpcReply(401, { ok: false, error: 'Pair your phone again.' }))
+  await assert.rejects(() => unauthorized('session.history', {}), (error) => error.disconnected === true, 'the 401 path is unchanged')
+})
+
+test('the page reads errorCode at all (the audit claimed zero consumers)', () => {
+  assert.ok(js.includes('body?.errorCode'), 'rpcFailure reads the field')
+  assert.ok(!js.includes("throw new Error(j.error||L.failed)"), 'the old collapse is gone')
+})

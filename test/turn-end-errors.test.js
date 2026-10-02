@@ -92,3 +92,39 @@ test('completed and forked turns produce no error bubble', () => {
     )
   }
 })
+
+// WP-A2 (P0-C) non-regression pair. The disconnect work moved copies into the error
+// line; it must not have touched the two things this file exists for — the turn-error
+// bubble is still projected by visibleMessages, and the transport copies stay in
+// #chatError rather than leaking into the transcript. A later worker who "simplifies"
+// either half should see this go red.
+test('the error line carries a dropped stream; the transcript still carries the turn failure', () => {
+  // 1. The stream `failure` frame keeps its own surface and its own copy.
+  const streamSlice = between(
+    "source.addEventListener('failure'",
+    'source.onerror',
+  )
+  assert.ok(streamSlice.includes("showError('chatError',{message:(frame.message||L.streamFailure)"), 'the failure frame still writes chatError')
+  assert.ok(streamSlice.includes('important:true'), 'and is flagged so a clean poll cannot erase it')
+
+  // 2. The transcript renderer never speaks for the transport.
+  const renderer = source.slice(source.indexOf('function renderMessage('), source.indexOf('\n', source.indexOf('function renderMessage(')))
+  assert.notEqual(renderer, '', 'the message renderer must still exist')
+  for (const key of ['disconnectedRetry', 'streamDownTunnel', 'streamDownHost', 'streamDownBackground']) {
+    assert.ok(!renderer.includes(`L.${key}`), `${key} must not be rendered into a message bubble`)
+  }
+  // Each disconnect label is read by exactly two places: the copy classifier and the
+  // notice writer. Any third reader belongs to the transcript and must be argued for.
+  for (const key of ['disconnectedRetry', 'streamDownTunnel', 'streamDownHost', 'streamDownBackground', 'statusConnected', 'statusDisconnected', 'statusReconnecting']) {
+    const reads = [...source.matchAll(new RegExp(`L\\.${key}\\b`, 'g'))].length
+    assert.ok(reads >= 1, `${key} must have a consumer, not just a definition`)
+    assert.ok(reads <= 3, `${key} is read in ${reads} places; the transport copy needs at most three`)
+  }
+
+  // 3. visibleMessages is still the one projection point for turn failures.
+  const messages = visibleMessages([
+    endEvent({ kind: 'error', error: { message: 'Provider rate limit', code: 'rate_limit' } }),
+  ])
+  assert.equal(messages.at(-1).role, 'turn-error', 'the bubble survives the P0-C changes')
+  assert.equal(messages.at(-1).blocks[0].detail, 'Provider rate limit', 'with its own detail')
+})
