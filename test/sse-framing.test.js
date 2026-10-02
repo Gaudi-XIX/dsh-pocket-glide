@@ -91,6 +91,43 @@ test('the stream also carries connection state, so the phone stops polling', asy
   }
 })
 
+// AC-A4 (2026-10-02 audit, P0-A) — full-stack half. A stale sinceSeq is exactly
+// what a page-wide watermark produces when the user switches session: every seq
+// the new session logs is below it. Before the fix the bridge answered that with
+// an emptied snapshot and silently dropped the session's own committed frames, so
+// the phone sat on a blank transcript with a stream it believed was live.
+test('a stale sinceSeq still delivers the session own committed frames', async () => {
+  const pages = [
+    { type: 'snapshot', records: [{ seq: 1, type: 'user/message', data: {} }, { seq: 3, type: 'turn/end', data: { reason: { kind: 'completed' } } }], projections: {} },
+    { type: 'turn/end', seq: 3, data: { reason: { kind: 'completed' } } },
+  ]
+  const t = await startBridge({ harness: 'fake', harnessOptions: { frames: pages } })
+  try {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(`${t.base}/api/session/stream?sessionId=sess-1&sinceSeq=9`, {
+      headers: { cookie },
+    })
+    assert.equal(res.status, 200)
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let raw = ''
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      raw += decoder.decode(value, { stream: true })
+    }
+
+    // The array branch keeps filtering — the opening snapshot arrives, emptied.
+    assert.match(raw, /event: snapshot\ndata: \{[^\n]*"records":\[\][^\n]*\}\n\n/, 'the snapshot must still reach the phone')
+    // The single durable frame must NOT be swallowed by the watermark.
+    assert.match(raw, /event: event\ndata: \{"type":"turn\/end","seq":3,"data":\{"reason":\{"kind":"completed"\}\}\}\n\n/, 'turn/end survives a watermark above its seq')
+    assert.equal(raw.match(/event: event\n/g)?.length, 1)
+  } finally {
+    await t.stop()
+  }
+})
+
 test('SSE requires a sessionId', async () => {
   const t = await startBridge()
   try {

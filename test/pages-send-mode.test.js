@@ -30,9 +30,24 @@ test('a reconnect snapshot merges with buffered events instead of replacing them
     'snapshot records must merge into the existing buffer',
   )
   assert.ok(
-    !html.includes('streamSinceSeq>=0?mergeEntries(streamEvents.concat(incoming)):incoming'),
-    'non-handoff snapshots must not replace the buffer wholesale',
+    !html.includes('sinceSeq>=0?incoming:mergeEntries'),
+    'no watermark may switch the merge off — the buffer stays append-only',
   )
+  // 2026-10-02 audit WP-A1 / A-1: the negative anchor this slot held named the
+  // page-wide `streamSinceSeq`, which no longer exists, so it could no longer go
+  // red for the shape it was guarding (change 2026-10-02-fix-pocket-audit-remediation).
+  assert.ok(!html.includes('streamSinceSeq'), 'the page-wide watermark must be gone')
+})
+
+// AC-A2 (2026-10-02 audit, P0-A): the EventSource watermark must be the opened
+// session's own, resolved at open time — a value that outlives the conversation
+// it was taken from filters the next session's snapshot to nothing and drops its
+// committed turn/end frames on the bridge.
+test('the stream asks for what only THIS session has already shown', () => {
+  const html = renderMobilePage({ locale: 'zh' })
+  assert.ok(!html.includes("'&sinceSeq='+streamSinceSeq"), '跨会话全局水位线必须删除')
+  assert.ok(html.includes("'&sinceSeq='+sinceSeq"), 'the URL carries the per-session local')
+  assert.ok(html.includes('const sinceSeq=streamWatermark(sessionId)'), 'and it comes from the per-session map')
 })
 
 test('mobile page folds one whole turn into a single turn-process container', () => {

@@ -134,14 +134,27 @@ test('the transcript offers a tap target for older messages', () => {
   assert.ok(html.includes('data-older="1"'), 'the older row must be tappable')
   assert.ok(html.includes('data-reload="1"'), 'a failed first load must offer a retry')
   assert.ok(html.includes('class="older-row'), 'older-row CSS/markup must ship')
-  assert.ok(html.includes('box.innerHTML=olderButtonHtml()+messages.map(renderMessage).join(\'\')+status'))
+  // 2026-10-02 audit WP-A1 / A-7②: an empty transcript must not paint an empty
+  // box, so the join moved behind the emptiness test. Rewritten from the old
+  // literal `box.innerHTML=olderButtonHtml()+messages.map(renderMessage).join('')+status`
+  // (change 2026-10-02-fix-pocket-audit-remediation, tasks WP-A1 A-7②) — the older
+  // row still leads and the messages still follow it.
+  assert.ok(html.includes("box.innerHTML=olderButtonHtml()+(messages.length?messages.map(renderMessage).join(''):transcriptWaitHtml(box))+status"))
   assert.ok(html.includes('function renderOlderButton()'), 'the row must be re-synced without a full repaint')
 })
 
 test('short transcripts keep pulling older pages until the viewport is filled', () => {
   const { js } = mobilePageAssets({ locale: 'zh' })
   assert.ok(js.includes('async function ensureTranscriptFilled()'))
-  assert.ok(js.includes('if(!olderHasMore||box.scrollHeight>box.clientHeight+8)return'), 'fill only while short')
+  // 2026-10-02 audit WP-A1 / A-7④: the one combined test conflated "there is
+  // nothing older" with "the screen is already full", so an empty transcript was
+  // never filled. Rewritten from `if(!olderHasMore||box.scrollHeight>box.clientHeight+8)return`
+  // (change 2026-10-02-fix-pocket-audit-remediation) into the two separate reasons
+  // to stop, and the loop condition now mirrors them.
+  assert.ok(js.includes('if(box.scrollHeight>box.clientHeight+8)return'), 'fill only while short')
+  assert.ok(js.includes('if(!olderHasMore&&transcriptHasContent())return'), 'stop only when nothing is missing')
+  assert.ok(!js.includes('if(!olderHasMore||box.scrollHeight>box.clientHeight+8)return'), 'the combined early return is gone')
+  assert.ok(js.includes('while(activeSession&&(olderHasMore||!transcriptHasContent())'), 'an empty buffer keeps filling')
   assert.ok(js.includes('pages<8'), 'the fill loop must be bounded')
   assert.ok(js.includes('const deadline=Date.now()+6000'), 'the fill loop needs a time budget')
   assert.ok(js.includes('void ensureTranscriptFilled()'), 'a finished page triggers the next fill')
@@ -163,7 +176,16 @@ test('short transcripts keep pulling older pages until the viewport is filled', 
 test('a blank skeleton is retried instead of being left on screen', () => {
   const { js } = mobilePageAssets({ locale: 'zh' })
   assert.ok(js.includes('function armSkeletonWatchdog('), 'the skeleton needs a watchdog')
-  assert.ok(js.includes("if(!$('messages').querySelector('.loading'))return"), 'the watchdog stops once content paints')
+  // 2026-10-02 audit WP-A1 / A-7①: a painted transcript, not a skeleton still on
+  // screen, is what tells the watchdog to stop — a failed load replaces the
+  // skeleton with its own block, so the old anchor disarmed the retries exactly
+  // when the user needed them. Rewritten from
+  // `if(!$('messages').querySelector('.loading'))return`
+  // (change 2026-10-02-fix-pocket-audit-remediation); a session the desktop
+  // reports as blank needs no content, so it is not retried into a false failure.
+  assert.ok(js.includes("if($('messages').querySelector('.message')||sessionBlank)return"), 'the watchdog stops once content paints')
+  assert.ok(!js.includes("if(!$('messages').querySelector('.loading'))return"), 'the skeleton is no longer the stop signal')
+  assert.ok(js.includes('if(attempt>=3){showTranscriptRetry();return}'), 'three silent retries end in a tappable retry')
   assert.ok(js.includes('armSkeletonWatchdog(id)'), 'openSession must arm it')
   assert.ok(js.includes('clearSkeletonWatchdog()'), 'leaving the session must disarm it')
   assert.ok(js.includes('if(!activeSession||(historyBusy&&!force))return'), 'the watchdog needs a forced retry path')
@@ -311,8 +333,11 @@ test('the transcript wait names itself instead of showing bare grey bars', () =>
   assert.ok(js.includes('正在同步会话内容…'), 'the zh copy matches the pairing steps verbatim')
   assert.equal(
     js.split('loadingShell()').length - 1,
-    3,
-    'the helper and its two call sites (first paint, failed-load retry)',
+    // 2026-10-02 audit WP-A1 / A-7②: raised from 3. An empty repaint needs the
+    // same named wait as the first paint, so transcriptWaitHtml() joined the two
+    // existing call sites (change 2026-10-02-fix-pocket-audit-remediation).
+    4,
+    'the helper and its three call sites (first paint, failed-load retry, empty repaint)',
   )
   assert.ok(!js.includes('$(\'messages\').innerHTML=\'<div class="loading">'), 'no anonymous skeleton block survives')
   assert.ok(css.includes('.loading-hint{'), 'the hint needs its own style')

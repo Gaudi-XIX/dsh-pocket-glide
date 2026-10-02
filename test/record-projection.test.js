@@ -85,8 +85,13 @@ test('a fully covered snapshot is still sent, empty, so the phone knows the stre
   assert.equal(filtered.type, 'snapshot')
 })
 
-test('a durable event the phone already has is dropped entirely', () => {
-  assert.equal(stripRecordsThrough({ type: 'assistant/chunk', seq: 4, data: 'x' }, 5), null)
+// 2026-10-02 audit, P0-A (WP-A1 / A-4): a single durable event is NEVER swallowed
+// by the watermark any more. seq is a per-session log offset on the host, so the
+// seq the phone reports can belong to a different conversation entirely; dropping
+// `turn/end` over that is far more expensive than repeating one frame, which the
+// page already dedupes by seq. Only the arrays are filtered.
+test('a durable event is passed through even at or below the watermark', () => {
+  assert.deepEqual(stripRecordsThrough({ type: 'turn/end', seq: 4, data: {} }, 5), { type: 'turn/end', seq: 4, data: {} })
   assert.deepEqual(stripRecordsThrough({ type: 'assistant/chunk', seq: 6, data: 'x' }, 5), { type: 'assistant/chunk', seq: 6, data: 'x' })
 })
 
