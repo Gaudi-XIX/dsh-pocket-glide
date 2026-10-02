@@ -1,35 +1,78 @@
 /**
- * Integration test: mount @defws/dsh-phone-native on the REAL
- * dsh-host-webserver that ships inside the official DSH payload.
+ * Integration probe: load @defws/dsh-pocket onto the REAL dsh-host-webserver that
+ * ships inside the official DSH payload.
  *
- * test-closed-loop.mjs proves the plugin's own logic against a mock webServer.
- * This file proves the production contract instead: my route objects are
- * accepted by the official register()/match() implementation, the official
- * 404-until-registered behaviour applies, duplicate registration throws, and
- * unclaimed WebSocket upgrades are destroyed by the real handler.
+ * What the unit suite already covers: everything the plugin does on its own —
+ * `test/*.test.js` boots the real bridge against a fake harness on an OS-assigned
+ * port. What this file proves instead is the PRODUCTION CONTRACT of the host half:
  *
- * Nothing here restarts the host, installs packages, or touches the network.
+ *   - the route objects the plugin hands to `webServer.register()` are accepted by
+ *     the official `register()` (kind/path shape, and the disposer it returns),
+ *   - the official 404-until-claimed behaviour still applies to paths the plugin
+ *     does not claim — including the retired `/phone*` family,
+ *   - duplicate `(kind, path)` registration throws the official error,
+ *   - unclaimed WebSocket upgrades are destroyed by the real handler, not crashed,
+ *   - the node half opens no upgrade route of its own (design 禁令 4: the stream is
+ *     SSE, there is no second WebSocket server here),
+ *   - disposing the plugin's effect removes its routes while the listener lives.
  *
- * Usage: node F:\defws\dsh-phone-native\test-real-webserver.mjs
+ * The plugin's own surface, restated because it changed with the pocket rewrite:
+ *   - the browser half is `client/client.js` (the sidebar footer action); it is NOT
+ *     part of this probe — there is no client runtime in Node,
+ *   - the node half claims exactly TWO prefix routes on the host web server:
+ *     `/desktop` (the pairing surface, proxied to the bridge) and `/brand-logo`,
+ *   - the bridge is an INDEPENDENT `node:http` server that `apply()` starts inside
+ *     its own effect; that is why the phone page lives on the bridge's port and
+ *     why the host listener only ever sees those two prefixes.
+ *
+ * Nothing here restarts the host, installs packages, or goes beyond loopback.
+ * It is NOT matched by `test/*.test.js`, so `npm test` never picks it up; run it as
+ * `npm run test:real-webserver`.
+ *
+ * Requirements:
+ *   - an unpacked official payload. Default root:
+ *     F:\\defws\\tmp\\20260926-official-dsh-desktop\\official-files\\dsh\\node_modules
+ *     Override with DSH_OFFICIAL_MODULES. If the entry files are missing the probe
+ *     exits non-zero naming the path it wanted — it never fakes a pass.
+ *   - that root sits under tmp/ by workspace convention: re-creatable, not kept
+ *     forever, so a red run here may simply mean the payload extraction is gone.
+ *
+ * Side effect worth knowing: loading lib/index.js builds the file logger, which
+ * appends to the real `~/.dsh/pocket/logs/pocket.log`. Point DSH_HOME somewhere
+ * throwaway first if you would rather not mix these lines into the live log:
+ *   DSH_HOME=<empty dir> npm run test:real-webserver
  */
 
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)))
 const libDir = path.join(pluginRoot, 'lib')
 
-// The official payload we read the webserver source from. See README.md.
-const OFFICIAL_ROOT = 'F:\\defws\\tmp\\20260926-official-dsh-desktop\\official-files\\dsh\\node_modules'
+// The official payload this probe reads the webserver source from.
+const OFFICIAL_ROOT =
+  process.env.DSH_OFFICIAL_MODULES?.trim() ||
+  'F:\\defws\\tmp\\20260926-official-dsh-desktop\\official-files\\dsh\\node_modules'
 const WEBSERVER_ENTRY = path.join(OFFICIAL_ROOT, '@deepseek-ai', 'dsh-host-webserver', 'lib', 'index.js')
+const CORDIS_ENTRY = path.join(OFFICIAL_ROOT, '@deepseek-ai', 'cordis', 'lib', 'index.js')
+
+/** The two prefixes the node half claims on the host web server. */
+const EXPECTED_PREFIXES = ['/desktop', '/brand-logo']
 
 const results = []
-const teardowns = []
+/** Teardown effects opened by the official service itself. */
+const hostTeardowns = []
+/** Teardown effects opened by the plugin (lib/index.js calls ctx.effect(fn) unlabeled). */
+const pluginTeardowns = []
+const registrations = []
+const registerDisposers = []
+const upgrades = []
 const warnings = []
 const errors = []
+
 function check(label, pass, detail) {
   results.push({ label, pass, detail })
   const mark = pass ? 'PASS' : 'FAIL'
@@ -37,15 +80,22 @@ function check(label, pass, detail) {
   console.log(`  [${mark}] ${label}${suffix}`)
 }
 
+function toFileUrl(filePath) {
+  return pathToFileURL(filePath).href
+}
+
 async function main() {
   console.log('== loading the real dsh-host-webserver ==')
-  if (!fs.existsSync(WEBSERVER_ENTRY)) {
-    console.error(`MISSING ${WEBSERVER_ENTRY}`)
-    console.error('This test only runs where the official payload is present.')
-    process.exitCode = 1
-    return
+  for (const entry of [WEBSERVER_ENTRY, CORDIS_ENTRY]) {
+    if (!fs.existsSync(entry)) {
+      console.error(`MISSING ${entry}`)
+      console.error('This probe only runs where an official payload is unpacked.')
+      console.error('Point DSH_OFFICIAL_MODULES at a node_modules root that holds it, or re-extract the one above.')
+      process.exitCode = 1
+      return
+    }
   }
-  const webserverModule = await import(pathToFileURL(WEBSERVER_ENTRY))
+  const webserverModule = await import(toFileUrl(WEBSERVER_ENTRY))
   const WebServer = webserverModule.WebServer ?? webserverModule.default
   if (typeof WebServer !== 'function') {
     console.error('the official module did not export a WebServer class')
@@ -55,12 +105,13 @@ async function main() {
   console.log(`  loaded WebServer from ${WEBSERVER_ENTRY}`)
 
   // --- the smallest cordis-shaped ctx the official service accepts ----------
-  // dsh-host-webserver/lib/index.js reads ctx.logger.warn/error and registers a
-  // teardown through ctx.effect, so both must exist. Its constructor also runs
-  // the cordis Service base, which requires ctx.reflect.provide (cordis
-  // lib/index.js:1782) — a no-op is enough outside a real container.
-  const makeCtx = () => ({
+  // dsh-host-webserver reads ctx.logger.* and registers a teardown through
+  // ctx.effect; its constructor also runs the cordis Service base, which wants
+  // ctx.reflect.provide — a no-op is enough outside a real container.
+  const makeCtx = (sink) => ({
     logger: {
+      info: () => {},
+      debug: () => {},
       warn: (message) => { warnings.push(String(message)) },
       error: (message) => { errors.push(String(message)) },
     },
@@ -68,103 +119,153 @@ async function main() {
     effect: (fn, label) => {
       const disposed = fn()
       const disposer = typeof disposed === 'function' ? disposed : () => {}
-      teardowns.push({ label: String(label), disposer })
+      sink.push({ label: label === undefined ? '(unlabeled)' : String(label), disposer })
       return disposer
     },
   })
 
-  // --- boot the real server, then hand the SAME instance to my plugin --------
-  // Listening is the cordis lifecycle hook [Service.init]() (webserver
-  // lib/index.js:228), not a public listen() method. The hook resolves once the
-  // socket is bound, and it registers its own teardown effect.
-  const config = { host: '127.0.0.1', port: 0, compression: 'none' }
-  const webServerCtx = makeCtx()
-  const webServer = new WebServer(webServerCtx, config)
-  const cordis = await import(pathToFileURL(path.join(OFFICIAL_ROOT, '@deepseek-ai', 'cordis', 'lib', 'index.js')))
+  // --- boot the real server, then hand the SAME instance to the plugin ------
+  // Listening is the cordis lifecycle hook [Service.init](), not a public
+  // listen() method; the hook resolves once the socket is bound.
+  const webServerCtx = makeCtx(hostTeardowns)
+  const webServer = new WebServer(webServerCtx, { host: '127.0.0.1', port: 0, compression: 'none' })
+  const cordis = await import(toFileUrl(CORDIS_ENTRY))
   const initHook = cordis.Service?.init ?? cordis.default?.init
   if (typeof initHook !== 'symbol') {
     console.error('could not resolve the cordis Service.init lifecycle symbol')
     process.exitCode = 1
     return
   }
-  await webServerinitHookFallback(webServer, initHook)
+  await initWebServer(webServer, initHook)
   const port = Number(webServer.port ?? webServer.listenedPort)
   check('real webserver listens on an ephemeral port', Number.isFinite(port) && port > 0, `port=${port}`)
 
-  const pluginApply = (await import(pathToFileURL(path.join(libDir, 'index.js')))).apply
+  const pluginApply = (await import(toFileUrl(path.join(libDir, 'index.js')))).apply
+  if (typeof pluginApply !== 'function') {
+    console.error('lib/index.js exposes no apply(ctx) — this probe drives the node half only')
+    process.exitCode = 1
+    return
+  }
 
-  // The plugin only needs webServer.port/register/registerUpgrade,
-  // connection.authenticatedUrl, effect, set and logger from ctx.
+  // Record what the plugin registers without fabricating a stand-in for the real
+  // service: own properties on the instance shadow the prototype methods, and
+  // everything else (the `port` accessor included) still resolves on the real
+  // object. Each shim delegates immediately and restores nothing — this process
+  // exists only to run this probe.
+  const realRegister = webServer.register.bind(webServer)
+  webServer.register = (route) => {
+    registrations.push(route)
+    const disposer = realRegister(route)
+    registerDisposers.push(disposer)
+    return disposer
+  }
+  let upgradeSeen = false
+  if (typeof webServer.registerUpgrade === 'function') {
+    const realRegisterUpgrade = webServer.registerUpgrade.bind(webServer)
+    webServer.registerUpgrade = (route) => {
+      upgradeSeen = true
+      upgrades.push(route)
+      return realRegisterUpgrade(route)
+    }
+  }
+
   const stored = {}
   const pluginCtx = {
-    get logger() { return webServerCtx.logger },
-    get webServer() { return webServer },
-    get connection() {
-      return {
-        authenticatedUrl: (base) => `${base}?token=fake-launch-token`,
+    logger: webServerCtx.logger,
+    webServer,
+    connection: { authenticatedUrl: (base) => `${base}?token=fake-launch-token` },
+    effect: makeCtx(pluginTeardowns).effect,
+    // lib/index.js consumes `connection` + `webServer` through ctx.inject (soft
+    // dependency); a fake container resolves every requested dependency itself.
+    inject(deps, callback) {
+      for (const dep of deps) {
+        if (pluginCtx[dep] === undefined) throw new Error(`probe ctx cannot supply ${String(dep)}`)
       }
-    },
-    effect: (fn, label) => {
-      const disposed = fn()
-      const disposer = typeof disposed === 'function' ? disposed : () => {}
-      teardowns.push({ label: String(label), disposer })
-      return disposer
+      return callback(pluginCtx)
     },
     set: (key, value) => { stored[key] = value },
   }
 
   console.log('== applying the plugin onto the real webserver ==')
   pluginApply(pluginCtx)
-  const registered = stored['phone-native']
-  check('plugin applied without throwing', registered !== undefined)
-  check('plugin exposed its public surface', registered && typeof registered.status === 'function')
+
+  // --- 1. the plugin claims exactly the two host-side prefixes --------------
+  const claimed = registrations.map((route) => `${route.kind}:${route.path}`).sort()
+  const expected = EXPECTED_PREFIXES.map((p) => `prefix:${p}`).sort()
+  check(
+    'node half registers exactly prefix:/desktop and prefix:/brand-logo',
+    JSON.stringify(claimed) === JSON.stringify(expected),
+    claimed.join(', ') || '(nothing registered)',
+  )
+  check(
+    'official register() returned a disposer per claimed route',
+    registrations.length === 2 && registerDisposers.length === 2 && registerDisposers.every((d) => typeof d === 'function'),
+    `disposers=${registerDisposers.map((d) => typeof d).join(', ') || '(none)'}`,
+  )
+  check(
+    'the retired /phone* family is not claimed on the host listener',
+    !registrations.some((route) => String(route.path).startsWith('/phone')),
+    `registrations=${registrations.length}`,
+  )
 
   const base = `http://127.0.0.1:${port}`
 
-  // --- 1. unregistered path -> 404 (official behaviour, before my fallback) --
-  // None of my routes claim /nope, and no fallback is registered, so this is
-  // pure official surface: proves I am not accidentally claiming a prefix.
+  // --- 2. unclaimed path -> 404 (official behaviour, before any fallback) ----
   const unclaimed = await request(`${base}/nope`)
   check('unclaimed path returns 404', unclaimed.status === 404, `status=${unclaimed.status}`)
+  const retired = await request(`${base}/phone`)
+  check('GET /phone is 404 on the host listener now', retired.status === 404, `status=${retired.status}`)
 
-  // --- 2. duplicate registration must throw the official error --------------
-  // (kind, path) uniqueness is enforced by the real register().
-  const dup = stored['phone-native'].routes[0]
+  // --- 3. duplicate (kind, path) must throw the official error ---------------
+  const first = registrations[0]
   let duplicateError
-  try { webServer.register({ kind: dup.kind, path: dup.path, handler: dup.handler }) } catch (e) { duplicateError = e }
+  if (first) {
+    try { realRegister({ kind: first.kind, path: first.path, handler: () => {} }) }
+    catch (error) { duplicateError = error }
+  }
   check('duplicate (kind,path) throws', duplicateError instanceof Error, duplicateError?.message)
 
-  // --- 3. my routes are reachable through the real matcher -------------------
-  const page = await request(`${base}/phone`)
-  check('GET /phone answered by the real router', page.status === 401 || page.status === 200, `status=${page.status}`)
+  // --- 4. /desktop is routed by the official matcher into the plugin handler -
+  // The handler proxies to the bridge, which may still be coming up: a proxied
+  // 200/403 (pairing page / refused) or the documented 503 all prove the official
+  // register/match chain handed this request to the plugin rather than 404-ing it.
+  const desktop = await request(`${base}/desktop`)
+  check(
+    'GET /desktop is served by the plugin through the official matcher',
+    [200, 403, 503].includes(desktop.status),
+    `status=${desktop.status} body=${desktop.body.slice(0, 60)}`,
+  )
+  if (desktop.status === 503) {
+    console.log('    (bridge not ready yet — the proxy answered "Pocket bridge is not ready.")')
+  }
 
-  // --- 4. unclaimed WS upgrade is destroyed, not crashed --------------------
-  // The official upgrade handler only honours its upgrades table and calls
-  // socket.destroy() for anything else. A destroyed socket surfaces as a
-  // socket 'close' with no HTTP response — assert we get no 101 and no crash.
+  // --- 5. unclaimed WS upgrade is destroyed, not crashed ---------------------
   const upgrade = await probeUpgrade(port, '/not-a-registered-ws')
   check('unknown upgrade path gets no 101', !upgrade.upgraded, 'socket closed')
+  check(
+    'node half opens no WebSocket upgrade of its own',
+    !upgradeSeen,
+    upgradeSeen ? `count=${upgrades.length}` : 'count=0',
+  )
 
-  // --- 5. teardown leaves nothing behind ------------------------------------
-  // Disposing must remove MY routes while the real listener stays up. Note the
-  // teardowns array also holds the webserver's own "webServer.listen" effect
-  // (registered by [Service.init]) — disposing that one closes the listener,
-  // so only this plugin's effects are disposed for this assertion, and the
-  // server is shut down explicitly at the very end.
-  const pluginTeardowns = teardowns.filter((entry) => entry.label.startsWith('phone-native:'))
-  check('plugin registered the expected effects', pluginTeardowns.length === 3, `count=${pluginTeardowns.length}`)
+  // --- 6. teardown removes the plugin routes, listener survives -------------
   for (const entry of pluginTeardowns) entry.disposer()
-  await new Promise((r) => setTimeout(r, 50))
-  const afterDispose = await request(`${base}/phone`)
-  check('phone route unregistered after teardown', afterDispose.status === 404, `status=${afterDispose.status}`)
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  const afterDispose = await request(`${base}/desktop`)
+  // A status line at all (rather than ECONNREFUSED) is what proves the official
+  // listener is still up while the plugin's routes are gone.
+  check('desktop route unregistered after teardown', afterDispose.status === 404, `status=${afterDispose.status}`)
+  const brandAfterDispose = await request(`${base}/brand-logo/light`)
+  check('brand-logo route unregistered after teardown', brandAfterDispose.status === 404, `status=${brandAfterDispose.status}`)
 
-  // Close the listener cleanly so the process can exit without a lingering handle.
-  const listenerEffect = teardowns.find((entry) => entry.label === 'webServer.listen')
-  listenerEffect?.disposer()
-  await new Promise((r) => setTimeout(r, 50))
+  for (const entry of hostTeardowns.reverse()) entry.disposer()
+  await new Promise((resolve) => setTimeout(resolve, 50))
 
-  console.log('== warnings / errors captured ==')
+  if (stored.pocket !== undefined) {
+    console.log('  note: the node half still ctx.set("pocket", …); that service has no consumer (audit item M1).')
+  }
   console.log(`  warnings: ${warnings.length}, errors: ${errors.length}`)
+  for (const message of errors.slice(0, 5)) console.log(`    error: ${message.slice(0, 160)}`)
 
   const failed = results.filter((r) => !r.pass)
   console.log(`\nREAL WEBSERVER ${failed.length === 0 ? 'PASS' : 'FAIL'} (${results.length - failed.length}/${results.length})`)
@@ -172,11 +273,6 @@ async function main() {
 }
 
 /* --------------------------------- helpers -------------------------------- */
-
-function pathToFileURL(filePath) {
-  const resolved = path.resolve(filePath).replace(/\\/g, '/')
-  return new URL(`file://${resolved.startsWith('/') ? '' : '/'}${resolved}`)
-}
 
 function request(url, options = {}) {
   return new Promise((resolve, reject) => {
@@ -186,7 +282,7 @@ function request(url, options = {}) {
       res.on('data', (chunk) => { body += chunk })
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }))
     })
-    req.on('error', reject)
+    req.on('error', (error) => resolve({ status: 0, headers: {}, body: String(error?.message ?? error) }))
     if (options.body !== undefined) req.write(options.body)
     req.end()
   })
@@ -202,35 +298,31 @@ function probeUpgrade(port, pathname) {
       )
     })
     let upgraded = false
-    let sawHttp = false
     const finish = () => {
       clearTimeout(timer)
       socket.destroy()
-      resolve({ upgraded, sawHttp })
+      resolve({ upgraded })
     }
     const timer = setTimeout(finish, 1500)
     socket.on('data', (chunk) => {
-      const text = chunk.toString('latin1')
-      if (text.startsWith('HTTP/1.1 101')) { upgraded = true; sawHttp = true }
-      else if (/^HTTP\/1\.1 \d{3}/.test(text)) sawHttp = true
+      if (chunk.toString('latin1').startsWith('HTTP/1.1 101')) upgraded = true
       finish()
     })
     socket.on('error', finish)
-    socket.on('close', () => { clearTimeout(timer); resolve({ upgraded, sawHttp }) })
+    socket.on('close', () => { clearTimeout(timer); resolve({ upgraded }) })
   })
 }
 
 /**
  * Drive the official service into its listening state.
  *
- * `listen` is a cordis lifecycle hook (`async [Service.init]()` at
- * lib/index.js:228), so the callable key is that symbol rather than `listen`.
- * Some payload revisions expose a plain `listen()`; try the symbol first and
- * fall back.
+ * `listen` is a cordis lifecycle hook (`async [Service.init]()`), so the callable
+ * key is that symbol rather than a method name. Some payload revisions expose a
+ * plain `listen()`; try the symbol first, then fall back.
  */
-async function webServerinitHookFallback(webServer, initHook) {
-  // [Service.init] is a prototype method, so it is reachable directly even
-  // though it is not an own property of the instance.
+async function initWebServer(webServer, initHook) {
+  // [Service.init] is a prototype method, reachable even though it is not an own
+  // property of the instance.
   if (typeof webServer[initHook] === 'function') return webServer[initHook]()
   for (const key of ['listen', 'start']) {
     if (typeof webServer[key] === 'function') return webServer[key]()
@@ -243,5 +335,6 @@ main().catch((error) => {
   process.exitCode = 1
 })
 
-// Let the process exit on its own; nothing here keeps the loop alive.
-process.on('uncaughtException', (e) => { console.error('uncaught:', e); process.exitCode = 1 })
+// The bridge keeps the loop alive until its effect is disposed; the probe tears
+// that down on the success path, and a failure path is allowed to exit non-zero.
+process.on('uncaughtException', (error) => { console.error('uncaught:', error); process.exitCode = 1 })

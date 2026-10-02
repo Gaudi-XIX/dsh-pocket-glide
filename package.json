@@ -10,7 +10,8 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node --test --test-concurrency=1 test/*.test.js"
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "test:real-webserver": "node test-real-webserver.mjs"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -36,8 +37,11 @@
   "files": [
     "lib/**/*.js",
     "client/**/*.js",
+    "test",
+    "tools",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "license": "Apache-2.0"
 }

@@ -1,1 +1,10 @@
 node_modules/
+
+# cloudflared pre-seeded by tools/fetch-cloudflared.mjs (a vendored binary is not
+# source; the runtime keeps its own copy under %LOCALAPPDATA%\dsh-pocket instead)
+vendor/
+
+# pocket's file logger writes pocket.log + one rotated pocket.log.1; tools may
+# drop run logs here too
+*.log
+*.log.1
