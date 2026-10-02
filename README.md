@@ -23,12 +23,28 @@
 
 - 绑 `0.0.0.0`（局域网扫码需要），端口优先级：`DSH_MOBILE_PORT`（正整数才生效）→ 构造入参 `config.port`
   → 产品默认 **43127**。`config.port = 0` 表示 OS 随机端口，测试依赖它。
-- `EADDRINUSE` 的 +1 重试是**有界的**：仅当端口正是 43127 或 43128、且是第一次尝试时才换 `port+1`
-  （即 43127→43128、43128→43129）。设了 `DSH_MOBILE_PORT` 或显式传了别的端口时**直接抛错**，不自作主张挪号。
+- 让号条件**只看端口号与尝试序号，不看值从哪来**（判据是 `lib/bridge.js` 的 `LanMobileBridge.start()` 里那句
+  `error.code === 'EADDRINUSE' && (chosenPort === 43127 || chosenPort === 43128) && attempt === 0`，
+  现取命令见本节末）。所以真话是：**只有 43127 与 43128、且只有第一次 `listen` 失败**才 `+1`
+  （43127→43128、43128→43129）。推论两条：`DSH_MOBILE_PORT=43127` 一样会让到 43128；而 `DSH_MOBILE_PORT=8080`
+  或显式传任何别的端口被占时**直接抛错**，不自作主张挪号（把 iframe 悄悄指向错端口比失败更糟）。
+- 抛错时桥会在错误对象上**自己钉** `listenPort`/`listenErrno` 再往上抛：Node 的 listen 错误在
+  `listen(port, '0.0.0.0')` 形态下 `err.port` 是**空串**（只有 `address`/`code`/`errno`/`syscall`），白嫖不到端口。
+- 于是「桥还没起来」时应用内配对面板现在**会报端口与 errno**：`lib/index.js` 的 `describeListenFailure()` 只收
+  合法端口区间 + `[A-Z][A-Z0-9_]*` 形态的 errno 枚举名（**不收 `error.message`** ⇒ 宿主路径/栈行进不了错误体），
+  `notReadyBody()` 产出 `Pocket bridge is not ready (port 43128, EACCES).`；两个字段都不知道时仍是原句
+  `Pocket bridge is not ready.`。代理上游连接失败那一条仍是 `Pocket bridge is unavailable.`（`lib/index.js`）。
 - 实际端口以 `bridge.start()` 返回快照的 `snap.port` 为准，工具/测试一律从快照取端口、不硬编码。
   启动成功日志行：`Pocket bridge ready on 0.0.0.0:<port>`（`lib/index.js`）。
-- 桥还没起来时，应用内配对面板只见 `Pocket bridge is not ready.`／`Pocket bridge is unavailable.`
-  ——这两条错误体**不含端口与 errno**（把端口/errno 写进错误体属行为改动，本卡另行处置）。
+- ⚠️ Windows 造端口冲突时注意：**先占 `127.0.0.1:P` 再绑 `0.0.0.0:P` 会成功**（两者不互斥），要复现 `EADDRINUSE`
+  必须占同一个 wildcard 地址。
+
+现值不抄进正文，用可复跑命令取（第一条打出让号判据原文，第二条直接演示 `notReadyBody()` 的两种形状）：
+
+```
+node --input-type=module -e "import{readFileSync}from'node:fs';const s=readFileSync('./lib/bridge.js','utf8');const i=s.indexOf('const retryable');console.log(s.slice(i,i+250))"
+node --input-type=module -e "import('./lib/index.js').then(m=>console.log(JSON.stringify([m.notReadyBody(undefined),m.notReadyBody({port:43128,errno:'EACCES'})])))"
+```
 
 ## 路由面（桥自己的 server）
 
@@ -75,25 +91,43 @@
 其余响应由 `handle()` 开头统一打 `cache-control: no-store`，并带 `x-content-type-options: nosniff`、
 `x-frame-options: DENY`、`referrer-policy: no-referrer` 与每请求随机 nonce 的 CSP。
 品牌资源公开探测已被收口：`canReadBranding()` 只放「已配对手机」或「loopback + 桌面会话」，
-`/sw.js` 按设计保持公开（浏览器在拿到任何凭据之前就要取它，且它不含数据）。
+**未配对的手机读 `/brand-logo/*` 与 `/app-icon` 得到 401**（这是刻意的，不为一个 logo 开未认证资源面）；
+需要在配对之前就出图的那枚页面走桥传入的 `iconDataUri`（`renderPairingPinPage` 的 `icon` 形参那一支），
+不硬编这两条路由。`/sw.js` 按设计保持公开（浏览器在拿到任何凭据之前就要取它，且它不含数据）。
+禁开 gzip、禁给文档强缓存——`lib/bridge.js` 的注释记着 2026-10-01 的两次事故，本节不是建议而是边界。
 
 ## 安全模型
 
 - **配对**：桌面「连接手机」面板展示二维码与连接密码；一次性配对 token 短时有效、用后即焚。
-  连接密码位数由 `lib/constants.js` 的 `PAIRING_PIN_DIGITS` 决定（**现值 6 位纯数字**；本卡的 B1/M8 正在把它提到
-  8 位以上，届时这行随动，README 只把符号锚当权威）。`PAIRING_PIN_MIN_DIGITS`/`PAIRING_PIN_MAX_DIGITS` 允许
-  磁盘上更旧或更长的密码继续可用，升强度不把已配对手机踢下线。一次性密码 `PIN_TTL_MS` = 5 分钟。
+  连接密码位数由 `lib/constants.js` 的 `PAIRING_PIN_DIGITS` 决定（**现值 6 位纯数字**，生成空间
+  `PAIRING_PIN_SPACE = 10 ** PAIRING_PIN_DIGITS`）。一次性密码 `PIN_TTL_MS` = 5 分钟；
+  开隧道时临时密码当场换新（`rotateEphemeralPinForTunnel()`），长效密码（`pinConsent`）跨隧道续用、不自动过期。
+- **位数是跨文件量，改它的顺序不能倒**：`PAIRING_PIN_MIN_DIGITS`/`PAIRING_PIN_MAX_DIGITS`（现值 6–12）加
+  `PAIRING_PIN_PATTERN` 已经是 `lib/pin-store.js` 读写校验的唯一门 ⇒ **盘上存量 6 位密码零迁移继续可用**，
+  落 8 位也接得住，兼容层已就位。但把 `PAIRING_PIN_DIGITS` 提到 8 之前必须**先**放宽 `lib/pages.js` 里那两枚
+  PIN 输入框（`renderPairingPinPage` 与 `renderMobileReconnectPage` 各一枚 `<input id="pin">`，渲染出的属性现值
+  `maxlength="6" pattern="\d{6}"`；源码在模板串里把反斜杠写成 `\\d{6}`）与配套文案。
+  **倒过来的后果是现网配对失败**：桥发 8 位、手机打不进第 7 位，新配对接不上，重置长效密码等于把自己锁在门外。
+  这两处 `maxlength`/`pattern` 就是那个硬挡点。改之前跑这两条：
+
+```
+node --input-type=module -e "import('./lib/constants.js').then(c=>console.log(c.PAIRING_PIN_DIGITS, c.PAIRING_PIN_SPACE, c.PAIRING_PIN_MIN_DIGITS, c.PAIRING_PIN_MAX_DIGITS, String(c.PAIRING_PIN_PATTERN)))"
+node --input-type=module -e "import{readFileSync}from'node:fs';const s=readFileSync('./lib/pages.js','utf8');console.log(s.match(/<input id=.pin. inputmode[^>]*>/g))"
+```
+
 - **暴破限制**：错 PIN 计数 + 按 IP 限流（429 带 `Retry-After`，指数退避 `PIN_FAIL_BASE_SECONDS`→`PIN_FAIL_MAX_SECONDS`），
   到 `PIN_FAIL_HARD_LOCK` 次**硬锁定**（`PIN_FAIL_LOCKOUT_MS`），只能由桌面改密码或重启桥解除；
   限流键在 LAN 模式就是 socket 对端地址（隧道模式才取 `cf-connecting-ip`）。长效密码可随时在桌面面板重置/取消。
 - **设备凭据**：每台手机独立 `dsh_mobile` 会话 cookie——`HttpOnly`、`SameSite=Strict`、
   `Max-Age=2592000`（30 天，`MOBILE_COOKIE_TTL_MS`；隧道 HTTPS 下追加 `Secure`）；有效期由服务端强制，
-  页面只展示「本设备将于 … 失效」。桌面配对会话 `dsh_desktop` 是一天半档（`DESKTOP_COOKIE_TTL_MS` = 12h，
-  非 loopback 时同样加 `Secure`）。
+  页面只展示「本设备将于 … 失效」。桌面配对会话 `dsh_desktop` 是一个工作日档（`DESKTOP_COOKIE_TTL_MS` = 12h，
+  `desktopCookieAttributes()` 现在把 `Max-Age=43200` 一起写出去，非 loopback 时同样加 `Secure`；过了这一档
+  桌面重新兑换一次性的 `/desktop?k=` 链接）。
 - **凭据隔离**：宿主内环凭证（`dsh-auth-` cookie / launch token）只存在于桥到宿主的服务端链路，
   **永不到达手机**；手机只持有 `dsh_mobile`，且只能调上面那张方法面。
 - **SSE**：`/api/session/stream` 需 `dsh_mobile` + 可信来源；桥每 15s（`SSE_KEEPALIVE_MS`）写 `: ping` 保活，
-  并每 30s（`SSE_STATUS_MS`）推连接状态帧；断线 EventSource 自动重连，快照对齐。
+  并每 30s（`SSE_STATUS_MS`）推连接状态帧；断线 EventSource 自动重连，快照对齐。`retry:` 不再是常量、
+  以及载体丢失时补发的 `event: failure`，见下面「状态与错误面」那一节。
 - 页面渲染所有外部文本均经 HTML 转义；无 eval / shell 拼接。
 
 ### 局域网（LAN）明文风险
@@ -102,32 +136,140 @@ WiFi/LAN 模式下手机与桥之间是**明文 HTTP**：同一网络内的其�
 配对页与重连页在 LAN 模式下均显示双语风险提示。请仅在可信 Wi-Fi 下使用 LAN 模式；在不可信网络或需要保密时，
 改用互联网（云隧道）模式。
 
+## 状态与错误面（B1/B2 之后的现值）
+
+### `GET /api/status` 与 SSE 的 `status` 帧是同一个 builder
+
+负载由 `LanMobileBridge.buildStatusPayload()` 一处产出（`/api/status` 的响应体 = 每
+`SSE_STATUS_MS`（30s）推下会话流的那帧，字节级同源），字段与语义：
+
+| 字段 | 取值 | 含义 |
+|---|---|---|
+| `connected` | **恒 `true`** | 一直就只表示「这个桥答了」。取值与含义**一字未动**（旧页面还在读它） |
+| `hostReachable` | `true` / `false` / **`null`** | 宿主（桌面端）在不在答。取自**本就在做**的那次 `cachedSettings` 往返（`hostReachability()`），零额外流量 |
+| `hostProbeAgeMs` | 数字 / `null` | 那次观测距今多久（`null` = 从没观测过；探针老了它仍是数字，见下一条） |
+| `hostProbeCode` | 字符串 / `null` | 失败类别（宿主不可达时含 `__bridge/transport`），就是「为什么不可达」的那半个答案；宿主在答时它是 `null` |
+| `muxConnected` | `true` / `false` | 事件载体那条出站 WebSocket 在不在（`createMuxMonitor` 经 `reportMuxState` 上报） |
+| `devicesConnected` | `true` / `false` | 有没有挂着手机（桌面面那个 `connected` 一直就是这个意思） |
+
+- **`null` 是「未观测」，不得当 `false` 用**（`hostReachability()` 的两条 `null` 路径）：一次探针都还没做过，
+  或者探针已经老过缓存窗口（现值 10s，与 `cachedSessionList` 的窗口对齐——那时 `hostReachable` 翻回 `null`，
+  而 `hostProbeAgeMs`/`hostProbeCode` 仍带着上一次的值）。把 `null` 读成「宿主死了」就是再造一个假红。
+- 「绿点 + 内容冻结」那对症状的两条腿现在分别叫 `hostReachable === false` 与 `connected === true`
+  （桥活着、宿主没答）。
+- ⚠️ **页面侧尚未消费这些字段**（`lib/pages.js` / `client/client.js` 里对 `hostReachable`/`muxConnected`/
+  `devicesConnected` 零命中——只有测试在读它们）。这一笔在 UI/CLIENT 棒：**帧已经在发了，页面不读就等于「绿点+冻结」没修完**。
+  本节只承诺「负载里有这些字段」，不承诺「手机上的状态点已经改对了」。
+
+现取字段清单（只读符号，不起桥；带凭据的两态负载见 `test/bridge-review.test.js` 的 `B2 X4⑤` 两档）：
+
+```
+node --input-type=module -e "import{readFileSync}from'node:fs';const s=readFileSync('./lib/bridge.js','utf8');const i=s.indexOf('async buildStatusPayload');console.log(s.slice(i,i+700))"
+```
+
+### `event: failure` 的三种 `code`
+
+会话流 `/api/session/stream`（`lib/session-stream.js`）在 SSE 上发 `event: failure`，`data` 一定带 `code`，三种形态：
+
+| 来源 | `data` | 含义 |
+|---|---|---|
+| 宿主自己下的 `error` 帧 | `{message, code}`（`code` 可能是宿主码，也可能 `undefined`） | 宿主答了并拒绝了这次 follow ⇒ 只日志，**不喂重连退避**（`host-error` 分支） |
+| 载体丢失 | `{message, code:'__bridge/stream-transport', retryMs}` | 那条出站 WS 死了/连不上，宿主从没 `end` 过。帧后**紧跟一行** `retry: <n>`，下一次重连就照它等 |
+| 服务端抑制 | `{message:'The Host is not accepting this stream yet.', code:'__bridge/stream-backoff', retryInMs}` | 从**第二次连续失败**起，比公布窗口更早到的请求不再转发给宿主。**首次失败永不拦**（人按一次刷新不受罚）；HTTP 状态码仍是 200 |
+
+重连节奏不再是常量：`bridge.streamRetryDelayMs(sessionId)` = `STREAM_RETRY_BASE_MS × 2^连续失败数`，封顶
+`STREAM_RETRY_CAP_MS`（现值 500ms → 15s）；从没失败过的会话**仍是 500ms**（健康路径字节不变）。
+
+### 状态码面（B1 起对手机可见的四处契约变化）
+
+- `/api/rpc` 的**transport 类**失败（`errorCode ∈ {__bridge/not-ready, __bridge/transport, __bridge/rpc-mismatch}`，
+  见 `TRANSPORT_ERROR_CODES`）由 **400 改 502**：宿主不可达不是「你的请求不对」，且要与导出/附件路径同类同码。
+- `/api/rpc` 的**入参**类失败是 400 + `errorCode:'__bridge/invalid-arguments'`（`readNumericArgument` 的越界值
+  **不静默夹**，见 `HISTORY_PAGE_MAX_MESSAGES`/`SESSION_LIST_MAX_ROWS`）。
+- `/desktop/tunnel/toggle` 的 **409 只剩 in-flight 一种**（`A tunnel switch is already in progress.`）；
+  过去那种「还有设备挂着就不许切」的拒绝已撤。
+- `/api/boot` 失败回 503 + 固定文案 `Boot failed.`（不再转写宿主内部错误原文）；导出/附件的宿主 5xx 同样泛化成 502。
+
 ## 环境变量
 
 > 插件跑在宿主进程内 ⇒ 改这些变量的**生效方式是重启 DeepSeek Harness**，不是刷新页面。
 
 | 变量 | 读点 | 语义 |
 |---|---|---|
-| `DSH_MOBILE_PORT` | `LanMobileBridge.start()` | 正整数才生效，压过 `config.port` 与默认 43127；此路设值时端口被占**不重试** |
+| `DSH_MOBILE_PORT` | `LanMobileBridge.start()` | 正整数才生效，压过 `config.port` 与默认 43127。让号与否**只看端口号**：取 `43127`/`43128` 时照样让一次，取别的端口被占就直接抛（见「端口与绑定」节） |
 | `DSH_POCKET_DEBUG` | `lib/bridge.js`（文档体积报告处） | 仅 `=1` 时恢复体积报告；默认关。注意它只管这一处，boot/文档渲染行仍恒开 |
 | `DSH_POCKET_CLOUDFLARED` | `resolveCloudflared()` | 本插件自己的 cloudflared 覆盖（绝对路径） |
 | `DSH_PHONE_NATIVE_CLOUDFLARED` | 同上 | 上一代插件留下的兼容别名，仅作回落读取 |
 | `CLOUDFLARED_BIN` | 同上 | 通用变量名，优先级低于 `DSH_POCKET_CLOUDFLARED` |
 | `CLOUDFLARED_VERSION` | `tools/fetch-cloudflared.mjs` | **只对预置工具有效**，运行时不读它；非 pinned 值需再加 `--allow-unpinned` |
-| `DSH_HOME` | `lib/file-log.js` 的 `defaultDshHome()` | 目前**只有日志根**认它（见下节） |
-| `LOCALAPPDATA` / `XDG_CACHE_HOME` | `pin-store.js` / `tunnel.js` | 长效密码与 cloudflared 缓存的落盘基准 |
+| `DSH_HOME` | `lib/constants.js` 的 `defaultDshHome()`/`dshHomeOverridden()`（`lib/file-log.js` re-export 同一个） | 统一数据根。**设了它 = 隔离到底**（日志 + 长效密码 + 隧道缓存全部只认它，见「数据根」节）；**没设 = 只有日志落到 `~/.dsh/pocket/`**，密码与缓存留在机器原位 |
+| `LOCALAPPDATA` / `XDG_CACHE_HOME` | `pin-store.js` 的 `legacyDataDir()`、`tunnel.js` 的 `preUnificationCacheDir()` | **仅在未设 `DSH_HOME` 时**是长效密码与 cloudflared 缓存的写根；设了 `DSH_HOME` 就整体不参与 |
 
-## 数据根与日志（现值如实记载）
+## 数据根（一个解析器；写根与读根分开裁决）
 
-| 内容 | 解析点 | Windows 现值 | 其它平台 |
-|---|---|---|---|
-| 长效配对密码 `mobile-pairing-pin.json` | `pin-store.js defaultDataDir()` | `%LOCALAPPDATA%\dsh-pocket\` | `~/.dsh-pocket/` |
-| cloudflared 懒下载缓存 | `tunnel.js cloudflaredCacheDir()` | `%LOCALAPPDATA%\dsh-pocket\cloudflared\` | `$XDG_CACHE_HOME/dsh-pocket/cloudflared` |
-| 文件日志 `pocket.log` | `file-log.js defaultLogDir()` | `<DSH_HOME 或 ~/.dsh>/pocket/logs/` | 同左 |
+解析规则只有一处，在 `lib/constants.js`：`defaultDshHome()` = `DSH_HOME?.trim() || ~/.dsh`、
+`dshHomeOverridden()` = 有没有设 `DSH_HOME`、`pocketDataDir(…segments)` = `<统一根>/pocket/…`。
+`lib/file-log.js` 改为取用它（并继续 re-export `defaultDshHome`，旧调用点不破）。
 
-**注意这三处并不同根**：只有日志认 `DSH_HOME`，另两处走 `%LOCALAPPDATA%`/`XDG_CACHE_HOME` ⇒ 以 `DSH_HOME`
-做的「隔离跑法」**仍会读写真机的长效配对密码文件**。统一解析属桥域改动（本 README 只负责把现状写清）。
-日志是 JSON 行（`t`/`level`/`message`），超过 `MAX_BYTES`（512KB）轮转一次成 `pocket.log.1`（不留更多代数）。
+三份数据**怎么用**这条规则是刻意的不对称，不是一处漏改：
+
+| 内容 | 设了 `DSH_HOME`（隔离跑法） | 没设（真机默认） |
+|---|---|---|
+| 文件日志 `pocket.log` | `<DSH_HOME>/pocket/logs/pocket.log` | `~/.dsh/pocket/logs/pocket.log` |
+| 长效配对密码 `mobile-pairing-pin.json` | 只读写 `<DSH_HOME>/pocket/` | **写** `%LOCALAPPDATA%\dsh-pocket\`（非 Windows `~/.dsh-pocket/`，见 `legacyDataDir()`）；**读**先机器位、再兜底 `<统一根>/pocket/`（见 `pairingPinReadPaths()`） |
+| cloudflared 懒下载缓存 | 只读写 `<DSH_HOME>/pocket/cloudflared/` | **写** `%LOCALAPPDATA%\dsh-pocket\cloudflared\`（非 Windows `$XDG_CACHE_HOME/dsh-pocket/cloudflared`，见 `preUnificationCacheDir()`）；**只读**沿用统一根与上一代的 `…\dsh-phone-native\cloudflared\`（见 `cloudflaredCacheCandidates()`） |
+
+两条承诺同时成立，靠的正是「写根保持原位、统一根只当读兜底」：
+
+- **隔离性**：设了 `DSH_HOME` ⇒ 读候选链**提前收成单元素**（`pairingPinReadPaths()` 与
+  `cloudflaredCacheCandidates()` 都只回隔离那一条），既不读也不写机器位；
+  `migrateLegacyCloudflaredCache()` 在 `dshHomeOverridden()` 为真时**整段跳过**——它原本用 `rename`
+  搬家，那一步会把真机的缓存搬走。
+- **不搬家**：没设时长效密码与隧道缓存留在它们今天所在的位置 ⇒ 已配对设备不掉线，那枚 pinned 件
+  （本机实测 **54,893,480 字节**，时点 2026-10-03 04:0x +08:00；复刷=`Get-Item` 那条路径）既不重下也不被移走；
+  而曾在隔离根下写过的密码，变量清掉后仍读得到（兜底那一 rung）。
+
+**这就是为什么默认写根不能统一**：统一一次，测试与真机就共用同一枚 cloudflared 缓存目录。本卡实证过一遍——
+把默认写根统一到 `~/.dsh/pocket` 之后，本仓自己的 `test/tunnel.test.js` 把一枚 17 字节的假 cloudflared 件
+写进了真机 `~/.dsh/pocket/cloudflared/`，而且它排在解析链首位，下一次真隧道真的会用它。
+
+两条规则各自的现值，用同一条命令对照着取（PowerShell 下先临时把 `DSH_HOME` 指到一个假根 = 隔离那一支；
+`Remove-Item` 掉它 = 机器默认那一支。这条命令**只解析、不写任何文件**）：
+
+```
+$probe = "import('./lib/constants.js').then(async c=>{const p=await import('./lib/pin-store.js');console.log(JSON.stringify({overridden:c.dshHomeOverridden(),unified:c.pocketDataDir(),logDir:(await import('./lib/file-log.js')).defaultLogDir(),pinWrite:p.defaultDataDir(),pinReads:p.pairingPinReadPaths()},null,1))})"
+
+node --input-type=module -e $probe                                    # 未设 DSH_HOME：写根在机器原位，读候选两条
+$env:DSH_HOME = "F:\defws\tmp\fake-dsh-home"; node --input-type=module -e $probe   # 设了：全部收成隔离那一条
+Remove-Item Env:DSH_HOME
+```
+
+隧道那侧的两个解析器是模块私有的（`cloudflaredCacheDir()` / `cloudflaredCacheCandidates()`），所以现值从符号取：
+
+```
+node --input-type=module -e "import{readFileSync}from'node:fs';const s=readFileSync('./lib/tunnel.js','utf8');console.log(s.match(/function (cloudflaredCacheDir|cloudflaredCacheCandidates)\(\) \{[\s\S]{0,200}/g).join('\n---\n'))"
+```
+
+## 日志（`pocket.log`，现值如实记载）
+
+- 落点见「数据根」那张表：`<DSH_HOME 或 ~/.dsh>/pocket/logs/pocket.log`。行是 JSON（`t`/`level`/`message`），
+  写入器 `lib/file-log.js` 的 `createFileLogger()`，**永不抛**（日志失败不许把插件带倒）。
+- 轮转是**单代**：超过 `MAX_BYTES`（512KB）就 `rename` 成 `pocket.log.1`，覆盖上一代，**不累积更多代数**。
+- 驱动轮转的字节数**每行从磁盘重读**（`bytesOnDisk()` 用 `statSync`），不是在 logger 里累加。原因是宿主可以
+  同时跑两个进程共享同一个 `pocket.log`：各自累加时双方都以为文件只有自己写的那点大，文件于是越过一切上限
+  而无视。
+- `rename` 失败**不把计数归零**（记 `rotationFailures`），下一条继续尝试轮转；轮转永久失败时文件涨到
+  `MAX_CEILING_BYTES`（= `MAX_BYTES × 4`，即 2MB）封顶，此后**丢行**并计 `droppedLines`——丢行比占满磁盘轻。
+- 可观测面：`logger.stats()` → `{bytes, rotationFailures, droppedLines}`（`bytes` 同样是磁盘现值）。
+- **残留限制（已登记为候选，尚未修）**：`droppedLines` 只有握着这个 logger 对象的人才看得见，`file-log`
+  不能自己往自己里写一行「已丢 N 行」，所以**没有宿主侧出口**——盘上看不出日志在被丢。要多代轮转、换上限，
+  或补那条出口，都改 `lib/file-log.js` 的 `MAX_BYTES`/`MAX_CEILING_BYTES` 一处（出口那一半属另开条目）。
+
+现取那两个上限（模块私有常量，从符号取，不抄进正文）：
+
+```
+node --input-type=module -e "import{readFileSync}from'node:fs';const s=readFileSync('./lib/file-log.js','utf8');console.log(s.match(/const MAX_(BYTES|CEILING_BYTES) = [^\n]+/g).join('\n'))"
+```
 
 ## 云隧道（cloudflared quick tunnel）
 
@@ -135,7 +277,9 @@ WiFi/LAN 模式下手机与桥之间是**明文 HTTP**：同一网络内的其�
   `DSH_POCKET_CLOUDFLARED` → `DSH_PHONE_NATIVE_CLOUDFLARED`（legacy）→ `CLOUDFLARED_BIN` →
   `<插件根>/vendor/cloudflared(.exe)` → 裸名 `cloudflared`（PATH；查不到就进懒下载）。
 - 运行时**钉一个发布版并校 SHA-256**：`CLOUDFLARED_VERSION`（现值 `2026.8.2`）+ 六平台摘要表
-  `tunnel.js ASSETS`。下载件落在上面那张缓存表里的 cloudflared 目录；上一代插件的缓存目录会一次性迁移过来。
+  `tunnel.js ASSETS`。下载件落在上面那张缓存表里的 cloudflared 目录；上一代插件（`dsh-phone-native`）的缓存目录
+  是**一次性 `rename` 迁移**过来，而它只在**未设 `DSH_HOME`** 时跑——隔离跑法下旧位置改成**只读复用**，
+  不搬（`migrateLegacyCloudflaredCache()` 的那道 `dshHomeOverridden()` 短路）。
 - 想把二进制**预置**进仓（省掉首次开隧道时的下载）：`node tools/fetch-cloudflared.mjs`。
   它写出的文件名就是解析链要查的 `vendor/cloudflared(.exe)`（不是发布件原名），版本与摘要都从
   `lib/tunnel.js` 里读，不自己另抄一份，下载后必校摘要、不符即删。先看契约不联网：`--print`。
@@ -183,9 +327,18 @@ node tools/gen-qr-fixtures.mjs                    # 重生成 test/fixtures/qr-m
 - 许可 Apache-2.0，正文见 `LICENSE`。
 - 版本策略：现值 `0.1.0`，本仓**不维护 CHANGELOG**（变更账在 `git log` 与 flow change 卡里）；README 不承诺它。
 
-## 已知边界（不在本卡承诺范围）
+## 已知边界
 
 - PWA：`<link rel="manifest">` 未挂（Service Worker 注册失败现已可见，但 manifest 属挂起项）。
-- `hostCtx.set('pocket', …)` 这枚服务目前仍会因未 `provide` 而报 `cannot set property "pocket" without provide`，
-  被启动的 `.catch()` 记成「bridge failed to start」——桥其实起来了。删它属桥域（M1）。
+- 那个「假服务注册」已经删掉了：入口不再向宿主声明这枚 `pocket` 服务（它从来没被 `provide` 过，也没有任何
+  消费方），启停改用双臂 `then(onFulfilled, onRejected)` ⇒ **`bridge failed to start` 现在只可能来自 `start()`
+  真的被拒**，成功路径不再刷一堆假错误进日志。判据在 `test/index-service.test.js`。
+  （这一节以前把它列为「已知边界」，那句话现在已经不成立，故从边界清单里移除。）
+- **未修的残留限制**（都在 change `2026-10-02-fix-pocket-audit-remediation` 登记为候选，别读成已解决）：
+  - 「绿点 + 冻结」只在**负载**上可诊断了，页面侧还没读那几个字段（见「状态与错误面」一节）。
+  - `logger.stats()` 的 `droppedLines` 没有宿主侧出口（见「日志」一节）。
+  - 宿主被**硬杀**时 `process.on('exit')` 不跑 ⇒ cloudflared 子进程可能留孤儿；闭合它需要「本桥 pid sidecar +
+    镜像名校验」，**不能按镜像名扫杀**（那会打到别人为别的端口跑的隧道）。
+  - 会话级载体 WS 复用没做（本卡选了「退避」那一支）；`_sessionCursors` 运行中既不淘汰也不按 seq 前进刷新
+    （只有 `stop()` 收尾）——这一条本卡另有包在推进，落地后本节须随动。
 - 一切页面/桥侧改动的上线方式都是「改完 → 用户重启 DSH → 手机上目验」，中途不催重启。

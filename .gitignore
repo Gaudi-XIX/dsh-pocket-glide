@@ -1,10 +1,20 @@
 node_modules/
 
 # cloudflared pre-seeded by tools/fetch-cloudflared.mjs (a vendored binary is not
-# source; the runtime keeps its own copy under %LOCALAPPDATA%\dsh-pocket instead)
+# source; the runtime keeps its own copy in the cache dir resolved by
+# lib/tunnel.js — %LOCALAPPDATA%\dsh-pocket\cloudflared by default, or
+# <DSH_HOME>/pocket/cloudflared when an isolated data root is in force)
 vendor/
 
 # pocket's file logger writes pocket.log + one rotated pocket.log.1; tools may
 # drop run logs here too
 *.log
 *.log.1
+
+# Packaging/unpacking byproducts. Empirical reason (change
+# 2026-10-02-fix-pocket-audit-remediation): a worker's `git archive HEAD` copy left
+# a 942KB control.tar at this repository root. This tree is the host's `link:`
+# loadable target, so a stray archive that gets eaten by `files`/an install script
+# is a production incident, not a tidy-up problem.
+*.tar
+*.tgz
