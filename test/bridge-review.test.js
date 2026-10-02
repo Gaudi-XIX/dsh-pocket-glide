@@ -361,3 +361,23 @@ test('K: buildContentSecurityPolicy keeps the other directives and nonces script
   const policy = buildContentSecurityPolicy('YWJjZA')
   assert.equal(policy, "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'nonce-YWJjZA'; img-src 'self' data:; connect-src 'self'")
 })
+
+// ---------------------------------------------------------------------------
+// L. Generic 500 body
+// ---------------------------------------------------------------------------
+
+test('L: the bridge-wide 500 returns a generic body, never the raw error', async () => {
+  const t = await startBridge()
+  try {
+    t.bridge.handle = async () => {
+      throw new Error('secret-internal-detail: C:\\Users\\toast\\.dsh\\profiles\\desktop')
+    }
+    const res = await httpFetch(`${t.base}/api/status`)
+    assert.equal(res.status, 500)
+    const body = await res.text()
+    assert.deepEqual(JSON.parse(body), { ok: false, error: 'Internal server error.' })
+    assert.ok(!body.includes('secret-internal-detail'), 'raw error text must not leak into the body')
+  } finally {
+    await t.stop()
+  }
+})
