@@ -286,3 +286,34 @@ test('handleHistory leaves the chat when a stale chat entry arrives while it is 
     assert.deepEqual(plain.calls.replaced, [])
   }
 })
+
+// 2026-10-02 live report: from a freshly reconnected chat, the browser's own edge
+// swipe left the app instead of returning to the workspace list. The in-app back
+// button can compensate with history.length>1, the edge swipe cannot — so a boot
+// that adopts the conversation must already have a list entry underneath it.
+test('a boot straight into the conversation keeps a workspace entry under it', () => {
+  const { js } = mobilePageAssets({ locale: 'zh' })
+  assert.ok(js.includes("history.replaceState({view:'sessions'},'')"), 'the landing entry is a sessions entry')
+  assert.ok(
+    js.includes("if(document.body.classList.contains('chat-open'))history.pushState({view:'sessions'},'')"),
+    'the adopted chat view needs a second sessions entry below it, or a swipe leaves the app',
+  )
+})
+
+// 2026-10-02 live report: reconnecting to an already-paired phone lands on a chat
+// whose transcript arrives one tunnel round trip later (the desktop deliberately
+// keeps it out of the document), and three bare skeleton bars read as a freeze.
+test('the transcript wait names itself instead of showing bare grey bars', () => {
+  const { js, css } = mobilePageAssets({ locale: 'zh' })
+  assert.ok(js.includes('function loadingShell()'), 'the waiting state needs one source')
+  assert.ok(js.includes('\'<p class="loading-hint">\'+L.syncingChat+\'</p>'), 'the hint is part of it')
+  assert.ok(js.includes('syncingChat'), 'the copy is localized like the rest of the page')
+  assert.ok(js.includes('正在同步会话内容…'), 'the zh copy matches the pairing steps verbatim')
+  assert.equal(
+    js.split('loadingShell()').length - 1,
+    3,
+    'the helper and its two call sites (first paint, failed-load retry)',
+  )
+  assert.ok(!js.includes('$(\'messages\').innerHTML=\'<div class="loading">'), 'no anonymous skeleton block survives')
+  assert.ok(css.includes('.loading-hint{'), 'the hint needs its own style')
+})
