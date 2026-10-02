@@ -342,3 +342,295 @@ test('the transcript wait names itself instead of showing bare grey bars', () =>
   assert.ok(!js.includes('$(\'messages\').innerHTML=\'<div class="loading">'), 'no anonymous skeleton block survives')
   assert.ok(css.includes('.loading-hint{'), 'the hint needs its own style')
 })
+// ============================================================================
+// WP-A3 (change 2026-10-02-fix-pocket-audit-remediation): M6 the thinking
+// status, M17 the echoed prompt, K-3 the pull lock, J-1 the three ways to
+// reach older messages. Same white-box style as above: run the page's own
+// functions against synthetic frames, and pin the source where behaviour
+// cannot reach.
+// ============================================================================
+
+function betweenA3(startAnchor, endAnchor, source = mobilePageAssets({ locale: 'zh' }).js) {
+  const start = source.indexOf(startAnchor)
+  const end = source.indexOf(endAnchor, start)
+  assert.notEqual(start, -1, `anchor ${startAnchor} must exist in the page script`)
+  assert.notEqual(end, -1, `anchor ${endAnchor} must exist in the page script`)
+  assert.ok(end > start, `anchor ${endAnchor} must come after ${startAnchor}`)
+  return source.slice(start, end)
+}
+
+function pageLabels(locale) {
+  const line = mobilePageAssets({ locale }).js.match(/^const L=(\{.*\});/m)
+  assert(line, `${locale}: the label table must render as one JSON line`)
+  return JSON.parse(line[1])
+}
+
+// ------------------------------------------------------------ M6 the thinking status
+
+function buildRunningSandbox() {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const bound = Number((js.match(/AWAITING_TURN_MAX_MS=(\d+)/) || [])[1])
+  assert(bound > 0, 'the page declares its fallback bound')
+  const names = ['eventSeq', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'updateRunning']
+  const body = names.map((name) => extractFunction(js, name)).join('\n')
+  return new Function(`
+    const AWAITING_TURN_MAX_MS=${bound}
+    let awaitingTurnSeq=null,awaitingTurnTimer=null,agentRunning=false,lastHistoryKey='',activeSession='s1'
+    const calls=[]
+    const setTimeout=(fn,ms)=>{calls.push(['timeout',ms]);return 1}
+    const clearTimeout=handle=>{calls.push(['clear',handle])}
+    function syncPromptUi(){calls.push(['prompt'])}
+    function syncTurnStatus(){calls.push(['status'])}
+    function schedulePoll(){calls.push(['poll'])}
+    ${body}
+    return {
+      arm(value){armAwaitingTurn(value)},
+      update(events){updateRunning(events)},
+      expire(){expireAwaitingTurn()},
+      state:()=>({awaitingTurnSeq,awaitingTurnTimer,agentRunning,lastHistoryKey}),
+      calls,
+    }
+  `)()
+}
+
+test('M6 the wait is judged on the session log, never on two clocks', () => {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const slice = betweenA3('function updateRunning(events)', 'function todoProgress(', js)
+  assert.ok(slice.includes('eventSeq(entry)>awaitingTurnSeq'), 'the judgement is a seq comparison')
+  assert.ok(!slice.includes('event.time'), 'no host timestamp is read here at all')
+  assert.ok(!js.includes('awaitingTurnStartedAt'), 'the wall-clock slot is gone from the page')
+  assert.ok(!js.includes('Date.now()-1000'), 'and so is the expression that armed it')
+  const send = betweenA3('async function send()', 'function formatBytes(n)', js)
+  assert.ok(send.includes('armAwaitingTurn(afterSeq)'), 'send records the watermark the boundary is compared with')
+})
+
+test('M6 a turn boundary above the watermark ends the wait even when the host clock is decades off', () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.arm(5)
+  // time: 1 is 1970 on any host. The retired version compared that with the
+  // phone's own Date.now(), so it never matched and the status stayed pinned.
+  sandbox.update([{ event: { seq: 6, type: 'turn/start', time: 1 } }])
+  assert.equal(sandbox.state().awaitingTurnSeq, null, 'the seq judgement consumed the wait')
+  assert.equal(sandbox.state().agentRunning, true, 'and the turn is running because it says so')
+  assert.ok(sandbox.calls.some((call) => call[0] === 'clear'), 'the fallback timer is cancelled with it')
+  sandbox.update([{ event: { seq: 7, type: 'turn/end', time: 1 } }])
+  assert.equal(sandbox.state().agentRunning, false, 'turn/end ends the turn without any clock')
+})
+
+test('M6 a turn boundary at or below the watermark does not end the wait', () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.arm(10)
+  sandbox.update([{ event: { seq: 3, type: 'turn/start' } }])
+  assert.notEqual(sandbox.state().awaitingTurnSeq, null, 'an older turn/start is not the answer to this send')
+  assert.equal(sandbox.state().agentRunning, true)
+})
+
+test('M6 an unreachable judgement still clears, within the 8-10s band', () => {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const bound = Number((js.match(/AWAITING_TURN_MAX_MS=(\d+)/) || [])[1])
+  assert.ok(bound >= 8000 && bound <= 10000, 'the unconditional fallback is bounded by the card')
+  const sandbox = buildRunningSandbox()
+  sandbox.arm(4)
+  assert.ok(sandbox.calls.some((call) => call[0] === 'timeout' && call[1] === bound), 'arming starts the watchdog')
+  sandbox.expire()
+  const after = sandbox.state()
+  assert.equal(after.awaitingTurnSeq, null, 'the watchdog clears the wait')
+  assert.equal(after.agentRunning, false, 'and the thinking status with it')
+  assert.equal(after.lastHistoryKey, '', 'so the next poll repaints instead of skipping it')
+  assert.ok(sandbox.calls.some((call) => call[0] === 'status'), 'the status node comes off screen')
+  assert.ok(sandbox.calls.some((call) => call[0] === 'prompt'), 'and the send/cancel pair is put back')
+  assert.ok(sandbox.calls.some((call) => call[0] === 'poll'), 'the poll is re-armed at the idle rate')
+})
+
+// ------------------------------------------------------------------ M17 the echo
+
+test('M17 an older message with the same text never retires a fresh echo', () => {
+  const sandbox = buildSandbox()
+  // Sent from an empty buffer: the watermark is -1, so every earlier turn looks
+  // like a candidate. Repeating "继续" is the case that hit this daily.
+  sandbox.setStream([userEvent(2, '继续'), chunkEvent(3, 1, 1, '回答一'), userEvent(4, '继续')])
+  sandbox.setOptimistic([{ id: 'o1', text: '继续', summary: '', afterSeq: -1 }])
+  const rendered = sandbox.render()
+  assert.equal(rendered.filter((message) => message.optimistic).length, 1, 'the echo is still on screen')
+})
+
+test('M17 two same-text candidates cannot single out the echo either', () => {
+  const sandbox = buildSandbox()
+  sandbox.setStream([userEvent(2, '继续'), userEvent(3, '继续')])
+  sandbox.setOptimistic([{ id: 'o1', text: '继续', summary: '', afterSeq: -1 }])
+  assert.equal(sandbox.render().filter((message) => message.optimistic).length, 1, 'the AC-M17 shape verbatim')
+})
+
+test('M17 an ambiguous candidate set above a real watermark keeps the echo too', () => {
+  const sandbox = buildSandbox()
+  sandbox.setStream([userEvent(1, '第一条'), userEvent(5, '继续'), userEvent(6, '继续')])
+  sandbox.setOptimistic([{ id: 'o1', text: '继续', summary: '', afterSeq: 1 }])
+  assert.equal(sandbox.render().filter((message) => message.optimistic).length, 1, 'two copies after the watermark is not proof of one')
+})
+
+test('M17 the first message of a session still retires on its durable copy', () => {
+  const sandbox = buildSandbox()
+  // The watermark here is -1 because the buffer was empty at send time — which is
+  // also true for the very first prompt of a brand new chat. Retiring nothing in
+  // that case would leave every new conversation showing its first message twice,
+  // so the send records how many copies of that text were already on screen.
+  sandbox.setStream([userEvent(0, '你好'), chunkEvent(1, 1, 1, '回答')])
+  sandbox.setOptimistic([{ id: 'o1', text: '你好', summary: '', afterSeq: -1, sameTextAtSend: 0 }])
+  const rendered = sandbox.render()
+  assert.equal(rendered.filter((message) => message.optimistic).length, 0, 'the durable copy replaces the echo')
+  assert.deepEqual(rendered.map((message) => message.blocks.map((block) => block.text).join('|')), ['你好', '回答'])
+})
+
+test('M17 the watermark advances, so a kept echo still retires when its copy lands', () => {
+  const sandbox = buildSandbox()
+  // Paint one: the reveal brings two older copies of the same text and no copy of
+  // this send. The echo must survive that.
+  sandbox.setStream([userEvent(2, '继续'), userEvent(4, '继续')])
+  sandbox.setOptimistic([{ id: 'o1', text: '继续', summary: '', afterSeq: -1 }])
+  assert.equal(sandbox.render().filter((message) => message.optimistic).length, 1, 'nothing newer than the watermark yet')
+  // Paint two: the host appends this send's own durable copy, newer than anything
+  // the phone has seen. Without an advancing watermark the echo would sit there as
+  // a duplicate bubble for the rest of the visit — measured on the real page.
+  sandbox.setStream([userEvent(2, '继续'), userEvent(4, '继续'), userEvent(11, '继续')])
+  const second = sandbox.render()
+  assert.equal(second.filter((message) => message.optimistic).length, 0, 'the strictly newer copy retires it')
+  assert.deepEqual(
+    second.map((message) => message.blocks.map((block) => block.text).join('|')),
+    ['继续', '继续', '继续'],
+  )
+})
+
+test('M17 the send records what retirement needs', () => {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const send = betweenA3('async function send()', 'function formatBytes(n)', js)
+  assert.ok(send.includes('sameTextAtSend=currentTranscript().reduce('), 'the same-text count is taken at send time')
+  assert.ok(send.includes('sameTextAtSend,afterSeq}'), 'and travels with the echo')
+  const echo = betweenA3('function messagesWithOptimistic(durable)', 'function latestEventSeq()', js)
+  assert.ok(echo.includes('return!(matches===1&&(floor>=0||item.sameTextAtSend===0))'), 'retirement is the narrow rule, not the first match')
+  assert.ok(echo.includes('const floor=item.afterSeq'), 'the gate reads the watermark as it was before this paint')
+  assert.ok(echo.includes('item.afterSeq=newest'), 'and the watermark then moves up to what the phone has seen')
+  assert.ok(!echo.includes('!durable.some('), 'and the "any match wins" filter is gone')
+})
+
+// ----------------------------------------------------- K-3 / J-1 the older window
+
+function buildPullSandbox(opts) {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const source = 'async ' + extractFunction(js, 'loadOlder')
+  return new Function('opts', `
+    let olderRunBusy=false,olderHasMore=${String(opts.olderHasMore ?? false)},activeSession='s1'
+    let streamEvents=[],olderEvents=[]
+    const calls=[]
+    function transcriptHasContent(){return Boolean(streamEvents.length||olderEvents.length)}
+    function windowEvents(){return []}
+    function olderUserCount(){return 0}
+    function renderOlderButton(){calls.push('row');if(opts.throwOnRow)throw new Error('the older row cannot be drawn')}
+    async function fetchOlderPage(){calls.push('page');return opts.pageReturnsTrue===true}
+    async function ensureTranscriptFilled(){calls.push('fill')}
+    function showError(){calls.push('error')}
+    ${source}
+    return { run: loadOlder, calls, state: () => ({ olderRunBusy }) }
+  `)(opts)
+}
+
+function buildPageFetchSandbox(opts) {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const source = 'async ' + extractFunction(js, 'fetchOlderPage')
+  return new Function('opts', `
+    let olderBusy=false,olderHasMore=${String(opts.olderHasMore ?? false)},olderExhausted=false,activeSession='s1'
+    let streamEvents=[],olderEvents=[]
+    const calls=[],rpcCalls=[]
+    const box={scrollHeight:120,clientHeight:80,scrollTop:0,insertAdjacentHTML(){},querySelector(){return null}}
+    const $=()=>box
+    function transcriptHasContent(){return Boolean(streamEvents.length||olderEvents.length)}
+    function oldestEventSeq(){return -1}
+    function renderOlderButton(){calls.push('row');if(opts.throwOnRow)throw new Error('the older row cannot be drawn')}
+    function windowEvents(){return []}
+    function mergeEntries(list){return list}
+    function visibleMessages(){return []}
+    function messagesWithOptimistic(list){return list}
+    function paintMessages(){}
+    function showError(){calls.push('error')}
+    async function rpc(method,payload){rpcCalls.push({method,payload});return {events:[],hasMore:false}}
+    ${source}
+    return { run: fetchOlderPage, calls, rpcCalls, state: () => ({ olderBusy, olderHasMore, olderExhausted }) }
+  `)(opts)
+}
+
+function buildRowSandbox(state) {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const body = ['olderButtonHtml', 'transcriptHasContent'].map((name) => extractFunction(js, name)).join('\n')
+  return new Function('L', `
+    const esc=v=>String(v==null?'':v)
+    let activeSession='s1',olderHasMore=${String(state.olderHasMore ?? false)},olderBusy=false,olderRunBusy=false
+    let streamEvents=${JSON.stringify(state.streamEvents ?? [])},olderEvents=${JSON.stringify(state.olderEvents ?? [])}
+    ${body}
+    return olderButtonHtml
+  `)(pageLabels('zh'))
+}
+
+test('K-3 a broken older row still releases the pull lock, and the page lock with it', async () => {
+  const pull = buildPullSandbox({ throwOnRow: true })
+  await assert.rejects(() => pull.run(), 'the failure still reaches the caller')
+  assert.equal(pull.state().olderRunBusy, false, 'but the lock is not left pinned — that disabled every later pull for the visit')
+  assert.deepEqual(pull.calls, ['row', 'fill', 'row', 'error'], 'released, refilled, then reported')
+
+  const page = buildPageFetchSandbox({ throwOnRow: true, olderHasMore: true })
+  assert.equal(await page.run(), false, 'its own catch reports the failure')
+  assert.equal(page.state().olderBusy, false, 'so the row cannot stay stuck in its busy shape')
+})
+
+test('K-3 both locks are taken inside the try, so a throw before the first await cannot strand them', () => {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const pull = betweenA3('async function loadOlder()', 'function syncTurnStatus()', js)
+  assert.ok(pull.indexOf('olderRunBusy=true') > pull.indexOf('try{'), 'the lock is acquired after the try opens')
+  assert.ok(pull.indexOf('olderRunBusy=false') < pull.indexOf('renderOlderButton()', pull.indexOf('olderRunBusy=false')), 'and released before the row is refreshed')
+  assert.ok(pull.includes('olderRunBusy=false;void ensureTranscriptFilled();try{renderOlderButton()}'), 'the release comes first, then anything that can still throw')
+  assert.ok(pull.indexOf('olderRunBusy=false') > pull.indexOf('finally{'), 'and it is the finally that does it, not the happy path')
+  const page = betweenA3('async function fetchOlderPage()', 'async function loadOlder()', js)
+  assert.ok(page.indexOf('olderBusy=true') > page.indexOf('try{'), 'same for the single-page pull')
+  assert.ok(page.includes('finally{olderBusy=false;try{renderOlderButton()}catch'), 'and its refresh cannot outlive the release')
+})
+
+test('J-1 with nothing painted, all three ways to reach older messages get a page', async () => {
+  // The button, the automatic fill and the drag gesture all funnel into these two
+  // functions, whose first line still demanded olderHasMore — so an empty
+  // transcript could enter every path and fetch nothing.
+  const page = buildPageFetchSandbox({ olderHasMore: false })
+  assert.equal(await page.run(), true, 'the pull runs and reports a page')
+  assert.deepEqual(page.rpcCalls, [{ method: 'session.history', payload: { sessionId: 's1', maxMessages: 30 } }], 'the head page, with no beforeSeq')
+
+  const pull = buildPullSandbox({ olderHasMore: false })
+  assert.equal(await pull.run(), false, 'no earlier user message came in, so the multi-page pull stops')
+  assert.ok(pull.calls.includes('page'), 'but it did reach the page fetch')
+
+  const html = buildRowSandbox({ olderHasMore: false })()
+  assert.match(html, /data-older="1"/, 'the row is there')
+  assert.ok(!html.includes('disabled'), 'and it is tappable while nothing is painted')
+  assert.ok(html.includes(pageLabels('zh').olderMore), 'promising more messages, not the start of the conversation')
+
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const gesture = betweenA3("box.addEventListener('touchstart'", "box.addEventListener('touchmove'", js)
+  assert.ok(gesture.includes('if(!olderHasMore&&!olderEvents.length&&transcriptHasContent())return'), 'the drag opens on the same condition as the row')
+})
+
+test('J-1 an exhausted conversation with pages already pulled goes back to being inert', () => {
+  const html = buildRowSandbox({ olderHasMore: false, streamEvents: [{ event: { seq: 4 } }], olderEvents: [{ event: { seq: 1 } }] })()
+  assert.ok(html.includes('disabled'), 'nothing older is left to ask for')
+  assert.ok(html.includes(pageLabels('zh').olderStart), 'and the row says so')
+})
+
+test('J-1 every layer of the pull agrees on the same emptiness test', () => {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const gates = [
+    ['the row hides only over real content', 'if(!olderHasMore&&!olderEvents.length&&transcriptHasContent())return'],
+    ['the fill loop obeys it', 'if(!olderHasMore&&transcriptHasContent())return'],
+    ['the page fetch obeys it', 'if(olderBusy||!activeSession||(!olderHasMore&&transcriptHasContent()))return false'],
+    ['the multi-page pull obeys it', 'if(olderRunBusy||!activeSession||(!olderHasMore&&transcriptHasContent()))return false'],
+  ]
+  for (const [why, gate] of gates) assert.ok(js.includes(gate), `${why}: ${gate}`)
+  assert.equal(js.split('if(!olderHasMore&&!olderEvents.length&&transcriptHasContent())return').length - 1, 2, 'the row and the drag gesture share one condition')
+  assert.ok(!js.includes('while(activeSession&&olderHasMore&&pages<8'), 'the pull loop no longer demands olderHasMore alone')
+  assert.ok(!js.includes('if(olderBusy||!activeSession||!olderHasMore)return false'), 'the silent veto is gone from the page fetch')
+  assert.ok(!js.includes('if(olderRunBusy||!activeSession||!olderHasMore)return false'), 'and from the multi-page pull')
+})

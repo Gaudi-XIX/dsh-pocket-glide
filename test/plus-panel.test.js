@@ -396,3 +396,77 @@ test('session-attachment and session-export require same-origin metadata', async
     await t.stop()
   }
 })
+// ============================================================================
+// WP-A3 / M7 (change 2026-10-02-fix-pocket-audit-remediation) — the 「+」 sheet
+// and the back gesture. The sheet is DOM state with no history entry behind it,
+// so leaving the chat has to close it, and a row that arrives after the chat is
+// gone has no session to act on. Design D-A5 deliberately keeps openPlus() off
+// the history stack: a pushState there collides with handleHistory's own
+// same-session folding and inflates the back stack.
+// ============================================================================
+
+import { mobilePageAssets } from '../lib/pages.js'
+
+const a3js = mobilePageAssets({ locale: 'zh' }).js
+
+function betweenA3(startAnchor, endAnchor, source = a3js) {
+  const start = source.indexOf(startAnchor)
+  const end = source.indexOf(endAnchor, start)
+  assert.notEqual(start, -1, `anchor ${startAnchor} must exist in the page script`)
+  assert.notEqual(end, -1, `anchor ${endAnchor} must exist in the page script`)
+  assert.ok(end > start, `anchor ${endAnchor} must come after ${startAnchor}`)
+  return source.slice(start, end)
+}
+
+test('M7 leaving the chat closes the plus sheet', () => {
+  const listing = betweenA3('async function showSessionList()', 'function paintInstantHistory(')
+  assert.ok(listing.includes('closePlus()'), 'the sheet is torn down with the chat view')
+  assert.ok(listing.indexOf('closePlus()') < listing.indexOf('closeSessionStream()'), 'and before the session itself is released')
+})
+
+test('M7 a plus row does nothing without a session', () => {
+  const rows = betweenA3('function dispatchPlusRow(id)', 'async function send()')
+  assert.ok(rows.includes('if(!activeSession)return'), 'the guard is the first statement')
+  assert.ok(rows.indexOf('if(!activeSession)return') < rows.indexOf("if(id==='file')"), 'before any row is interpreted')
+})
+
+test('M7 the row handler is inert with no session and live with one', () => {
+  const source = betweenA3('function dispatchPlusRow(id)', 'async function send()')
+  const build = (activeSession) => {
+    const calls = []
+    const stub = (name) => (...args) => calls.push(name + (args.length ? ':' + args.join('|') : ''))
+    const ids = { filePickerImage: 'filePickerImage', filePickerAny: 'filePickerAny' }
+    const fn = new Function(
+      'activeSession', 'plusSuppressFocusReturn', '$',
+      'renderPlusFile', 'closePlus', 'fillSlashCommand', 'runCommandLine', 'renderPlusPermission',
+      'openSessionSettings', 'exportSession',
+      `${source};return dispatchPlusRow`,
+    )(
+      activeSession,
+      false,
+      (id) => ({ click: () => calls.push('click:' + (ids[id] || id)) }),
+      stub('file'), stub('close'), stub('slash'), stub('run'), stub('permission'),
+      stub('settings'), stub('export'),
+    )
+    return { fn, calls }
+  }
+
+  const gone = build(null)
+  for (const id of ['file', 'pick-image', 'pick-any', 'goal', 'compact', 'permission', 'permission-current', 'model', 'export', 'preset:read-only']) {
+    gone.fn(id)
+  }
+  assert.deepEqual(gone.calls, [], 'no row may act once the chat is gone')
+
+  const live = build('s1')
+  live.fn('file')
+  live.fn('pick-image')
+  live.fn('model')
+  assert.deepEqual(live.calls, ['file', 'close', 'click:filePickerImage', 'close', 'settings'], 'the same rows still work inside a chat')
+})
+
+test('M7 openPlus stays off the history stack (design D-A5)', () => {
+  const opener = betweenA3('function openPlus()', 'function closePlus(')
+  assert.ok(!opener.includes('pushState'), 'no history entry is added for the sheet')
+  const closer = betweenA3('function closePlus()', 'async function runCommandLine(')
+  assert.ok(closer.includes('setTimeout('), 'and closing is still an animation, not a history pop')
+})
