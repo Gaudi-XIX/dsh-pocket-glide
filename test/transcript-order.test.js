@@ -175,3 +175,48 @@ test('the todo dock reserves its height so the turn status is not covered', () =
   assert.ok(js.includes("document.body.style.setProperty('--todo-h'"))
   assert.ok(js.includes('syncTodoHeight(host)'), 'renderTodoDock must publish its height')
 })
+
+// 2026-10-02 (second round): one page holds 30 *records*, which is routinely
+// less than a single assistant bubble, so a tap on the older row could page in
+// 30 records and still change nothing on screen — read by the user as "点了没反应".
+// A tap must now keep pulling until an earlier *user* message actually appears.
+test('a tap keeps pulling older pages until an earlier user message appears', () => {
+  const { js } = mobilePageAssets({ locale: 'zh' })
+  assert.ok(js.includes('async function fetchOlderPage()'), 'the single-page primitive must exist')
+  assert.ok(js.includes('async function loadOlder()'), 'the tap path must exist')
+  assert.ok(js.includes('function olderUserCount()'), 'progress is measured in user messages, not records')
+  assert.ok(js.includes('const before=olderUserCount()'))
+  assert.ok(js.includes('if(olderUserCount()>before)break'), 'stop as soon as an earlier user message lands')
+  assert.ok(js.includes('deadline=Date.now()+8000'), 'the multi-page pull needs a time budget')
+  assert.ok(js.includes('pages<8'), 'the multi-page pull must be bounded')
+  assert.ok(js.includes('function oldestEventSeq()'), 'the anchor must not assume windowEvents()[0] is oldest')
+  assert.ok(js.includes('box.scrollTop=prevTop+(box.scrollHeight-prevHeight)'), 'paging in must keep the reading position')
+  // The fill loop must call the single-page primitive: nesting loadOlder inside
+  // its own 8-page loop would allow up to 64 requests.
+  assert.ok(js.includes('if(!await fetchOlderPage())break'), 'the fill loop pages one at a time')
+})
+
+test('reaching the start of the conversation is final for the row', () => {
+  const { js } = mobilePageAssets({ locale: 'zh' })
+  assert.ok(js.includes('olderExhausted'), 'exhaustion is remembered')
+  assert.ok(js.includes('if(!olderHasMore)olderExhausted=true'), 'an empty page marks the start')
+  assert.ok(
+    js.includes('olderHasMore=olderExhausted?false:olderHasMore||value.hasMore===true'),
+    'a poll may arm the row, but never re-arm it after the start was reached',
+  )
+  assert.ok(js.includes('olderHasMore=false;olderBusy=false;olderExhausted=false;'), 'leaving the session resets it')
+})
+
+test('the list follows the finger and springs back without the old ring', () => {
+  const { js } = mobilePageAssets({ locale: 'zh' })
+  const html = renderMobilePage({ locale: 'zh' })
+  assert.ok(html.includes('#messages.pulling,#messages.animating{will-change:transform}'))
+  assert.ok(html.includes('#messages.animating{transition:transform .24s cubic-bezier(.22,1,.36,1)}'))
+  assert.ok(js.includes('MAXPULL=88'), 'the pull is clamped')
+  assert.ok(js.includes('HOLD=44'), 'the list stays held down while a page is in flight')
+  assert.ok(js.includes("box.style.transform=px?'translateY('+px+'px)':''"), 'the list tracks the finger')
+  assert.ok(js.includes("box.addEventListener('transitionend'"), 'the transform is released at rest')
+  assert.ok(js.includes("if(!active)box.classList.remove('animating')},320)"), 'the resting class is dropped even when no transition frame arrives')
+  assert.ok(!js.includes('pullIndicator'), 'the second spinner stays deleted')
+  assert.ok(!js.includes('pull-ring'), 'the ring stays deleted')
+})
