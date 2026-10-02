@@ -3,6 +3,8 @@
 // real text/event-stream response read over HTTP.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { LanMobileBridge } from '../lib/bridge.js'
+import { STREAM_RETRY_BASE_MS, STREAM_RETRY_CAP_MS } from '../lib/constants.js'
 import { startBridge, httpFetch } from './helpers.js'
 
 const tokenFrame = { type: 'start', revision: 'r1' }
@@ -37,8 +39,22 @@ test('SSE maps assistant-stream -> token, snapshot -> snapshot, other -> event',
       raw += decoder.decode(value, { stream: true })
     }
 
-    // Initial SSE retry directive.
-    assert.match(raw, /retry: 500\n\n/)
+    // The reconnect cadence the stream opens with (K-7). It is a NUMBER, not the
+    // number: the value became dynamic in WP-OPS-BRIDGE (`500 x 2^failures`, capped
+    // at 15s), and this file stayed green only because a healthy conversation has
+    // zero failures and the first frame therefore still read 500. So the frame is
+    // pinned structurally here, and the two values that actually matter — 500 on a
+    // clean conversation, and the escalation ladder — are pinned by name below.
+    const opening = raw.match(/^retry: (\d+)\n\n/)
+    assert.ok(opening, `the stream must open with a retry directive; got ${JSON.stringify(raw.slice(0, 40))}`)
+    assert.equal(
+      Number(opening[1]),
+      t.bridge.streamRetryDelayMs('sess-1'),
+      'the frame must state the cadence this bridge is actually publishing',
+    )
+    // Exactly one retry directive on a clean open: the escalation is written on the
+    // way OUT (after a failure), never invented twice at the start.
+    assert.equal(raw.match(/^retry: \d+\n\n/gm)?.length, 1, 'a healthy stream says its cadence once')
 
     // assistant-stream items are emitted on the named "token" channel.
     assert.match(raw, /event: token\ndata: \{"type":"start","revision":"r1"\}\n\n/)
@@ -147,4 +163,97 @@ test('SSE is rejected without a mobile cookie', async () => {
   } finally {
     await t.stop()
   }
+})
+
+// ---------------------------------------------------------------------------
+// K-7 (WP-BRIDGE-EXTRA) — the two facts the old literal `retry: 500` was standing
+// in for, now pinned on their own terms. A constant here is a multiplier: every
+// reconnect opens another carrier WebSocket, so the value has to grow while a
+// conversation keeps failing, and it has to stop growing before it becomes the
+// thing the user notices as "my phone is stuck".
+// ---------------------------------------------------------------------------
+
+test('K-7: a conversation with no recorded failure still opens at 500ms', async () => {
+  const t = await startBridge({ harness: 'fake', harnessOptions: { frames } })
+  try {
+    const cookie = await t.pairMobile('PocketRetry/1.0')
+    assert.equal(t.bridge.streamRetryDelayMs('sess-1'), STREAM_RETRY_BASE_MS, 'nothing has failed on this bridge')
+    const res = await httpFetch(`${t.base}/api/session/stream?sessionId=sess-1`, { headers: { cookie } })
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let raw = ''
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      raw += decoder.decode(value, { stream: true })
+    }
+    // The historical value, explicitly. This is the assertion that would have been
+    // red the moment the dynamic cadence shipped with a different base — the right
+    // place to notice, because this is the place the promise lives.
+    assert.match(raw, /^retry: 500\n\n/, 'the first frame of a clean stream is still the 500ms cadence')
+    assert.equal(STREAM_RETRY_BASE_MS, 500, 'and the base constant is that same 500')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('K-7: one recorded failure moves the published cadence, and the frame carries the new number', async () => {
+  const t = await startBridge({ harness: 'fake', harnessOptions: { frames } })
+  try {
+    const cookie = await t.pairMobile('PocketRetry2/1.0')
+    // One failure: not gated (a person who reloads after a single blip must still
+    // get a real answer), but the wait doubles. This is the case the literal in this
+    // file used to hide — the stream opens with 1000 now, and would have been red.
+    t.bridge.noteStreamFailure('sess-1')
+    assert.equal(t.bridge.streamCooldownMs('sess-1'), 0, 'the first failure never gates')
+    assert.equal(t.bridge.streamRetryDelayMs('sess-1'), STREAM_RETRY_BASE_MS * 2)
+    const res = await httpFetch(`${t.base}/api/session/stream?sessionId=sess-1`, { headers: { cookie } })
+    const raw = await new Promise(async (resolve) => {
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let text = ''
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        text += decoder.decode(value, { stream: true })
+        if (/^retry: \d+\n\n/.test(text)) {
+          resolve(text)
+          reader.cancel().catch(() => {})
+          return
+        }
+      }
+      resolve(text)
+    })
+    assert.match(raw, /^retry: 1000\n\n/, 'the opening frame states the escalated cadence, not the constant')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('K-7: the ladder grows monotonically and plateaus at 15s — it never exceeds it', () => {
+  const bridge = new LanMobileBridge({
+    harnessUrl: () => 'http://127.0.0.1:9',
+    innerAuth: { ready: async () => undefined, invalidate: () => {} },
+    port: 0,
+    pairingPinStore: { load: () => ({}), save: () => true },
+    log: () => {},
+  })
+  const sessionId = 'sess-ladder'
+  assert.equal(bridge.streamRetryDelayMs(sessionId), 500, 'clean')
+  let previous = 500
+  let plateauAt = -1
+  for (let attempt = 1; attempt <= 12; attempt += 1) {
+    bridge.noteStreamFailure(sessionId)
+    const delay = bridge.streamRetryDelayMs(sessionId)
+    assert.ok(delay <= STREAM_RETRY_CAP_MS, `attempt ${attempt} exceeded the 15s ceiling (${delay})`)
+    assert.ok(delay >= previous, `attempt ${attempt} shrank the wait (${previous} -> ${delay})`)
+    if (delay === STREAM_RETRY_CAP_MS && plateauAt < 0) plateauAt = attempt
+    previous = delay
+  }
+  assert.ok(plateauAt > 0, 'the ladder must reach the ceiling rather than grow without end')
+  assert.equal(previous, STREAM_RETRY_CAP_MS, 'and it stays there')
+  assert.equal(STREAM_RETRY_CAP_MS, 15_000, 'the ceiling is the documented 15 seconds')
+  // A stream that came back clean retires the escalation entirely.
+  bridge.noteStreamSuccess(sessionId)
+  assert.equal(bridge.streamRetryDelayMs(sessionId), 500, 'recovery resets the cadence to the base')
 })
