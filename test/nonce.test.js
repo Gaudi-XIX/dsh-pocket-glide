@@ -87,6 +87,7 @@ test('interactive reconnect page renders the guided restore flow', () => {
   const html = renderMobileReconnectPage('en', 'lan', { nonce, assets })
 
   assert.match(html, /id="retryBtn"[^>]*data-action="retry"/, 'manual retry button exists')
+  assert.match(html, /#pinBox\[hidden\],#retryBtn\[hidden\]\{display:none\}/, 'a hidden retry button is really hidden')
   assert.match(html, /if\(MODE==='auto'\)startRetry\(\);/, 'reconnection auto-starts on load')
   assert.match(html, /fetch\('\/pair\/retry'/, 'calls the restore endpoint')
   assert.match(html, /id="pinBox" hidden/, 'PIN branch host is hidden until requested')
@@ -108,6 +109,7 @@ test('tunnel reconnect page renders the same guided flow', () => {
   assert.match(html, /if\(MODE==='auto'\)startRetry\(\);/)
   assert.match(html, /fetch\('\/pair\/retry'/)
   assert.match(html, /id="pinBox" hidden/)
+  assert.doesNotMatch(html, /id="retryBtn"/, 'tunnel mode cannot resume, so it offers no dead retry button')
 })
 
 test('PIN pairing page delegates its form and show-pin control', () => {
