@@ -220,3 +220,69 @@ test('the list follows the finger and springs back without the old ring', () => 
   assert.ok(!js.includes('pullIndicator'), 'the second spinner stays deleted')
   assert.ok(!js.includes('pull-ring'), 'the ring stays deleted')
 })
+
+test('one back action always leaves the chat view', () => {
+  const { js } = mobilePageAssets({ locale: 'zh' })
+  assert.ok(js.includes('async function openSession(id,title,fromHistory=false,pushHistory=true)'), 'the opener knows who pushed the entry')
+  assert.ok(
+    js.includes("if(pushHistory)history.pushState(entry,'');else history.replaceState(entry,'')"),
+    'an automatic jump rewrites the current entry instead of stacking a second chat entry',
+  )
+  assert.ok(
+    js.includes("if(document.body.classList.contains('chat-open')){history.replaceState({view:'sessions'},'');showSessionList();return}"),
+    'a stale duplicate chat entry collapses to the session list instead of reopening the same chat',
+  )
+  assert.ok(js.includes("history.state?.view==='chat'&&history.length>1"), 'a single-entry stack does not press a dead back button')
+  assert.ok(js.includes('await openSession(target.sessionId,titleFor(target),false,false)'), 'the resume jump does not push history')
+  assert.ok(
+    js.includes('await openSession(nextFocus.sessionId,titleFor(nextFocus),false,false)'),
+    'the boot reconcile jump does not push history',
+  )
+  assert.ok(js.includes('await openSession(created.sessionId)'), 'creating a session stays user-initiated, so it still pushes history')
+  assert.ok(js.includes('void openSession(btn.dataset.id)'), 'opening a session row stays user-initiated, so it still pushes history')
+})
+
+test('handleHistory leaves the chat when a stale chat entry arrives while it is already open', () => {
+  const { js } = mobilePageAssets({ locale: 'zh' })
+  const source = extractFunction(js, 'handleHistory')
+
+  const harness = chatOpen => {
+    const calls = { opened: [], replaced: [], listed: 0 }
+    const document = { body: { classList: { contains: name => chatOpen && name === 'chat-open' } } }
+    const history = { replaceState: (state, url) => { calls.replaced.push([state, url]) } }
+    const openSession = (id, title, fromHistory) => { calls.opened.push([id, title, fromHistory]) }
+    const showSessionList = () => { calls.listed += 1 }
+    const handleHistory = new Function(
+      'document',
+      'history',
+      'openSession',
+      'showSessionList',
+      `${source}; return handleHistory;`,
+    )(document, history, openSession, showSessionList)
+    return { calls, handleHistory }
+  }
+
+  // The reported dead gesture: a stale {view:'chat'} entry pops while the chat is already on
+  // screen. Reopening the same session repainted an identical view, so back looked like a no-op.
+  const open = harness(true)
+  open.handleHistory({ view: 'chat', sessionId: 's1', title: 'T' })
+  assert.deepEqual(open.calls.opened, [], 'the same chat must not be reopened')
+  assert.equal(open.calls.listed, 1, 'the session list is shown instead')
+  assert.deepEqual(open.calls.replaced, [[{ view: 'sessions' }, '']], 'the stale entry is rewritten so the next back still works')
+
+  // A genuine forward navigation into a chat, arriving while the list is on screen.
+  const listed = harness(false)
+  listed.handleHistory({ view: 'chat', sessionId: 's1', title: 'T' })
+  assert.deepEqual(listed.calls.opened, [['s1', 'T', true]], 'a real back into a chat still opens it')
+  assert.equal(listed.calls.listed, 0)
+  assert.deepEqual(listed.calls.replaced, [])
+
+  // The sessions entry, and a missing state, both land on the list.
+  for (const state of [{ view: 'sessions' }, null]) {
+    const plain = harness(true)
+    plain.handleHistory(state)
+    assert.equal(plain.calls.listed, 1, 'the sessions entry shows the list')
+    assert.deepEqual(plain.calls.opened, [])
+    assert.deepEqual(plain.calls.replaced, [])
+  }
+})
