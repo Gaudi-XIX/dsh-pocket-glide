@@ -15,6 +15,8 @@ import {
   ensureCloudflared,
   extractTryCloudflareUrl,
 } from '../lib/tunnel.js'
+import { LanMobileBridge } from '../lib/bridge.js'
+import { startBridge, httpFetch } from './helpers.js'
 
 const ENV_KEYS = ['DSH_POCKET_CLOUDFLARED', 'DSH_PHONE_NATIVE_CLOUDFLARED', 'CLOUDFLARED_BIN', 'LOCALAPPDATA', 'XDG_CACHE_HOME']
 
@@ -408,5 +410,150 @@ test('migration does not run when the new cache dir already has content', async 
   } finally {
     restoreEnv(saved)
     for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// WP-SEC-BRIDGE B1 / M4 — the device count is not a reason to refuse a mode
+// switch. The old guard was `sessions.size > 0`, and behind a tunnel that count
+// is every phone sharing one carrier egress: the desktop could not turn its own
+// tunnel off without first evicting someone else's device.
+// ---------------------------------------------------------------------------
+
+const fakeTunnelSeam = {
+  createCloudflareTunnel: async () => ({
+    url: 'https://mode-switch.trycloudflare.com',
+    provider: 'cloudflare',
+    stop: async () => {},
+    process: { once: () => {} },
+  }),
+}
+
+test('M4: switching the tunnel on is not blocked by a connected phone', async () => {
+  const t = await startBridge({ bridgeOptions: fakeTunnelSeam })
+  try {
+    await t.pairMobile('PocketMode/1.0')
+    assert.ok(t.bridge.sessions.size > 0, 'a device is connected')
+    const desktop = await t.pairDesktop()
+    const res = await httpFetch(`${t.base}/desktop/tunnel/toggle`, {
+      method: 'POST',
+      headers: { Cookie: desktop, 'content-type': 'application/json' },
+      body: JSON.stringify({ enable: true }),
+    })
+    assert.equal(res.status, 200, 'the switch is answered, not refused')
+    const body = await res.json()
+    assert.equal(body.ok, true)
+    assert.equal(body.active, true)
+    assert.equal(t.bridge.tunnelActive, true, 'the tunnel did come up')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('M4: switching the tunnel off is not blocked by a connected phone either', async () => {
+  const t = await startBridge({ bridgeOptions: fakeTunnelSeam })
+  try {
+    // Pair first, then bring the tunnel up under that phone, then take it down:
+    // the old `sessions.size > 0` guard refused both directions.
+    const cookie = await t.pairMobile('PocketMode/1.0')
+    assert.ok(t.bridge.sessions.size > 0)
+    await t.bridge.toggleTunnel(true)
+    assert.equal(t.bridge.tunnelActive, true)
+    assert.equal(t.bridge.sessions.size, 1, 'the phone survived the switch')
+    await t.bridge.toggleTunnel(false)
+    assert.equal(t.bridge.tunnelActive, false, 'the tunnel came down with the phone still listed')
+    assert.equal(t.bridge.sessions.size, 1)
+    // And the surviving cookie still authenticates afterwards.
+    const res = await httpFetch(`${t.base}/api/status`, { headers: { cookie } })
+    assert.equal(res.status, 200)
+  } finally {
+    await t.stop()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// WP-SEC-BRIDGE B1 / M8 — a tunnel launch re-issues the EPHEMERAL password, and
+// never touches the durable one.
+// ---------------------------------------------------------------------------
+
+test('M8: bringing the tunnel up rotates the ephemeral password', async () => {
+  const t = await startBridge({ bridgeOptions: fakeTunnelSeam })
+  try {
+    t.bridge.ephemeralPin = '111111'
+    t.bridge.ephemeralPinExpiresAt = Date.now() + 5 * 60_000
+    await t.bridge.toggleTunnel(true)
+    assert.notEqual(t.bridge.ephemeralPin, '111111', 'the password shown against the previous public URL is dead')
+    assert.ok(t.bridge.ephemeralPinExpiresAt > Date.now(), 'the fresh one is inside its window')
+    // Still usable for a reconnect: rotating is not expiring.
+    assert.equal(t.bridge.tunnelPinAcceptsReconnect(), true)
+  } finally {
+    await t.stop()
+  }
+})
+
+test('M8: a consented durable password survives every tunnel launch', async () => {
+  const durable = '482913'
+  const t = await startBridge({
+    bridgeOptions: {
+      ...fakeTunnelSeam,
+      pairingPinStore: { load: () => ({ pin: durable, pinConsent: true }), save: () => true },
+    },
+  })
+  try {
+    await t.bridge.toggleTunnel(true)
+    const view = t.bridge.readPairingPin()
+    assert.equal(view.pin, durable, 'the durable promise is not an expiry to be honoured away')
+    assert.equal(view.consent, true)
+    assert.equal(view.expired, false)
+    await t.bridge.toggleTunnel(false)
+    await t.bridge.toggleTunnel(true)
+    assert.equal(t.bridge.readPairingPin().pin, durable, 'and it survives a second launch too')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('M4: an in-flight switch is reported honestly instead of racing a second tunnel', async () => {
+  let release
+  const t = await startBridge({
+    bridgeOptions: {
+      createCloudflareTunnel: () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    },
+  })
+  const headers = { Cookie: await t.pairDesktop(), 'content-type': 'application/json' }
+  try {
+    const launching = httpFetch(`${t.base}/desktop/tunnel/toggle`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ enable: true }),
+    })
+    // Wait for the launch to be the bridge's current one before asking again:
+    // the two requests are concurrent, and the second must arrive while the
+    // first is still in flight (a cloudflared download really does take seconds).
+    for (let attempt = 0; attempt < 200 && !t.bridge.tunnelLoading; attempt++) {
+      await new Promise((resolveTick) => setImmediate(resolveTick))
+    }
+    assert.equal(t.bridge.tunnelLoading, true, 'the switch is in progress')
+    const second = await httpFetch(`${t.base}/desktop/tunnel/toggle`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ enable: true }),
+    })
+    assert.equal(second.status, 409, 'a second switch is refused while one is running')
+    assert.equal((await second.json()).error, 'A tunnel switch is already in progress.')
+    release({ url: 'https://late.trycloudflare.com', provider: 'cloudflare', stop: async () => {}, process: { once: () => {} } })
+    const first = await launching
+    assert.equal(first.status, 200, 'the switch that was allowed did complete')
+    const body = await first.json()
+    assert.equal(body.active, true)
+    assert.equal(body.url, 'https://late.trycloudflare.com')
+    assert.equal(t.bridge.tunnelActive, true)
+  } finally {
+    // Never leave the launch unresolved: stop() waits for it.
+    release?.({ url: 'https://fallback.trycloudflare.com', provider: 'cloudflare', stop: async () => {}, process: { once: () => {} } })
+    await t.stop()
   }
 })

@@ -3,6 +3,8 @@
 // + cf-ray header seam (no real public host required).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { LanMobileBridge, pairingRateKey } from '../lib/bridge.js'
+import { PAIRING_PIN_DIGITS } from '../lib/constants.js'
 import { startBridge, httpFetch } from './helpers.js'
 
 test('unpaired GET /api/status is rejected with 401', async () => {
@@ -116,18 +118,60 @@ test('re-pairing with the live cookie keeps one device instead of two', async ()
   }
 })
 
-test('re-pairing without a cookie retires that handset own entry', async () => {
+// ---------------------------------------------------------------------------
+// WP-SEC-BRIDGE B1 / M4 — the retirement key behind the tunnel is the device's
+// own token, not "address + User-Agent".
+//
+// 原断言：一次「同 addr + 同 UA、不带 cookie」的隧道重连之后 `sessions.size === 1`
+//         （'the same handset must replace its entry'）。
+// 新断言：LAN 下仍为 1；隧道下为 2，且带 cookie 的重连仍复用同一 token。
+// 为什么原断言钉的是错行为：隧道模式下 `remoteAddress` 是 cloudflared 出口
+//   （cf-connecting-ip）——一台运营商出口地址后面是整批手机，而 `label` 只是
+//   UA 前 40 字符，同型号两台完全一样。用这两个键退休"同一台手机"，实际会在
+//   第二台同型号手机上机时踢掉第一台的有效会话。卡片裁定见 design §8–9 M4
+//   「隧道模式用设备标识（cookie/token）而非 IP 判定退休」。
+// ---------------------------------------------------------------------------
+
+test('LAN re-pairing without a cookie still replaces that handset entry', async () => {
+  const t = await startBridge()
+  try {
+    const ua = { 'user-agent': 'Mozilla/5.0 (Linux; Android 12; NOH-AN00)' }
+    const pair = async () => {
+      // The pairing token is single-use, so a second scan needs a fresh one.
+      t.bridge.rotatePairingToken()
+      const token = new URL(t.bridge.snapshot().pairingUrl).searchParams.get('token')
+      const res = await httpFetch(`${t.base}/pair?token=${token}`, { headers: ua })
+      assert.equal(res.status, 302)
+      return (res.headers.get('set-cookie') ?? '').split(';')[0]
+    }
+    const first = await pair()
+    assert.equal(t.bridge.sessions.size, 1)
+    // Cleared storage on the LAN: address + UA is the narrowest key available
+    // there, and a LAN address really is one interface of one handset.
+    const second = await pair()
+    assert.equal(t.bridge.sessions.size, 1, 'the same LAN handset must replace its entry')
+    assert.notEqual(second, first, 'the replaced entry carries the new token')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('tunnel re-pairing without a cookie does not evict by address and UA', async () => {
   const t = await tunnelPinBridge()
   try {
     const ua = { 'user-agent': 'Mozilla/5.0 (Linux; Android 12; NOH-AN00)' }
     const first = await verifyPin(t, '123456', ua)
     assert.equal(first.status, 200)
     assert.equal(t.bridge.sessions.size, 1)
-    // Cleared storage or a fresh tunnel hostname: no cookie, so the bridge can
-    // only recognise the handset by user-agent label + carrier address.
+    // Same carrier egress, same stock UA, no cookie: this is not proof of being
+    // the same phone, so the first entry survives instead of being retired.
     const second = await verifyPin(t, '123456', ua)
     assert.equal(second.status, 200)
-    assert.equal(t.bridge.sessions.size, 1, 'the same handset must replace its entry')
+    assert.equal(t.bridge.sessions.size, 2, 'an address behind the carrier is not a device')
+    // The token path is the one that recognises the handset, and it still reuses.
+    const again = await verifyPin(t, '123456', { ...ua, cookie: cookieOf(second) })
+    assert.equal(again.status, 200)
+    assert.equal(cookieOf(again), cookieOf(second))
   } finally {
     await t.stop()
   }
@@ -268,4 +312,130 @@ test('rotate without a desktop session is rejected with 403', async () => {
   } finally {
     await t.stop()
   }
+})
+
+// ---------------------------------------------------------------------------
+// WP-SEC-BRIDGE B1 / M8 + M9 — password strength and the rate-limit key.
+// Invariant assertions only (parallel-write window: absolute counts are not
+// reproducible, per design §14 b5).
+// ---------------------------------------------------------------------------
+
+/** A bridge with no server: for the generator and the failure bookkeeping. */
+function bareBridge() {
+  return new LanMobileBridge({
+    harnessUrl: () => 'http://127.0.0.1:9',
+    innerAuth: { ready: async () => undefined, invalidate: () => {} },
+    pairingPinStore: { load: () => ({}), save: () => true },
+    now: () => 10_000_000_000_000,
+  })
+}
+
+test('M8: the generated password is a numeric string of the declared width', () => {
+  // The shape every consumer may rely on. The width is the constant
+  // PAIRING_PIN_DIGITS, and the phone's password field (its length and pattern,
+  // in lib/pages.js) has to move with it — see the seam note in the handoff.
+  const bridge = bareBridge()
+  const shape = new RegExp(`^[0-9]{${PAIRING_PIN_DIGITS}}$`)
+  const widths = new Set()
+  for (let round = 0; round < 50; round++) {
+    const pin = bridge.generatePairingPin()
+    assert.match(pin, shape, `width ${PAIRING_PIN_DIGITS}, digits only`)
+    assert.match(pin, /^[0-9A-Za-z]{6,}$/, 'never shorter than the field accepts')
+    widths.add(pin.length)
+  }
+  assert.deepEqual([...widths], [PAIRING_PIN_DIGITS], 'one width, every round')
+})
+
+test('M8: a stored durable password short-circuits, whatever its width', () => {
+  for (const pin of ['123456', '12345678']) {
+    const bridge = new LanMobileBridge({
+      harnessUrl: () => 'http://127.0.0.1:9',
+      innerAuth: { ready: async () => undefined, invalidate: () => {} },
+      pairingPinStore: { load: () => ({ pin, pinConsent: true }), save: () => true },
+      now: () => 10_000_000_000_000,
+    })
+    const view = bridge.readPairingPin()
+    assert.equal(view.pin, pin, `${pin} must be read back as-is`)
+    assert.equal(view.consent, true)
+    assert.equal(view.expired, false, 'a durable password never expires on its own')
+  }
+})
+
+test('M9: x-forwarded-for cannot rename the rate-limit bucket', async () => {
+  const t = await startBridge()
+  try {
+    t.bridge.ephemeralPin = '123456'
+    t.bridge.ephemeralPinExpiresAt = Date.now() + 5 * 60_000
+    await verifyPin(t, '000000')
+    const before = [...t.bridge.pinFailuresByIp.keys()]
+    assert.equal(before.length, 1, 'the first failure creates exactly one key')
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      await verifyPin(t, '000000', { 'x-forwarded-for': `10.7${attempt}.0.1` })
+    }
+    const after = [...t.bridge.pinFailuresByIp.keys()]
+    assert.deepEqual(after, before, 'the forged header must not create or move a key')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('M9: the rate key is the socket peer in LAN mode and the carrier address in tunnel mode', () => {
+  // In LAN mode the key is the socket peer; a carrier address must not be able
+  // to move it. In tunnel mode the key is the carrier address the local cloudflared
+  // reported (socket:127.0.0.1 would bucket every phone behind one tunnel).
+  assert.equal(pairingRateKey('192.168.1.9', 'lan', undefined), 'socket:192.168.1.9')
+  assert.equal(pairingRateKey('192.168.1.9', 'lan', '203.0.113.7'), 'socket:192.168.1.9')
+  assert.equal(pairingRateKey('127.0.0.1', 'tunnel', '203.0.113.7'), 'tunnel:203.0.113.7')
+  // No carrier address at all: fall back to the socket peer.
+  assert.equal(pairingRateKey('127.0.0.1', 'tunnel', undefined), 'socket:127.0.0.1')
+  // An IPv6-mapped carrier address is normalised the same way the address is.
+  assert.equal(pairingRateKey('127.0.0.1', 'tunnel', '::ffff:203.0.113.7'), 'tunnel:203.0.113.7')
+})
+
+test('M9: a correct password clears its own key and leaves the global count', async () => {
+  const t = await startBridge()
+  try {
+    t.bridge.ephemeralPin = '123456'
+    t.bridge.ephemeralPinExpiresAt = Date.now() + 5 * 60_000
+    await verifyPin(t, '000000')
+    const key = [...t.bridge.pinFailuresByIp.keys()][0]
+    assert.equal(t.bridge.pinFailuresGlobal.length, 1)
+    // A success is worth something to the device that earned it, not to the
+    // counter that watches every device.
+    await verifyPin(t, '123456')
+    assert.equal(t.bridge.pinFailuresByIp.has(key), false, 'its own bucket is cleared')
+    assert.equal(t.bridge.pinFailuresGlobal.length, 1, 'the global count survives it')
+    for (let attempt = 1; attempt <= 3; attempt++) await verifyPin(t, '000000')
+    assert.ok(t.bridge.pinFailuresGlobal.length > 1, 'failures keep accumulating globally')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('M9: past the hard lock the wait grows and never opens on its own', async () => {
+  const t = await startBridge()
+  try {
+    t.bridge.ephemeralPin = '123456'
+    t.bridge.ephemeralPinExpiresAt = Date.now() + 5 * 60_000
+    let waited = 0
+    for (let attempt = 1; attempt <= 12; attempt++) {
+      const res = await verifyPin(t, '000000')
+      if (res.status === 429) waited = Math.max(waited, Number(res.headers.get('retry-after')))
+    }
+    assert.ok(waited > 60, `a backoff, not a fixed pause (saw ${waited}s)`)
+    const locked = await verifyPin(t, '123456')
+    assert.equal(locked.status, 429, 'the lock holds even the right answer out')
+    // Only a desktop password action takes it down.
+    t.bridge.clearPinFailures()
+    const open = await verifyPin(t, '123456')
+    assert.equal(open.status, 200, 'a desktop password action resets the gate')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('M9: the failure map itself is bounded', () => {
+  const bridge = bareBridge()
+  for (let i = 0; i < 1200; i++) bridge.recordPinFailure(`key-${i}`)
+  assert.ok(bridge.pinFailuresByIp.size <= 600, `bounded map, saw ${bridge.pinFailuresByIp.size}`)
 })

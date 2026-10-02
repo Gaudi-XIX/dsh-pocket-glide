@@ -2,7 +2,9 @@
 // FULL-STACK: real HTTP through the real bridge into the minimal fake Harness.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import http from 'node:http'
 import { startBridge, httpFetch } from './helpers.js'
+import { MAX_BODY_BYTES, LARGE_BODY_BYTES } from '../lib/constants.js'
 
 async function rpc(t, cookie, body, headers = {}) {
   return httpFetch(`${t.base}/api/rpc`, {
@@ -134,6 +136,82 @@ test('requestId is server-controlled: client requestId cannot survive', async ()
     assert.equal(request.mode, 'queue')
     assert.equal(request.sessionId, 'sess-1')
     assert.deepEqual(request.content, [{ type: 'text', text: 'hi' }])
+  } finally {
+    await t.stop()
+  }
+})
+
+test('an oversized body is refused before the bridge has taken the whole thing', async () => {
+  const t = await startBridge({ harness: 'fake' })
+  try {
+    const cookie = await t.pairMobile()
+    const url = new URL(`${t.base}/api/rpc`)
+    const envelope = JSON.stringify({ method: 'settings.describe', payload: {} })
+    // Declared one byte past the small tier. The answer must come from the
+    // header, not from 64 KB of buffering: the body is never finished, so a
+    // bridge that waits for every declared byte would sit here until the
+    // watchdog below destroys the socket and this assertion fails on timeout.
+    const res = await new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: url.hostname,
+          port: url.port,
+          path: url.pathname,
+          method: 'POST',
+          agent: false,
+          headers: {
+            cookie,
+            'content-type': 'application/json',
+            'content-length': String(MAX_BODY_BYTES + 1),
+          },
+        },
+        resolve
+      )
+      req.on('error', reject)
+      req.write(envelope)
+      setTimeout(() => req.destroy(new Error('the bridge waited for the declared body')), 4000)
+    })
+    assert.equal(res.statusCode, 413)
+    const body = await new Promise((resolve) => {
+      let text = ''
+      res.setEncoding('utf8')
+      res.on('data', (chunk) => (text += chunk))
+      res.on('end', () => resolve(text))
+    })
+    assert.equal(JSON.parse(body).error, 'Request body is too large.')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('a method on the large tier is not refused by the small tier', async () => {
+  const t = await startBridge({ harness: 'fake' })
+  try {
+    const cookie = await t.pairMobile()
+    const url = new URL(`${t.base}/api/rpc`)
+    // Same declared size, on the base64 tier: the ceiling has to follow the
+    // method, or file.upload and session.prompt lose their big payloads.
+    const res = await new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: url.hostname,
+          port: url.port,
+          path: url.pathname,
+          method: 'POST',
+          agent: false,
+          headers: {
+            cookie,
+            'content-type': 'application/json',
+            'content-length': String(MAX_BODY_BYTES + 1),
+          },
+        },
+        resolve
+      )
+      req.on('error', reject)
+      req.write(JSON.stringify({ method: 'file.upload', payload: { sessionId: 's', data: 'x'.repeat(MAX_BODY_BYTES) } }))
+      req.end()
+    })
+    assert.notEqual(res.statusCode, 413, `large tier must accept up to ${LARGE_BODY_BYTES} bytes`)
   } finally {
     await t.stop()
   }
