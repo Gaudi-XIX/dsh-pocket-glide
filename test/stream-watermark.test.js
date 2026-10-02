@@ -13,9 +13,13 @@
 // full-stack half in test/sse-framing.test.js. The tasks checklist named a second
 // new file (empty-buffer-bootstrap.test.js) that is NOT in this worker's exclusive
 // file set, so those assertions were folded in here — see the handoff note.
+//
+// WP-A1-FIXUP added the A-8 pair (AC-A8-1 / AC-A8-2), the reset inventory (AC-D7),
+// the re-entry behaviour pin (AC-D1) and the SEAM-3 brand-row pins at the bottom of
+// this file, in the same house style.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mobilePageAssets } from '../lib/pages.js'
+import { mobilePageAssets, renderMobileReconnectPage, renderPairingPinPage } from '../lib/pages.js'
 
 const { js } = mobilePageAssets({ locale: 'zh' })
 
@@ -270,3 +274,268 @@ function buildPaintSandbox(state = {}) {
   sandbox.box = box
   return sandbox
 }
+
+// ---------------------------------------------------- A-8 / AC-D1 / AC-D7 (WP-A1-FIXUP)
+//
+// Group A had two independent causes for one visible symptom. The bridge-side cause is
+// the per-session watermark; the page-side one (A-8) is a stale handoff snapshot that
+// survived a session switch and was then ASSIGNED over the live buffer while the older
+// window was cleared — so the messages that were on screen a moment ago vanished and
+// only the newest turn was left. Fixing either cause alone lets the symptom back.
+
+const staleAssign = 'streamEvents=embeddedFocus.history.events||[];olderEvents=[]'
+const cacheAssign = 'streamEvents=cached.streamEvents;olderEvents=cached.olderEvents'
+
+test('AC-A8-1 closeSessionStream releases the stale handoff snapshot', () => {
+  const closing = between('function closeSessionStream()', 'function applyHistory(')
+  assert.ok(closing.includes('embeddedFocus=null'), 'the snapshot goes with the stream')
+  assert.ok(
+    closing.includes('embeddedFocus.sessionId===activeSession'),
+    'and it is dropped for the session being left, not for a window still waiting to paint',
+  )
+  assert.ok(
+    closing.indexOf("streamWatermarks.delete(activeSession);if(activeSession&&embeddedFocus&&embeddedFocus.sessionId===activeSession)embeddedFocus=null}") >= 0,
+    'it lands next to the watermark release, at the tail of the reset',
+  )
+  assert.ok(
+    js.includes('closeSessionStream();closeSessionSettings();activeSession=null'),
+    'the leaving path still runs the reset while activeSession names the session being left',
+  )
+})
+
+test('AC-A8-1 the release is scoped, so the handoff window is not thrown away unshown', () => {
+  // openSession() runs closeSessionStream() BEFORE paintInstantSession(), and the
+  // watermark already told the bridge to stop re-sending what the payload covered. An
+  // unconditional release here therefore deletes the only copy of that window: measured
+  // on a real page, the boot transcript came back two turns short. Leaving a session
+  // still drops the snapshot that belongs to it, which is the stale object A-8(1) is about.
+  const pending = buildCloseSandbox()
+  pending.setEmbedded({ sessionId: 's1', history: { events: [{ event: { seq: 9 } }] } })
+  pending.closeSessionStream()
+  assert.equal(pending.read().embeddedFocus?.sessionId, 's1', 'a snapshot with no session being left survives')
+  const leaving = buildCloseSandbox()
+  leaving.setActive('s1')
+  leaving.setEmbedded({ sessionId: 's1', history: { events: [{ event: { seq: 9 } }] } })
+  leaving.closeSessionStream()
+  assert.equal(leaving.read().embeddedFocus, null, 'the snapshot of the session being left is gone')
+  const other = buildCloseSandbox()
+  other.setActive('s2')
+  other.setEmbedded({ sessionId: 's1', history: { events: [{ event: { seq: 9 } }] } })
+  other.closeSessionStream()
+  assert.equal(other.read().embeddedFocus?.sessionId, 's1', 'a window for a session still to be opened is not collateral damage')
+})
+test('AC-A8-2 neither instant-paint branch overwrites the buffer or clears the older window', () => {
+  // Negative and positive pinned as a pair (the repo-hygiene ⑤ form): deleting the bad
+  // literal alone would let the next rewrite drift back into another whole-buffer assign.
+  assert.equal(js.split(staleAssign).length - 1, 0, 'the stale overwrite form is gone')
+  assert.equal(js.split(cacheAssign).length - 1, 0, 'the cache branch merged too')
+  assert.ok(
+    js.includes('streamEvents=mergeEntries(streamEvents.concat(embeddedFocus.history.events||[]))'),
+    'the embedded branch merges by seq',
+  )
+  assert.ok(js.includes('streamEvents=mergeEntries(streamEvents.concat(cached.streamEvents))'), 'and so does the cached one')
+  assert.ok(
+    js.includes('olderEvents=mergeEntries(olderEvents.concat(cached.olderEvents||[]))'),
+    'the cache restores the older window instead of dropping it',
+  )
+  const branch = between(
+    'if(allowEmbedded&&embeddedFocus&&embeddedFocus.sessionId===activeSession){',
+    'const cached=sessionCache.get(activeSession)',
+  )
+  assert.ok(!branch.includes('olderEvents=[]'), 'the embedded branch never clears the older window')
+  assert.match(
+    between('function paintInstantSession(allowEmbedded){', 'if(allowEmbedded&&embeddedFocus'),
+    /two independent/,
+    'the reason is written next to the merge, not only in the change card',
+  )
+})
+
+function buildInstantPaintSandbox() {
+  const body = ['eventSeq', 'mergeEntries', 'windowEvents', 'paintInstantSession']
+    .map((name) => extractFunction(js, name))
+    .join('\n')
+  const make = new Function(`
+    let activeSession=null,embeddedFocus=null,olderHasMore=false,olderExhausted=false,streamProjections=null
+    let streamEvents=[],olderEvents=[]
+    const sessionCache=new Map()
+    const painted=[]
+    function paintInstantHistory(events){painted.push(events.map(eventSeq))}
+    function ensureTranscriptFilled(){}
+    ${body}
+    return {
+      painted,
+      setActive(value){activeSession=value},
+      setEmbedded(value){embeddedFocus=value},
+      setStream(value){streamEvents=value},
+      setOlder(value){olderEvents=value},
+      setCached(session,value){sessionCache.set(session,value)},
+      read(){return {streamEvents,olderEvents,embeddedFocus}},
+      paintInstantSession,
+    }
+  `)
+  return make()
+}
+
+const seqs = (list) => list.map((entry) => entry.event.seq)
+
+test('AC-D1 re-entering a session keeps the earlier messages that were already on screen', () => {
+  const sandbox = buildInstantPaintSandbox()
+  sandbox.setActive('s1')
+  // Older history the phone already pulled, plus a stale one-turn handoff snapshot that
+  // survived the previous session switch — the exact state that used to blank the screen.
+  sandbox.setOlder([{ event: { seq: 1 } }, { event: { seq: 2 } }])
+  sandbox.setStream([{ event: { seq: 6 } }])
+  sandbox.setEmbedded({
+    sessionId: 's1',
+    history: { events: [{ event: { seq: 9 } }], hasMore: false, projections: null },
+  })
+  assert.equal(sandbox.paintInstantSession(true), true, 'the embedded branch is the one taken')
+  const after = sandbox.read()
+  assert.deepEqual(sandbox.painted[0], [1, 2, 6, 9], 'nothing already on screen leaves the paint')
+  assert.deepEqual(seqs(after.olderEvents), [1, 2], 'the older window is exactly where the phone had it')
+  assert.deepEqual(seqs(after.streamEvents), [6, 9], 'the snapshot merged in by seq, not by replacement')
+  assert.equal(after.embeddedFocus, null, 'and the snapshot is consumed on use')
+})
+
+test('AC-D1 a cached visit keeps both older windows as well', () => {
+  const sandbox = buildInstantPaintSandbox()
+  sandbox.setActive('s2')
+  sandbox.setCached('s2', {
+    streamEvents: [{ event: { seq: 8 } }],
+    olderEvents: [{ event: { seq: 3 } }],
+    olderHasMore: false,
+    olderExhausted: true,
+    streamProjections: null,
+  })
+  sandbox.setStream([{ event: { seq: 7 } }])
+  sandbox.setOlder([{ event: { seq: 4 } }])
+  assert.equal(sandbox.paintInstantSession(false), true, 'the cache branch is the one taken')
+  assert.deepEqual(sandbox.painted[0], [3, 4, 7, 8], 'cached and freshly pulled history both stay')
+  assert.deepEqual(seqs(sandbox.read().olderEvents), [3, 4], 'neither older window is dropped')
+})
+
+function buildCloseSandbox() {
+  const body = ['streamWatermark', 'closeSessionStream'].map((name) => extractFunction(js, name)).join('\n')
+  const make = new Function(`
+    let activeSession=null,sessionStream=null,streamRenderFrame=null,pendingSyncTimer=null
+    let streamConnected=true,streamEvents=[],olderEvents=[],olderHasMore=true,olderBusy=true
+    let olderExhausted=true,streamProjections={values:{}},streamRevision=7,tokenStream=null
+    let embeddedFocus=null,fillBusy=false,olderRunBusy=false
+    const streamWatermarks=new Map()
+    const calls=[]
+    function cancelAnimationFrame(){calls.push('raf')}
+    function clearTimeout(){calls.push('timeout')}
+    function clearSkeletonWatchdog(){calls.push('skeleton')}
+    function clearStreamStaleWatch(){calls.push('stale')}
+    ${body}
+    return {
+      calls,
+      setActive(value){activeSession=value},
+      setStreamStream(value){sessionStream=value},
+      setFrames(id){streamRenderFrame=id},
+      setPendingTimer(id){pendingSyncTimer=id},
+      setWatermark(session,value){streamWatermarks.set(session,value)},
+      setEmbedded(value){embeddedFocus=value},
+      setTokenStream(value){tokenStream=value},
+      setBusyFlags(fill,olderRun){fillBusy=fill;olderRunBusy=olderRun},
+      setBuffers(stream,older){streamEvents=stream;olderEvents=older},
+      watermarkOf(session){return streamWatermark(session)},
+      read(){return {sessionStream,streamRenderFrame,pendingSyncTimer,streamConnected,streamEvents,
+        olderEvents,olderHasMore,olderBusy,olderExhausted,streamProjections,streamRevision,
+        tokenStream,embeddedFocus,fillBusy,olderRunBusy}},
+      closeSessionStream,
+    }
+  `)
+  return make()
+}
+
+test('AC-D7 the reset list, asserted at its present value', () => {
+  const sandbox = buildCloseSandbox()
+  sandbox.setActive('s1')
+  sandbox.setWatermark('s1', 42)
+  sandbox.setStreamStream({
+    close() {
+      sandbox.calls.push('source')
+    },
+  })
+  sandbox.setFrames(11)
+  sandbox.setPendingTimer(12)
+  sandbox.setTokenStream({ text: 'half an answer' })
+  sandbox.setEmbedded({ sessionId: 's1', history: { events: [{ event: { seq: 5 } }] } })
+  sandbox.setBuffers([{ event: { seq: 5 } }], [{ event: { seq: 1 } }])
+  sandbox.setBusyFlags(true, true)
+  sandbox.closeSessionStream()
+  const after = sandbox.read()
+  assert.equal(sandbox.watermarkOf('s1'), -1, 'the per-session watermark is released')
+  assert.equal(after.embeddedFocus, null, 'A-8(1): the stale handoff snapshot is released')
+  assert.equal(after.tokenStream, null, 'and the half-finished token buffer with it')
+  assert.equal(after.sessionStream, null)
+  assert.equal(after.streamConnected, false)
+  assert.deepEqual(after.streamEvents, [])
+  assert.deepEqual(after.olderEvents, [])
+  assert.equal(after.olderHasMore, false)
+  assert.equal(after.olderBusy, false)
+  assert.equal(after.olderExhausted, false)
+  assert.equal(after.streamProjections, null)
+  assert.equal(after.streamRevision, 0)
+  assert.equal(after.pendingSyncTimer, null)
+  assert.equal(after.streamRenderFrame, null)
+  assert.deepEqual(sandbox.calls, ['source', 'raf', 'timeout', 'skeleton', 'stale'], 'every handle and timer it owns')
+  // PRESENT VALUE, not a promise: the two fill loops still reset themselves inside their
+  // own finally, so closeSessionStream does not clear them and an in-flight loop can keep
+  // running against the session it started in. Registered for WP-PERF (X3-7) — read this
+  // pair as "not done", never as "done".
+  assert.equal(after.fillBusy, true, 'fillBusy is NOT reset here today')
+  assert.equal(after.olderRunBusy, true, 'olderRunBusy is NOT reset here today')
+  const closing = between('function closeSessionStream()', 'function applyHistory(')
+  assert.ok(!closing.includes('fillBusy'), 'the source says the same')
+  assert.ok(!closing.includes('olderRunBusy'), 'and so for the older-page loop')
+  assert.ok(
+    between('async function ensureTranscriptFilled()', 'function oldestEventSeq()').includes('finally{fillBusy=false}'),
+    'the reset that does exist lives in the function that sets it',
+  )
+  assert.ok(
+    between('async function loadOlder()', 'function syncTurnStatus()').includes('olderRunBusy=false'),
+    'and the same holds for the older-page loop',
+  )
+})
+
+// ---------------------------------------------------- SEAM-3 brand row on the mobile pages
+//
+// The wordmark routes sit behind the pairing gate, and the pages served to a phone that
+// has NOT paired yet pointed their header images straight at them: a 401 and an empty
+// header slot for exactly the audience that cannot fix it. Until the bridge hands the
+// data URI over (WP-BRIDGE-EXTRA), these pages render a plain-text brand row instead of
+// a broken image, and with an icon in hand they render that icon.
+
+const GATED_BRAND = 'src="/brand-logo'
+const ICON_URI = 'data:image/png;base64,AA=='
+
+test('SEAM-3 the reconnect and disconnected pages emit no gated brand route', () => {
+  // /disconnected is served by THIS renderer (lib/bridge.js routes both /reconnect and
+  // /disconnected through renderMobileReconnectPage), so each shape the bridge uses is
+  // checked: interactive LAN, tunnel, expired tunnel, no saved session, nonced.
+  const variants = [
+    renderMobileReconnectPage('zh', 'lan', {}),
+    renderMobileReconnectPage('en', 'tunnel', {}),
+    renderMobileReconnectPage('zh', 'tunnel', { expired: true }),
+    renderMobileReconnectPage('zh', 'lan', { resumeUnavailable: true }),
+    renderMobileReconnectPage('en', 'lan', { nonce: 'abc123' }),
+  ]
+  for (const html of variants) {
+    assert.ok(!html.includes(GATED_BRAND), 'no image may point at a gated route')
+    assert.ok(!html.includes('/brand-logo'), 'not even as an unused fallback string')
+    assert.ok(html.includes('<div class="brand"><span>DSH Pocket</span></div>'), 'a text brand row stands in')
+  }
+})
+
+test('SEAM-3 with an icon in hand the brand row renders it', () => {
+  const html = renderMobileReconnectPage('zh', 'lan', { icon: ICON_URI })
+  assert.ok(html.includes('src="' + ICON_URI + '"'), 'the data URI is what the phone loads')
+  assert.ok(!html.includes(GATED_BRAND), 'and the gated route is still absent')
+  const pin = renderPairingPinPage('zh', ICON_URI)
+  assert.ok(pin.includes('src="' + ICON_URI + '"'), 'the twin PIN card renders its icon the same way')
+  const bare = renderPairingPinPage('zh', null)
+  assert.ok(!bare.includes('/brand-logo'), 'the twin drops its gated fallback too')
+  assert.ok(!bare.includes('<img'), 'and shows no image at all when there is nothing to show')
+})
