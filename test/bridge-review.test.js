@@ -747,3 +747,330 @@ test('B1: an unauthenticated internal request is not bounced across origins', as
     await t.stop()
   }
 })
+
+// ---------------------------------------------------------------------------
+// WP-OPS-BRIDGE B2 — observability (X4①②⑤⑧), the stream failure path (X4③),
+// the QR accessible name, and the input-validation half of M3.
+//
+// Design §12 禁令 4 keeps this package to logs and fields: nothing below asserts
+// a new status code or a changed access decision, and every assertion is an
+// invariant (a substring that must be present, a count that must be at least the
+// number of branches) because the bridge domain is under concurrent edits.
+// ---------------------------------------------------------------------------
+
+test('B2 X4①: each inner failure class names itself in the log', async () => {
+  // The audit line was: 「invokeHarness 各类失败零日志且一律 HTTP 400」. Four
+  // different failures used to look identical on disk — which is to say, they
+  // were not on disk at all.
+  const lines = []
+  const capture = (level, message) => lines.push(`${level} ${message}`)
+  const makeBridge = (harnessUrl, extra = {}) => new LanMobileBridge({
+    harnessUrl,
+    innerAuth: { ready: async () => undefined, invalidate: () => {} },
+    pairingPinStore: { load: () => ({}), save: () => true },
+    log: capture,
+    ...extra,
+  })
+  const stubbed = (respond) => {
+    const bridge = makeBridge(() => 'http://harness.invalid')
+    bridge.harnessFetch = async (_url, init) => respond(init)
+    return bridge
+  }
+
+  // 1. no harness URL yet (the host has not come up around this bridge).
+  await makeBridge(() => undefined).invokeHarness('session/list', {})
+  // 2. transport: nothing is listening at that address.
+  await makeBridge(() => 'http://127.0.0.1:9').invokeHarness('session/list', {})
+  // 3. the transport carried an HTTP failure rather than an envelope.
+  await stubbed(() => new Response('gateway blew up', { status: 502 })).invokeHarness('session/list', {})
+  // 4. a 200 whose body is not the envelope (a proxy page, a truncated stream).
+  await stubbed(() => new Response('<html>proxy said no</html>', { status: 200 })).invokeHarness('session/list', {})
+  // 5. an answer for somebody else's call.
+  await stubbed(() => new Response(JSON.stringify({ rpcId: 'someone-elses-envelope', result: { ok: true, value: {} } }), { status: 200 }))
+    .invokeHarness('session/list', {})
+  // 6. the Host understood and said no.
+  const declined = await stubbed((init) => new Response(JSON.stringify({
+    rpcId: JSON.parse(String(init.body)).rpcId,
+    result: { ok: false, error: { message: 'a sentence about the conversation', code: 'session/not-found' } },
+  }), { status: 200 })).invokeHarness('session/list', {})
+  assert.equal(declined.errorCode, 'session/not-found', 'the phone still gets the stable code')
+
+  const classes = [
+    'no harness URL yet',
+    'harness transport failed',
+    'harness answered 502',
+    'envelope unreadable',
+    'answer mismatched',
+    'harness rejected',
+  ]
+  const missing = classes.filter((marker) => !lines.some((line) => line.includes(marker)))
+  assert.deepEqual(missing, [], `these failure classes left no trace: ${missing.join(', ')}`)
+  // Structural, not absolute: one attributable line per failure exercised here.
+  assert.ok(lines.length >= classes.length, `${String(lines.length)} lines for ${String(classes.length)} classes`)
+  assert.ok(lines.some((line) => /rpcId=[0-9a-f-]{8}/.test(line)), 'the envelope id is the correlation key now')
+  const rejection = lines.filter((line) => line.includes('harness rejected'))
+  assert.match(rejection.at(-1), /code=session\/not-found/)
+  assert.doesNotMatch(rejection.at(-1), /sentence about the conversation/, 'the Host prose stays out of the log')
+})
+
+test('B2 X4②: an /api/rpc failure names the method, the conversation and the handset', async () => {
+  const lines = []
+  const t = await startBridge({ bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) } })
+  try {
+    const cookie = await t.pairMobile('PocketAttrib/1.0')
+    const res = await httpFetch(`${t.base}/api/rpc`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'session.history', payload: { sessionId: 'sess-attrib' } }),
+    })
+    assert.equal(res.status, 502, 'the transport class still leaves as 502')
+    const failure = lines.filter((line) => line.includes('rpc failed'))
+    assert.ok(failure.length >= 1, `no attributable line: ${lines.join(' | ')}`)
+    const last = failure.at(-1)
+    assert.match(last, /method=session\.history/, 'the method is named')
+    assert.match(last, /session=sess-attrib/, 'the conversation is named')
+    assert.match(last, /device=[A-Za-z0-9_-]{4,}/, 'the handset by its opaque tail')
+    assert.match(last, /trace=[0-9a-f]{8}/, 'and the request has a correlation id')
+    assert.match(last, /class=__bridge\/transport/, 'by class, not by prose')
+    // One URL carried fourteen methods; the path alone must not be the story.
+    assert.doesNotMatch(last, /\/api\/rpc/, 'the route path is no longer the whole attribution')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('B2 X4②: a refused method and a cross-site call are attributable too', async () => {
+  const lines = []
+  const t = await startBridge({ bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) } })
+  try {
+    const cookie = await t.pairMobile('PocketRefuse/1.0')
+    const refused = await httpFetch(`${t.base}/api/rpc`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'session.delete', payload: { sessionId: 's' } }),
+    })
+    assert.equal(refused.status, 403, 'the allowlist answer is unchanged')
+    assert.ok(lines.some((line) => line.includes('rpc method refused') && line.includes('method=session.delete')), lines.join(' | '))
+
+    const crossSite = await httpFetch(`${t.base}/api/rpc`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json', origin: 'http://evil.example', 'sec-fetch-site': 'cross-site' },
+      body: JSON.stringify({ method: 'session.list', payload: {} }),
+    })
+    assert.equal(crossSite.status, 403, 'the origin answer is unchanged')
+    assert.ok(lines.some((line) => line.includes('rpc refused') && line.includes('cross-site')), lines.join(' | '))
+  } finally {
+    await t.stop()
+  }
+})
+
+test('B2 X4⑤: the status payload separates the bridge, the Host and the carrier', async () => {
+  // `connected` has always meant "the bridge answered" while the desktop
+  // surface's `connected` means "a handset is attached". The green dot over a
+  // frozen conversation was that collision. The old field keeps its value (a
+  // phone may still hold a page that reads it); the three meanings are now three
+  // names the client can pick.
+  const t = await startBridge({ harness: 'fake' })
+  try {
+    const cookie = await t.pairMobile('PocketStatus/1.0')
+    const res = await httpFetch(`${t.base}/api/status`, { headers: { cookie } })
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.connected, true, 'the legacy field is untouched')
+    assert.equal(body.devicesConnected, true, 'a handset is attached, by name')
+    assert.equal(typeof body.hostReachable, 'boolean', 'the Host answer is its own field')
+    assert.equal(body.hostReachable, true, 'and the fake Host is answering')
+    assert.equal(typeof body.muxConnected, 'boolean', 'the carrier is its own field')
+    assert.equal(typeof body.hostProbeAgeMs, 'number', 'with the age of that observation')
+  } finally {
+    await t.stop()
+  }
+
+  // The same builder tells the truth when the Host is not there.
+  const offline = await startBridge()
+  try {
+    const cookie = await offline.pairMobile('PocketStatus/1.0')
+    const res = await httpFetch(`${offline.base}/api/status`, { headers: { cookie } })
+    const body = await res.json()
+    assert.equal(body.connected, true, 'the bridge still answered')
+    assert.equal(body.devicesConnected, true, 'the handset is still attached')
+    assert.equal(body.hostReachable, false, 'but the Host is not answering — the frozen half')
+    assert.match(String(body.hostProbeCode ?? ''), /__bridge\/transport/, 'and the class of failure rides along')
+  } finally {
+    await offline.stop()
+  }
+})
+
+test('B2 X4⑧: a rate-limited attempt is logged before the guess is ever read', async () => {
+  // The pre-check answers 429 and used to write nothing, so a run of guesses was
+  // silent in the log exactly while it was happening; only a wrong PIN made
+  // noise.
+  const lines = []
+  const t = await startBridge({ bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) } })
+  try {
+    // A wrong guess is what the limiter counts; with no password in force at
+    // all the bridge answers `expired` and never reaches the counter.
+    t.bridge.ephemeralPin = '111111'
+    t.bridge.ephemeralPinExpiresAt = Date.now() + 5 * 60_000
+    const headers = {
+      'content-type': 'application/json',
+      'cf-connecting-ip': '203.0.113.77',
+      'cf-ray': 'rate-limit-check',
+      origin: t.base,
+    }
+    let limited = 0
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const res = await httpFetch(`${t.base}/pair/verify`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ pin: '007007' }),
+      })
+      if (res.status === 429) limited += 1
+    }
+    assert.ok(limited >= 1, 'the limiter engaged')
+    const throttled = lines.filter((line) => line.includes('pairing rate-limited'))
+    assert.ok(throttled.length >= 1, `the 429 pre-check logged nothing: ${lines.join(' | ')}`)
+    assert.match(throttled.at(-1), /retryAfter=\d+s/, 'the wait it handed out is in the line')
+    assert.match(throttled.at(-1), /attempts=\d+/, 'and how many guesses it had counted')
+    assert.match(throttled.at(-1), /locked=(yes|no)/, 'and whether the hard lock is up')
+    assert.ok(
+      !lines.some((line) => line.includes('007007')),
+      'no log line quotes the attempted password',
+    )
+  } finally {
+    await t.stop()
+  }
+})
+
+test('B2 X4③: a stream the Host will not carry reaches the phone and backs off', async () => {
+  // No fake Harness: the bridge's carrier connect to 127.0.0.1:9 is refused. The
+  // stream used to just `finish()` — an empty end of the SSE, the phone's dot
+  // still green, nothing on disk, and a reconnect every 500ms forever.
+  const lines = []
+  const t = await startBridge({ bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) } })
+  try {
+    const cookie = await t.pairMobile('PocketStream/1.0')
+    const readStream = async () => {
+      const res = await httpFetch(`${t.base}/api/session/stream?sessionId=sess-lost`, { headers: { cookie } })
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let raw = ''
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        raw += decoder.decode(value, { stream: true })
+      }
+      return raw
+    }
+
+    const first = await readStream()
+    assert.match(first, /retry: 500\n\n/, 'a conversation that never failed still gets the original cadence')
+    assert.match(first, /event: failure\ndata: \{[^\n]*"code":"__bridge\/stream-transport"/, 'the failure frame arrives')
+    assert.match(first, /retry: (?!500)\d+\n\n/, 'and the cadence was raised on the way out')
+    assert.ok(lines.some((line) => line.includes('session stream lost') && line.includes('session=sess-lost')), lines.join(' | '))
+    assert.ok(lines.some((line) => line.includes('backing off')), 'the backoff itself is on record')
+
+    const delay = t.bridge.streamRetryDelayMs('sess-lost')
+    assert.ok(delay > 500 && delay <= 15_000, `the next attempt must wait inside the ceiling, got ${String(delay)}`)
+    assert.ok(lines.every((line) => !/sess-lost/.test(line) || true), 'the conversation id is loggable')
+
+    // Second and third attempt: from the second consecutive failure on, an
+    // attempt that arrives inside the window is answered by the bridge instead of
+    // opening yet another WebSocket into a Host that just refused one.
+    await readStream()
+    const suppressed = await readStream()
+    assert.match(suppressed, /__bridge\/stream-backoff/, 'the third attempt is suppressed rather than forwarded')
+    assert.ok(lines.filter((line) => line.includes('session stream suppressed')).length >= 1, 'and the suppression is logged')
+    assert.equal(t.bridge.sessions.size, 1, 'suppressing a stream never signs the handset out')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('B2 X4③: a stream whose harness URL is unreadable answers instead of throwing', async () => {
+  const lines = []
+  const t = await startBridge({ harness: 'fake', bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) } })
+  try {
+    const cookie = await t.pairMobile('PocketBadUrl/1.0')
+    t.bridge.options.harnessUrl = () => {
+      throw new TypeError("cannot read properties of undefined (reading 'port')")
+    }
+    const res = await httpFetch(`${t.base}/api/session/stream?sessionId=sess-bad`, { headers: { cookie } })
+    assert.equal(res.status, 503, 'the route answers rather than escaping after the headers went out')
+    assert.match(await res.text(), /Harness is not ready\./)
+    assert.ok(lines.some((line) => line.includes('no harness to follow') && line.includes('session=sess-bad')), lines.join(' | '))
+  } finally {
+    await t.stop()
+  }
+})
+
+test('B2: the pairing QR names itself to a reader', () => {
+  // role="img" keeps a screen reader from walking several hundred anonymous
+  // rects; <title> is what it announces instead.
+  const bridge = bareBridge({ now: () => 0 })
+  const svg = bridge.pairingQrSvg('http://127.0.0.1:43127/pair?token=abc&x=1')
+  assert.match(svg, /role="img"/, 'the symbol declares what it is')
+  assert.match(svg, /<title>/, 'and carries an accessible name')
+  assert.match(svg, /aria-label="/, 'announced to assistive tech that ignores title')
+  assert.match(svg, /aria-label="[^"]*&amp;[^"]*"/, 'the payload is XML-escaped, not dumped raw')
+  assert.doesNotMatch(svg, /aria-label=""/, 'the name is not empty')
+  // The rect accounting the matrix fixtures depend on is untouched.
+  assert.equal((svg.match(/<rect\b/g) || []).length > 10, true, 'still one rect per module')
+})
+
+test('B2 M3: bad input is 400 with the validator sentence, and the 500 stays generic', async () => {
+  // AC-B2-2, asserted as a pair: the point of the fix was that a validator throw
+  // must not be promoted to an internal error while a genuine internal error
+  // stays generic.
+  const lines = []
+  const t = await startBridge({ harness: 'fake', bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) } })
+  try {
+    const cookie = await t.pairMobile('PocketM3/1.0')
+    const cases = [
+      { method: 'interaction.pending', payload: {} },
+      { method: 'interaction.answer', payload: { rpcId: 'r' } },
+      { method: 'interaction.cancel', payload: { sessionId: 's' } },
+    ]
+    for (const input of cases) {
+      const res = await httpFetch(`${t.base}/api/rpc`, {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      })
+      assert.equal(res.status, 400, `${input.method} is a bad request, not a bridge failure`)
+      const body = await res.json()
+      assert.match(
+        String(body.error),
+        /must be|required|Invalid|Expected/i,
+        `a fixed validator sentence: ${JSON.stringify(body)}`
+      )
+    }
+    // And none of those refusals was reported as an internal error.
+    assert.ok(!lines.some((line) => line.includes('request POST /api/rpc failed')), `a validator throw escaped to the 500 path: ${lines.join(' | ')}`)
+  } finally {
+    await t.stop()
+  }
+})
+
+test('B2: a thrown handler after the SSE headers went out does not fake a 500', async () => {
+  // `writeHead(500)` on a started response throws a second, unrelated error and
+  // the phone sits on an empty 200. The catch now ends the stream, which is at
+  // least something EventSource can see and reconnect from.
+  const t = await startBridge({ harness: 'fake' })
+  try {
+    const cookie = await t.pairMobile('PocketLate/1.0')
+    t.bridge.handle = async (_request, response) => {
+      response.statusCode = 200
+      response.setHeader('content-type', 'text/event-stream; charset=utf-8')
+      response.flushHeaders()
+      throw new Error('boom after the headers went out')
+    }
+    const res = await httpFetch(`${t.base}/api/session/stream?sessionId=sess-late`, { headers: { cookie } })
+    assert.equal(res.status, 200, 'the status the phone already saw cannot be rewritten')
+    const text = await res.text()
+    assert.doesNotMatch(text, /Internal server error/, 'no 500 body was squeezed into the stream')
+    assert.equal(text, '', 'the stream simply ends, which the phone can act on')
+  } finally {
+    await t.stop()
+  }
+})

@@ -16,9 +16,21 @@ import {
   extractTryCloudflareUrl,
 } from '../lib/tunnel.js'
 import { LanMobileBridge } from '../lib/bridge.js'
+import { createMuxMonitor } from '../lib/mux-client.js'
 import { startBridge, httpFetch } from './helpers.js'
 
-const ENV_KEYS = ['DSH_POCKET_CLOUDFLARED', 'DSH_PHONE_NATIVE_CLOUDFLARED', 'CLOUDFLARED_BIN', 'LOCALAPPDATA', 'XDG_CACHE_HOME']
+const ENV_KEYS = [
+  'DSH_POCKET_CLOUDFLARED',
+  'DSH_PHONE_NATIVE_CLOUDFLARED',
+  'CLOUDFLARED_BIN',
+  'LOCALAPPDATA',
+  'XDG_CACHE_HOME',
+  // R12/Q8: the cache root now follows the unified data root, so a test that
+  // does not pin DSH_HOME would download into the real ~/.dsh.
+  'DSH_HOME',
+  'USERPROFILE',
+  'HOME',
+]
 
 function saveEnv() {
   const saved = {}
@@ -414,11 +426,223 @@ test('migration does not run when the new cache dir already has content', async 
 })
 
 // ---------------------------------------------------------------------------
-// WP-SEC-BRIDGE B1 / M4 — the device count is not a reason to refuse a mode
-// switch. The old guard was `sessions.size > 0`, and behind a tunnel that count
-// is every phone sharing one carrier egress: the desktop could not turn its own
-// tunnel off without first evicting someone else's device.
+// WP-OPS-BRIDGE B2 / R12-Q8 — the tunnel cache follows the SAME data-root rule as
+// the log and the pairing password. The isolation half is the point the audit
+// called "隔离失效": an override run must neither download into, nor rename away,
+// the machine's cache.
 // ---------------------------------------------------------------------------
+
+test('DSH_HOME in force: the cache lives under the override and the machine cache is untouched', async () => {
+  const saved = saveEnv()
+  const isolated = makeTempDir('pocket-tunnel-isolated-')
+  const machine = makeTempDir('pocket-tunnel-machine-')
+  try {
+    clearEnv()
+    process.env.DSH_HOME = isolated
+    if (process.platform === 'win32') process.env.LOCALAPPDATA = machine
+    else process.env.XDG_CACHE_HOME = machine
+    // The retired plugin's cache, where the migration path would rename from.
+    const phoneNative = path.join(machine, 'dsh-phone-native', 'cloudflared')
+    fs.mkdirSync(phoneNative, { recursive: true })
+    fs.writeFileSync(path.join(phoneNative, 'cloudflared-old-build.exe'), 'old')
+
+    const payload = Buffer.from('isolated-binary')
+    const finalPath = await ensureCloudflared(undefined, () => {}, {
+      fetchImpl: fetchReturning(payload),
+      pathProbe: async () => undefined,
+      asset: { file: 'fake-isolated.bin', sha256: sha256Hex(payload) },
+    })
+
+    assert.ok(finalPath.startsWith(path.join(isolated, 'pocket', 'cloudflared')), finalPath)
+    assert.ok(fs.statSync(finalPath).isFile())
+    assert.equal(
+      fs.existsSync(path.join(machine, 'dsh-pocket', 'cloudflared')),
+      false,
+      'an isolated run created nothing in the machine root',
+    )
+    assert.equal(
+      fs.existsSync(path.join(phoneNative, 'cloudflared-old-build.exe')),
+      true,
+      'and the migration did not rename the machine cache away under an override',
+    )
+  } finally {
+    restoreEnv(saved)
+    fs.rmSync(isolated, { recursive: true, force: true })
+    fs.rmSync(machine, { recursive: true, force: true })
+  }
+})
+
+test('a pinned binary already in the machine cache is reused, not re-downloaded or moved', async () => {
+  // No override in force: the download target is where the binary already sits.
+  // The point of this case is that unifying the root must not cost the user a
+  // 55 MB re-download, and must not relocate their file.
+  const saved = saveEnv()
+  const root = useTempCacheRoot()
+  const unified = makeTempDir('pocket-tunnel-unified-')
+  try {
+    clearEnv()
+    if (process.platform === 'win32') process.env.LOCALAPPDATA = root
+    else process.env.XDG_CACHE_HOME = root
+    // A file written by an earlier run that DID use the unified root: same pinned
+    // name, found through the read chain.
+    const key = `${process.platform}-${process.arch}`
+    const ext = process.platform === 'win32' ? '.exe' : ''
+    const name = `cloudflared-2026.8.2-${key}${ext}`
+    const unifiedDir = path.join(unified, 'pocket', 'cloudflared')
+    fs.mkdirSync(unifiedDir, { recursive: true })
+    const unifiedBinary = path.join(unifiedDir, name)
+    fs.writeFileSync(unifiedBinary, 'already-verified')
+    process.env.DSH_HOME = unified
+
+    const resolved = await ensureCloudflared(undefined, () => {}, {
+      fetchImpl: async () => {
+        throw new Error('must not download: a pinned binary already exists')
+      },
+      pathProbe: async () => undefined,
+      asset: { file: 'unused', sha256: 'x' },
+    })
+    assert.equal(resolved, unifiedBinary, 'the existing binary was used as it is')
+    assert.equal(fs.existsSync(unifiedBinary), true, 'and it was not moved out of the tree it lives in')
+  } finally {
+    restoreEnv(saved)
+    fs.rmSync(root, { recursive: true, force: true })
+    fs.rmSync(unified, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// WP-OPS-BRIDGE B2 / M5 — the mux monitor may never reject into the host.
+// ---------------------------------------------------------------------------
+
+test('M5: startMuxMonitor catches a rejected monitor instead of leaking it to the host', async () => {
+  // Structural half of the same item: the `.catch()` has to come BEFORE the
+  // `.finally()`, otherwise the chained promise is still rejected and nobody
+  // handles it — inside the host process.
+  const source = fs.readFileSync(new URL('../lib/bridge.js', import.meta.url), 'utf8')
+  const body = source.slice(source.indexOf('startMuxMonitor() {'))
+  const slice = body.slice(0, body.indexOf('\n  }'))
+  assert.ok(slice.includes('.catch('), 'no .catch on the monitor task')
+  assert.ok(slice.indexOf('.catch(') < slice.indexOf('.finally('), '.catch must precede .finally')
+
+  const rejections = []
+  const onRejection = (reason) => rejections.push(String(reason))
+  process.on('unhandledRejection', onRejection)
+  const t = await startBridge()
+  try {
+    t.bridge.muxMonitor = { monitorMux: () => Promise.reject(new Error('monitor exploded')) }
+    t.bridge.startMuxMonitor()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.deepEqual(rejections, [], 'the rejection was handled inside the bridge')
+    assert.equal(t.bridge.muxTask, undefined, 'a dead task does not block the next start')
+    assert.equal(t.bridge.muxAbort, undefined, 'and its abort is released too')
+  } finally {
+    process.removeListener('unhandledRejection', onRejection)
+    await t.stop()
+  }
+})
+
+test('M5: a harness URL getter that throws is survived inside the loop', async () => {
+  // The host surface can be gone already while the monitor is still looping:
+  // `webServer.port` on a disposed proxy throws a TypeError. That used to leave
+  // `monitorMux` through the top of the while, which is how the rejection in the
+  // case above was really produced.
+  const logged = []
+  const monitor = createMuxMonitor({
+    harnessUrl: () => {
+      throw new TypeError('cannot read properties of undefined (reading port)')
+    },
+    innerAuth: { ready: async () => undefined },
+    pendingQuestions: new Map(),
+    log: (level, message) => logged.push(`${level} ${message}`),
+    now: () => Date.now(),
+    consumeMuxEnvelope: () => {},
+    setEventClientId: () => {},
+  })
+  const abort = new AbortController()
+  const running = monitor.monitorMux(abort.signal)
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  abort.abort()
+  await running
+  assert.ok(logged.some((line) => line.startsWith('warn') && line.includes('no harness URL')), logged.join(' | '))
+})
+
+// ---------------------------------------------------------------------------
+// WP-OPS-BRIDGE B2 / M12 + X4⑦ — the carrier child on host exit, and what an
+// unexpected tunnel death costs in signed-out handsets.
+// ---------------------------------------------------------------------------
+
+test('M12: the live tunnel child is terminated if the host exits around it', async () => {
+  const kills = []
+  const child = {
+    once: () => {},
+    kill: (signal) => {
+      kills.push(signal ?? 'SIGTERM')
+      return true
+    },
+    exitCode: null,
+    signalCode: null,
+  }
+  const before = process.listenerCount('exit')
+  const t = await startBridge({
+    bridgeOptions: {
+      createCloudflareTunnel: async () => ({
+        url: 'https://exit-hook.trycloudflare.com',
+        provider: 'cloudflare',
+        process: child,
+        stop: async () => {},
+      }),
+    },
+  })
+  try {
+    await t.bridge.toggleTunnel(true)
+    assert.equal(process.listenerCount('exit'), before + 1, 'one host-exit hook is registered while a tunnel is live')
+    t.bridge.tunnelExitCleanup?.()
+    assert.ok(kills.length >= 1, 'the hook terminates the child')
+    assert.equal(kills[0], 'SIGTERM')
+    await t.bridge.toggleTunnel(false)
+    assert.equal(process.listenerCount('exit'), before, 'stopping the tunnel removes the hook again')
+    // Toggling twice in a row must not accumulate listeners.
+    await t.bridge.toggleTunnel(true)
+    await t.bridge.toggleTunnel(false)
+    assert.equal(process.listenerCount('exit'), before, 'no listener leak across toggles')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('X4⑦: an unexpected tunnel death reports how many handsets it signed out', async () => {
+  const lines = []
+  const child = { once: (_event, handler) => { child.handler = handler }, kill: () => true, exitCode: null, signalCode: null }
+  const t = await startBridge({
+    bridgeOptions: {
+      log: (level, message) => lines.push(`${level} ${message}`),
+      createCloudflareTunnel: async () => ({
+        url: 'https://dies.trycloudflare.com',
+        provider: 'cloudflare',
+        process: child,
+        stop: async () => {},
+      }),
+    },
+  })
+  try {
+    await t.pairMobile('PocketDies/1.0')
+    // A second handset needs a fresh single-use token, and rotating it here is
+    // beside the point: what the item asks is that the count of handsets the
+    // death signed out is IN THE LINE, whatever that count is.
+    const attached = t.bridge.sessions.size
+    assert.ok(attached >= 1, 'at least one handset is attached')
+    await t.bridge.toggleTunnel(true)
+    assert.equal(t.bridge.tunnelActive, true)
+    child.handler?.()
+    const reported = lines.filter((line) => line.includes('tunnel closed unexpectedly'))
+    assert.ok(reported.length >= 1, lines.join(' | '))
+    assert.match(reported.at(-1), new RegExp(`signedOut=${String(attached)}\\b`), 'the count of signed-out devices is in the line')
+    assert.match(reported.at(-1), /parked=/, 'and so is the count of parked (resumable) entries')
+    assert.equal(t.bridge.sessions.size, 0, 'and they really were dropped')
+  } finally {
+    await t.stop()
+  }
+})
 
 const fakeTunnelSeam = {
   createCloudflareTunnel: async () => ({

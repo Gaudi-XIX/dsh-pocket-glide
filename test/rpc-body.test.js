@@ -234,3 +234,113 @@ test('valid allowlisted call is forwarded to the Harness and its result returned
     await t.stop()
   }
 })
+
+// ---------------------------------------------------------------------------
+// WP-OPS-BRIDGE B2 / X4④ — the history shape ladder is now an observable thing.
+//
+// The ladder can ask the Host three different shapes for the same page, each
+// with its own 30 second timeout, while the phone's own fetch gives up at 12s.
+// Nothing said which shape ran or how long it took, so "history timed out" on
+// the phone was indistinguishable from "the shape is wrong", and a retry doubled
+// the pressure on a Host that was already slow. One line per attempt, carrying
+// the bounds that attempt sent (never the content), is the fix.
+// ---------------------------------------------------------------------------
+
+test('B2 X4④: every history attempt is logged with its bounds and its duration', async () => {
+  const lines = []
+  const emptyPages = []
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname, args) => {
+        if (pathname === '/api/session/list') {
+          return {
+            ok: true,
+            value: {
+              items: [
+                { sessionId: 'sess-ladder', updatedAt: 1, projections: { asOfSeq: 40 } },
+              ],
+            },
+          }
+        }
+        if (pathname === '/api/session/page') {
+          emptyPages.push(args.request)
+          return { ok: true, value: { records: [], hasMore: false } }
+        }
+        return undefined
+      },
+    },
+    bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) },
+  })
+  try {
+    const cookie = await t.pairMobile('PocketLadder/1.0')
+    const res = await httpFetch(`${t.base}/api/rpc`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'session.history', payload: { sessionId: 'sess-ladder', maxMessages: 30 } }),
+    })
+    assert.equal(res.status, 200, 'the ladder still answers; it is only no longer silent')
+
+    const attempts = lines.filter((line) => line.includes('history attempt stage=rpc'))
+    // Invariant, not an absolute: one line per Host page call the ladder made.
+    assert.equal(
+      attempts.length,
+      emptyPages.length,
+      `${String(attempts.length)} log lines for ${String(emptyPages.length)} Host page calls`
+    )
+    assert.ok(attempts.length >= 2, 'an empty newest page walks more than one shape')
+    for (const line of attempts) {
+      assert.match(line, /n=\d+\/\d+/, 'which attempt of how many')
+      assert.match(line, /ms=\d+/, 'how long it took')
+      assert.match(line, /throughSeq=\d+/, 'the cursor it carried (also the Q4 stale-ceiling channel)')
+      assert.match(line, /verdict=(ok|empty|failed|shape-mismatch)/, 'and what came back')
+    }
+    assert.match(attempts[0], /n=1\//)
+    assert.notEqual(attempts[0], attempts[1], 'two attempts logged the identical shape')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('B2 X4④: a fast accepted first attempt is not logged', async () => {
+  // The one case where the ladder does exactly what it should on the first try.
+  // Logging it would put three lines into a 512KB file for a healthy read, so
+  // the ladder stays quiet while nothing is wrong — that is what keeps the
+  // failure lines readable when something is.
+  const lines = []
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname) => {
+        if (pathname === '/api/session/list') {
+          return {
+            ok: true,
+            value: {
+              items: [
+                { sessionId: 'sess-quick', updatedAt: 1, projections: { asOfSeq: 12 } },
+              ],
+            },
+          }
+        }
+        if (pathname === '/api/session/page') {
+          return { ok: true, value: { records: [{ seq: 12, type: 'user/message', data: {} }], hasMore: false } }
+        }
+        return undefined
+      },
+    },
+    bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) },
+  })
+  try {
+    const cookie = await t.pairMobile('PocketQuick/1.0')
+    const res = await httpFetch(`${t.base}/api/rpc`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'session.history', payload: { sessionId: 'sess-quick', maxMessages: 30 } }),
+    })
+    assert.equal(res.status, 200)
+    const attempts = lines.filter((line) => line.includes('history attempt'))
+    assert.deepEqual(attempts, [], `a healthy first attempt logged: ${attempts.join(' | ')}`)
+  } finally {
+    await t.stop()
+  }
+})
