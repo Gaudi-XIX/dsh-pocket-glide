@@ -39,24 +39,31 @@ test('valid pairing token issues a hardened dsh_mobile cookie and redirects', as
   }
 })
 
-test('bogus pairing token is rejected with 401', async () => {
+test('a bogus scan link recovers instead of dead-ending', async () => {
   const t = await startBridge()
   try {
     const res = await httpFetch(`${t.base}/pair?token=bogus-token-value`)
-    assert.equal(res.status, 401)
-    assert.match(await res.text(), /invalid or expired/)
+    // The scan link is single-use and expires in five minutes, but the phone keeps
+    // it in its history and home-screen shortcut. A bare 401 made every reload a
+    // dead end; /reconnect still demands a fresh pairing before any session.
+    assert.equal(res.status, 302)
+    assert.equal(res.headers.get('location'), '/reconnect')
+    assert.equal(t.bridge.sessions.size, 0, 'a bogus token must never mint a session')
+    assert.doesNotMatch(res.headers.get('set-cookie') ?? '', /dsh_mobile/)
   } finally {
     await t.stop()
   }
 })
 
-test('expired pairing token is rejected with 401', async () => {
+test('an expired scan link recovers instead of dead-ending', async () => {
   const t = await startBridge()
   try {
     t.bridge.pairingExpiresAt = Date.now() - 1000
     const token = new URL(t.snap.pairingUrl).searchParams.get('token')
     const res = await httpFetch(`${t.base}/pair?token=${token}`)
-    assert.equal(res.status, 401)
+    assert.equal(res.status, 302)
+    assert.equal(res.headers.get('location'), '/reconnect')
+    assert.equal(t.bridge.sessions.size, 0, 'an expired token must never mint a session')
   } finally {
     await t.stop()
   }
@@ -67,13 +74,77 @@ const tunnelHeaders = {
   'cf-ray': '8c1a-test-SJC',
 }
 
-async function verifyPin(t, pin) {
+async function verifyPin(t, pin, headers = {}) {
   return httpFetch(`${t.base}/pair/verify`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...tunnelHeaders },
+    headers: { 'content-type': 'application/json', ...tunnelHeaders, ...headers },
     body: JSON.stringify({ pin }),
   })
 }
+
+async function tunnelPinBridge(pin = '123456') {
+  const t = await startBridge()
+  // Consent is off with the fake store, so the PIN is the ephemeral one.
+  t.bridge.ephemeralPin = pin
+  t.bridge.ephemeralPinExpiresAt = Date.now() + 5 * 60_000
+  return t
+}
+
+function cookieOf(res) {
+  return (res.headers.get('set-cookie') ?? '').split(';')[0]
+}
+
+test('re-pairing with the live cookie keeps one device instead of two', async () => {
+  const t = await tunnelPinBridge()
+  try {
+    const first = await verifyPin(t, '123456')
+    assert.equal(first.status, 200)
+    assert.equal(t.bridge.sessions.size, 1)
+    const liveToken = [...t.bridge.sessions.keys()][0]
+    const cookie = cookieOf(first)
+    assert.match(cookie, /^dsh_mobile=/)
+    // The second submit carries the cookie the first response issued (same origin,
+    // so SameSite=Strict still sends it). It is the same handset pairing again —
+    // a re-submitted PIN, a second tab, a reloaded link — not a second device.
+    const second = await verifyPin(t, '123456', { cookie })
+    assert.equal(second.status, 200)
+    assert.equal(t.bridge.sessions.size, 1, 'one handset must never occupy two entries')
+    assert.ok(t.bridge.sessions.has(liveToken), 'the phone keeps the token it already holds')
+    assert.equal(cookieOf(second), cookie)
+  } finally {
+    await t.stop()
+  }
+})
+
+test('re-pairing without a cookie retires that handset own entry', async () => {
+  const t = await tunnelPinBridge()
+  try {
+    const ua = { 'user-agent': 'Mozilla/5.0 (Linux; Android 12; NOH-AN00)' }
+    const first = await verifyPin(t, '123456', ua)
+    assert.equal(first.status, 200)
+    assert.equal(t.bridge.sessions.size, 1)
+    // Cleared storage or a fresh tunnel hostname: no cookie, so the bridge can
+    // only recognise the handset by user-agent label + carrier address.
+    const second = await verifyPin(t, '123456', ua)
+    assert.equal(second.status, 200)
+    assert.equal(t.bridge.sessions.size, 1, 'the same handset must replace its entry')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('a different handset still gets its own device entry', async () => {
+  const t = await tunnelPinBridge()
+  try {
+    const first = await verifyPin(t, '123456', { 'user-agent': 'Mozilla/5.0 (Linux; Android 12; NOH-AN00)' })
+    assert.equal(first.status, 200)
+    const second = await verifyPin(t, '123456', { 'user-agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7)' })
+    assert.equal(second.status, 200)
+    assert.equal(t.bridge.sessions.size, 2, 'eviction must not merge two distinct phones')
+  } finally {
+    await t.stop()
+  }
+})
 
 test('tunnel mode: wrong PIN is rejected', async () => {
   const t = await startBridge()
