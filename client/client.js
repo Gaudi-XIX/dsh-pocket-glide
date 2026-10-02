@@ -11,17 +11,84 @@ window.__ModuleLoader__.load({
   id: '@defws/dsh-pocket',
   factory: function (require) {
     var module = { exports: {} }
+
+    /* ---------------- 文案表（i18n，集中一处）----------------
+     * 面向用户的串全部落在 I18N：zh / en 两包键集合必须相等（AC-CLI 按
+     * Object.keys 对账），新增文案一律两边同批加。
+     * 语言判定优先宿主 locale 服务（ctx.locale.getLocale().active，与 dsh-memory-river
+     * client 半区同机制），服务缺席时退回 <html lang>；判定式 /^zh/i 与 pages 侧统一，
+     * 未知语言一律回落 en。
+     * 字面配对齐 lib/pages.js 桌面配对页既有中英：入口名 Connect Phone（手机端页面
+     * 指引里指代本按钮的同一称呼），内嵌页标题 Connect Mobile Device（= text.title）。 */
+    var I18N = {
+      zh: {
+        label: '连接手机',
+        close: '关闭',
+        opening: '正在打开手机连接…',
+        frameTitle: '连接移动设备',
+        openFailed: '手机连接打开失败，请重启 DSH 后再试。',
+        reactUnavailable: 'react 不可用：client 半区不注册 UI（请核对 package.json dsh.client.inject）',
+        slotsUnavailable: 'slots 服务不可用：UI 未挂载（请核对 package.json dsh.client.inject）',
+      },
+      en: {
+        label: 'Connect Phone',
+        close: 'Close',
+        opening: 'Opening phone connection…',
+        frameTitle: 'Connect Mobile Device',
+        openFailed: 'Failed to open the phone connection. Restart DSH and try again.',
+        reactUnavailable: 'react unavailable: the client half registers no UI (check dsh.client.inject in package.json)',
+        slotsUnavailable: 'slots service unavailable: UI not mounted (check dsh.client.inject in package.json)',
+      },
+    }
+    var ctxRef = null /* apply(ctx) 到达后才有宿主服务；factory 期只能读 <html lang> */
+    var locale = resolveLocale()
+
+    function normalizeTag(tag) {
+      return /^zh/i.test(String(tag || '')) ? 'zh' : 'en'
+    }
+
+    /* 宿主现势语言 → 'zh' | 'en'（未知即 en）。ctxRef 未就位时退回文档 lang 属性。 */
+    function resolveLocale() {
+      var tag = ''
+      try {
+        var svc = ctxRef && ctxRef.locale
+        if (svc && typeof svc.getLocale === 'function') {
+          var got = svc.getLocale()
+          if (got && got.active) tag = String(got.active)
+        }
+      } catch (eLocale) { tag = '' }
+      if (!tag) {
+        try {
+          if (typeof document !== 'undefined' && document.documentElement) tag = String(document.documentElement.lang || '')
+        } catch (eLang) { tag = '' }
+      }
+      return normalizeTag(tag)
+    }
+
+    /* locale/change 可能连发；只有真的换了语言才返回 true，避免无谓重注册。 */
+    function syncLocale() {
+      var next = resolveLocale()
+      if (next === locale) return false
+      locale = next
+      return true
+    }
+
+    function t(key) {
+      var pack = I18N[locale] || I18N.en
+      if (typeof pack[key] === 'string') return pack[key]
+      return I18N.en[key] || key
+    }
+
     var React = null
     try { React = require('react') } catch (eReact) { React = null }
     if (!React || typeof React.createElement !== 'function') {
-      console.error('[dsh-pocket] react 不可用：client 半区不注册 UI（请核对 package.json dsh.client.inject）')
+      console.error('[dsh-pocket] ' + t('reactUnavailable'))
       module.exports.inject = []
       module.exports.apply = function () { return function () {} }
       return module.exports
     }
     var h = React.createElement
 
-    var LABEL = '连接手机'
     var STYLE_ID = 'dsh-pocket-client-css'
     /* 配对页所在路径：由插件 node 半区注册，转发到桥（dataelement 页面）。 */
     var PAIRING_PATH = '/desktop'
@@ -88,7 +155,7 @@ window.__ModuleLoader__.load({
 
     /* ---------------- 配对模态（原生 DOM，内部整页来自桥） ---------------- */
 
-    var modal = { open: false, overlay: null, body: null }
+    var modal = { open: false, overlay: null, body: null, panel: null, close: null, frame: null, statusKey: 'opening' }
 
     function onKeydown(event) {
       if (event.key === 'Escape' && modal.open) closeModal()
@@ -113,10 +180,27 @@ window.__ModuleLoader__.load({
       }
       modal.overlay = null
       modal.body = null
+      modal.panel = null
+      modal.close = null
+      modal.frame = null
     }
 
-    function setStatus(text) {
+    /* 语言切换时将已打开的模态外壳文案重解析（内嵌配对页自带中英，不受影响）。 */
+    function refreshModalLocale() {
+      if (!modal.open) return
+      if (modal.panel) modal.panel.setAttribute('aria-label', t('label'))
+      if (modal.close) modal.close.setAttribute('aria-label', t('close'))
+      if (modal.frame) modal.frame.setAttribute('title', t('frameTitle'))
+      if (modal.body) {
+        var shown = modal.body.querySelector('.dsh-pocket-status')
+        if (shown) shown.textContent = t(modal.statusKey)
+      }
+    }
+
+    /* 状态文案走键，语言切换后可重解析。 */
+    function setStatus(key) {
       if (!modal.body) return
+      modal.statusKey = key
       var frame = modal.body.querySelector('iframe')
       if (frame && frame.parentNode) frame.parentNode.removeChild(frame)
       var node = modal.body.querySelector('.dsh-pocket-status')
@@ -125,13 +209,14 @@ window.__ModuleLoader__.load({
         node.className = 'dsh-pocket-status'
         modal.body.appendChild(node)
       }
-      node.textContent = text
+      node.textContent = t(key)
     }
 
     function openModal() {
       if (modal.open) return
       ensureStyle()
       modal.open = true
+      modal.statusKey = 'opening'
 
       var overlay = document.createElement('div')
       overlay.className = 'dsh-pocket-overlay'
@@ -139,12 +224,12 @@ window.__ModuleLoader__.load({
       var panel = document.createElement('div')
       panel.className = 'dsh-pocket-modal'
       panel.setAttribute('role', 'dialog')
-      panel.setAttribute('aria-label', LABEL)
+      panel.setAttribute('aria-label', t('label'))
 
       var close = document.createElement('button')
       close.type = 'button'
       close.className = 'dsh-pocket-close'
-      close.setAttribute('aria-label', '关闭')
+      close.setAttribute('aria-label', t('close'))
       close.textContent = '✕'
       close.addEventListener('click', closeModal)
 
@@ -153,11 +238,11 @@ window.__ModuleLoader__.load({
 
       var status = document.createElement('div')
       status.className = 'dsh-pocket-status'
-      status.textContent = '正在打开手机连接…'
+      status.textContent = t('opening')
       body.appendChild(status)
 
       var frame = document.createElement('iframe')
-      frame.setAttribute('title', '连接移动设备')
+      frame.setAttribute('title', t('frameTitle'))
       frame.setAttribute('allow', 'clipboard-write')
       frame.style.display = 'none'
       frame.addEventListener('load', function () {
@@ -166,7 +251,7 @@ window.__ModuleLoader__.load({
         frame.style.display = 'block'
       })
       frame.addEventListener('error', function () {
-        setStatus('手机连接打开失败，请重启 DSH 后再试。')
+        setStatus('openFailed')
       })
       body.appendChild(frame)
 
@@ -183,6 +268,9 @@ window.__ModuleLoader__.load({
 
       modal.overlay = overlay
       modal.body = body
+      modal.panel = panel
+      modal.close = close
+      modal.frame = frame
       frame.src = PAIRING_PATH
     }
 
@@ -193,35 +281,60 @@ window.__ModuleLoader__.load({
         {
           type: 'button',
           className: 'dsh-pocket-btn' + (wide ? '' : ' dsh-pocket-rail'),
-          'aria-label': LABEL,
-          title: wide ? undefined : LABEL,
+          'aria-label': t('label'),
+          title: wide ? undefined : t('label'),
           onClick: openModal,
         },
         h(PhoneIcon, { size: wide ? 16 : 18 }),
-        wide ? h('span', { className: 'dsh-pocket-label' }, LABEL) : null
+        wide ? h('span', { className: 'dsh-pocket-label' }, t('label')) : null
       )
     }
 
     function applyPocket(ctx) {
+      ctxRef = ctx
+      syncLocale()
       var slots = ctx && ctx.slots
       if (!slots || typeof slots.inject !== 'function') {
-        console.warn('[dsh-pocket] slots 服务不可用：UI 未挂载（请核对 package.json dsh.client.inject）')
+        console.warn('[dsh-pocket] ' + t('slotsUnavailable'))
         return function () {}
       }
       ensureStyle()
-      var disposer = slots.inject('sidebar.footer.action', function () {
-        return slots.register({
-          name: 'sidebar.footer.action',
-          id: 'dsh-pocket-connect',
-          order: 0,
-        }, function (slotProps) {
-          return h(PocketButton, { wide: slotProps ? slotProps.wide : false })
+      /* 侧栏注册的 label 在 render 期解析，宿主换语言时重注册一次即可拿到新文案
+       * （与 dsh-memory-river client 半区 refreshSurfaces 同法）。 */
+      var disposer = null
+      function registerSurface() {
+        disposer = slots.inject('sidebar.footer.action', function () {
+          return slots.register({
+            name: 'sidebar.footer.action',
+            id: 'dsh-pocket-connect',
+            order: 0,
+          }, function (slotProps) {
+            return h(PocketButton, { wide: slotProps ? slotProps.wide : false })
+          })
         })
-      })
-      console.log('[dsh-pocket] client ready: sidebar.footer.action 「' + LABEL + '」→ ' + PAIRING_PATH)
+      }
+      function refreshSurface() {
+        try { if (disposer) disposer() } catch (eR) {}
+        disposer = null
+        registerSurface()
+      }
+      registerSurface()
+      var unwatch = null
+      try {
+        if (typeof ctx.on === 'function') {
+          unwatch = ctx.on('locale/change', function () {
+            if (!syncLocale()) return
+            refreshSurface()
+            refreshModalLocale()
+          })
+        }
+      } catch (eWatch) { unwatch = null }
+      console.log('[dsh-pocket] client ready: sidebar.footer.action "' + t('label') + '" -> ' + PAIRING_PATH)
       return function () {
-        try { disposer() } catch (e) {}
+        try { if (typeof unwatch === 'function') unwatch() } catch (e3) {}
+        try { if (disposer) disposer() } catch (e) {}
         try { closeModal() } catch (e2) {}
+        ctxRef = null
       }
     }
 
