@@ -5,7 +5,7 @@
 // unreadable text once already).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderMobilePage, mobilePageAssets } from '../lib/pages.js'
+import { renderMobilePage, mobilePageAssets, renderServiceWorker } from '../lib/pages.js'
 import { startBridge, httpFetch } from './helpers.js'
 
 const boot = JSON.stringify({ ws: { items: [] }, sess: { items: [] } })
@@ -93,6 +93,36 @@ test('the shell assets need a paired phone', async () => {
   try {
     const res = await httpFetch(`${t.base}/app.js?l=zh&h=x`)
     assert.notEqual(res.status, 200)
+  } finally {
+    await t.stop()
+  }
+})
+
+// A fixed cache name would survive an update: activate() only evicts keys that
+// differ from its own, so the phone would be handed the previous build's
+// document again after a restart. The worker's cache name must therefore follow
+// the shell it caches.
+test('the service worker cache name follows the shell build', async () => {
+  const t = await startBridge()
+  try {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(`${t.base}/sw.js`, { headers: { cookie } })
+    assert.equal(res.status, 200)
+    const body = await readBody(res)
+
+    const build = t.bridge.shellBuild()
+    assert.match(build, /^[0-9a-f]{12}$/)
+    assert(body.includes(`const V='pocket-${build}'`), `worker must cache under pocket-${build}, saw ${body.slice(0, 120)}`)
+
+    // Derived from the assets, never from the document's per-open boot payload.
+    const assets = mobilePageAssets({ locale: 'zh' })
+    assert.notEqual(t.bridge.shellBuild(), assets.css, 'the build must be a digest, not the CSS itself')
+
+    // A build that is not a safe literal falls back to the static name instead
+    // of injecting an arbitrary string into the worker source.
+    assert.match(renderServiceWorker(), /const V='pocket-v3'/)
+    assert.match(renderServiceWorker('9f2c1a4b7e01'), /const V='pocket-9f2c1a4b7e01'/)
+    assert.match(renderServiceWorker("x';evil()//"), /const V='pocket-v3'/)
   } finally {
     await t.stop()
   }
