@@ -51,19 +51,66 @@ test('mobile reconnect page is importable and returns non-empty markup', () => {
   assert.match(html, /<!doctype html>/)
 })
 
-// Minor-1: Esc closes the open sheet; focus moves into the sheet on open and
-// back to the opener on close. The inline script never runs under Node, so the
-// assertions target the emitted handler/binding source.
+// Minor-1: Esc closes the open sheet; focus moves back to the opener on close.
+// Opening the sheet must NOT focus an input (Android raises the soft keyboard
+// the moment an input is focused), so the search field is opt-in: the sheet
+// opens on a plain button and only a real tap swaps in #plusFilter. The inline
+// script never runs under Node, so the assertions target the emitted source.
 test('plus sheet wires Escape-to-close and open/close focus management', () => {
   const html = renderMobilePage({ locale: 'zh' })
   // A document-level keydown handler handles Escape only while the sheet is open.
   assert.ok(html.includes("document.addEventListener('keydown'"), 'document keydown handler must be bound')
   assert.ok(html.includes("e.key!=='Escape'||!plusOpen()"), 'Escape must be ignored unless the sheet is open')
-  // openPlus remembers the previously focused element and focuses #plusFilter.
+  // openPlus remembers the previously focused element.
   assert.ok(html.includes('plusPreviousFocus=document.activeElement'), 'openPlus must record the previous focus')
-  assert.ok(html.includes("$('plusFilter').focus()"), 'openPlus must move focus to #plusFilter')
   // closePlus restores focus to the recorded opener.
   assert.ok(html.includes('opener?.focus()'), 'closePlus must restore focus to the opener')
+})
+
+// Minor-1b: opening the "+" sheet must not raise the on-screen keyboard.
+// The search input is hidden behind a button until the user taps it.
+test('plus search field is opt-in so opening the sheet cannot raise the keyboard', () => {
+  const html = renderMobilePage({ locale: 'zh' })
+  // openPlus() must leave the collapsed search affordance in place.
+  assert.ok(html.includes('function openPlus(){'), 'openPlus must exist')
+  assert.ok(
+    !html.includes("setTimeout(()=>{$('plusFilter').focus()},0)"),
+    'openPlus must not focus #plusFilter — that is what pops the Android IME'
+  )
+  // The search input lives inside a wrapper that is hidden until requested,
+  // and the collapsed affordance is a real button (a tap, not focus).
+  assert.ok(html.includes('id="plusSearchRow"'), 'the search row wrapper must exist')
+  assert.ok(html.includes('id="plusSearchOpen"'), 'the collapsed search button must exist')
+  assert.ok(
+    html.includes('<div id="plusSearchRow" class="plus-search-row" hidden>'),
+    'the search row must start hidden'
+  )
+  assert.ok(
+    html.includes('data-plus-search-open'),
+    'the collapsed affordance must be wired as a tap target'
+  )
+  assert.ok(
+    html.includes("$('plusSearchOpen').onclick=()=>plusShowSearch()"),
+    'tapping the affordance must open the search field'
+  )
+  // Only plusShowSearch() focuses the field, and it does so after unhiding.
+  const show = html.indexOf('function plusShowSearch(){plusSetSearch(true);renderPlusRoot();$(\'plusFilter\').focus()}')
+  assert.ok(show >= 0, 'plusShowSearch must unhide then focus #plusFilter')
+  // Leaving the search resets the query so the next open is unfiltered.
+  assert.ok(
+    html.includes('function plusHideSearch(){plusSetSearch(false);renderPlusRoot()}'),
+    'plusHideSearch must collapse the search and re-render the full list'
+  )
+  // No handler may re-focus the filter without a user gesture: the Esc-return
+  // and back-button paths collapse the search instead.
+  assert.ok(
+    !html.includes("plusView='root';$('plusFilter').hidden=false;$('plusFilter').focus()"),
+    'returning to the root view must not focus the search field'
+  )
+  assert.ok(
+    html.includes("if(back){plusView='root';plusSetSearch(false);renderPlusRoot();return}"),
+    'the back button must collapse the search instead of focusing it'
+  )
 })
 
 // Minor-2: filter text includes the stable command name so typing an English
