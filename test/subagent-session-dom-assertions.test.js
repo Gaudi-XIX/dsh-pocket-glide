@@ -316,11 +316,17 @@ test('R1.4 the default entry cannot pick up the DOM script — one-level glob, r
   // WP-2 (test/dom/subagent-session-dom.mjs) needs a browser and must stay out of the
   // default entry. The safety argument is not about file NAMES — it is about how the
   // entry's PATTERN RESOLVES — so the pattern is resolved here, by Node's own glob engine
-  // (`node:fs` `globSync`), the resolver `npm test` hands `test/*.test.js` to. A
-  // hand-rolled readdir list only resembles a glob: it can go red, or stay green, for
+  // (`node:fs` `globSync`), the engine `npm test` resolves a pattern with, asked here of the
+  // literal the `entry` const below carries. That literal is hardcoded in this file, NOT read
+  // from package.json: retune `scripts.test` and this guard stays green. Known boundary, not a
+  // defect — if the real entry ever moves, the const moves with it by hand.
+  // A hand-rolled readdir list only resembles a glob: it can go red, or stay green, for
   // reasons that have nothing to do with glob semantics.
   //
-  //   entry      — `*.test.js` over test/, the default entry spelled as package.json spells it;
+  //   entry      — the hardcoded `*.test.js` over test/: the default entry's current shape.
+  //                What actually keeps the browser script out is the `.test.js` suffix, not
+  //                the single level — a recursive `**/*.test.js` over the same tree
+  //                resolves the same files (41 at this commit) and still no `.mjs`;
   //   domModules — `*.mjs` over test/dom/;
   //   domEntry   — `*.test.js` over test/dom/: the SAME one-level pattern, asked of the
   //                directory that holds the browser script;
