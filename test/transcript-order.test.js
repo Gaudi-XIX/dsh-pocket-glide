@@ -443,11 +443,14 @@ function buildRunningSandbox() {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const bound = Number((js.match(/AWAITING_TURN_MAX_MS=(\d+)/) || [])[1])
   assert(bound > 0, 'the page declares its fallback bound')
-  const names = ['eventSeq', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning']
+  const idle = Number((js.match(/TURN_RUNNING_IDLE_MAX_MS=(\d+)/) || [])[1])
+  assert(idle > 0, 'the page declares the idle bound the run state retires on')
+  const names = ['eventSeq', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning', 'clearTurnRunningWatch', 'expireTurnRunning', 'watchTurnRunning']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(`
     const AWAITING_TURN_MAX_MS=${bound}
-    let awaitingTurnSeq=null,awaitingTurnTimer=null,agentRunning=false,lastHistoryKey='',activeSession='s1',turnRunningSeq=-1,turnRunningOpen=false
+    const TURN_RUNNING_IDLE_MAX_MS=${idle},idle=TURN_RUNNING_IDLE_MAX_MS
+    let awaitingTurnSeq=null,awaitingTurnTimer=null,agentRunning=false,lastHistoryKey='',activeSession='s1',turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1,turnRunningTimer=null,pendingQuestion=null
     const calls=[]
     const setTimeout=(fn,ms)=>{calls.push(['timeout',ms]);return 1}
     const clearTimeout=handle=>{calls.push(['clear',handle])}
@@ -459,7 +462,10 @@ function buildRunningSandbox() {
       arm(value){armAwaitingTurn(value)},
       update(events){updateRunning(events)},
       expire(){expireAwaitingTurn()},
-      state:()=>({awaitingTurnSeq,awaitingTurnTimer,agentRunning,lastHistoryKey,turnRunningSeq,turnRunningOpen}),
+      expireTurn(){expireTurnRunning()},
+      setQuestion(value){pendingQuestion=value},
+      idle,
+      state:()=>({awaitingTurnSeq,awaitingTurnTimer,agentRunning,lastHistoryKey,turnRunningSeq,turnRunningOpen,turnRunningSeenSeq,turnRunningTimer,pendingQuestion}),
       calls,
     }
   `)()
@@ -555,6 +561,88 @@ test('BUG1 the run state reads a high-water mark, not the visible window', () =>
   const watchdog = betweenA3('function expireAwaitingTurn()', 'function noteTurnBoundary(entry)', js)
   assert.ok(watchdog.includes('turnRunningSeq=-1'), 'the watchdog resets the mark with the wait')
   assert.ok(watchdog.includes('turnRunningOpen=false'), 'and closes it')
+})
+
+// ------------------------------------------------------------- WD the run watchdog
+
+test('WD1 an idle log retires the run state and raises the mark to what it saw', () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
+  sandbox.update([{ event: { seq: 35, type: 'assistant/chunk' } }])
+  assert.equal(sandbox.state().turnRunningOpen, true, 'the log is still moving, so the turn is still open')
+  sandbox.calls.length = 0
+  sandbox.expireTurn()
+  const after = sandbox.state()
+  assert.equal(after.turnRunningOpen, false, 'an idle log closes the turn instead of pinning the thinking status')
+  assert.equal(after.agentRunning, false, 'and the status itself leaves with it')
+  assert.equal(after.turnRunningSeq, 35, 'the mark is raised to the newest seq the log ever showed')
+  assert.equal(after.lastHistoryKey, '', 'so the next poll repaints instead of skipping it')
+  assert.ok(sandbox.calls.some((call) => call[0] === 'status'), 'the status node comes off screen')
+  assert.ok(sandbox.calls.some((call) => call[0] === 'prompt'), 'and the send/cancel pair is put back')
+  assert.ok(sandbox.calls.some((call) => call[0] === 'poll'), 'the poll is re-armed at the idle rate')
+})
+
+test('WD2 the raised mark is sticky: a replayed window cannot reopen the turn', () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
+  sandbox.update([{ event: { seq: 35, type: 'assistant/chunk' } }])
+  sandbox.expireTurn()
+  // The same window as before, replayed by the history poll. Its turn/start now sits
+  // below the mark the expiry left behind, so it is not a new turn and must not count.
+  sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
+  sandbox.update([{ event: { seq: 35, type: 'assistant/chunk' } }])
+  assert.equal(sandbox.state().turnRunningOpen, false, 'a replayed turn/start below the mark changes nothing')
+  assert.equal(sandbox.state().agentRunning, false, 'so the status does not come back on the replay')
+  sandbox.update([{ event: { seq: 41, type: 'turn/start' } }])
+  assert.equal(sandbox.state().agentRunning, true, 'a strictly newer boundary still opens the next turn')
+})
+
+test('WD3 the clock only restarts on real progress, never on a repeated seq', () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.arm(20)
+  sandbox.update([{ event: { seq: 21, type: 'turn/start' } }])
+  assert.ok(
+    sandbox.calls.some((call) => call[0] === 'timeout' && call[1] === sandbox.idle),
+    'a wait that ends on a real boundary hands the turn over to the idle bound'
+  )
+  assert.equal(sandbox.state().awaitingTurnSeq, null, 'and the wait itself is consumed')
+  sandbox.update([{ event: { seq: 35, type: 'assistant/chunk' } }])
+  assert.ok(sandbox.calls.some((call) => call[0] === 'clear'), 'progress restarts the clock')
+  assert.ok(sandbox.calls.some((call) => call[0] === 'timeout' && call[1] === sandbox.idle), 'and arms it again')
+  sandbox.calls.length = 0
+  sandbox.update([{ event: { seq: 35, type: 'assistant/chunk' } }])
+  assert.ok(!sandbox.calls.some((call) => call[0] === 'timeout'), 'the same seq is not progress')
+  assert.ok(!sandbox.calls.some((call) => call[0] === 'clear'), 'and it does not touch the clock either')
+})
+
+test('WD4 the watch stays off while a wait or a question owns the turn', () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 50, type: 'turn/start' } }])
+  sandbox.calls.length = 0
+  sandbox.setQuestion('do it?')
+  sandbox.update([{ event: { seq: 51, type: 'assistant/chunk' } }])
+  assert.ok(
+    !sandbox.calls.some((call) => call[0] === 'timeout' && call[1] === sandbox.idle),
+    'a turn parked on an open question is not an idle turn'
+  )
+  assert.equal(sandbox.state().turnRunningOpen, true, 'and the turn stays open while the question is up')
+  sandbox.setQuestion(null)
+  sandbox.update([{ event: { seq: 52, type: 'assistant/chunk' } }])
+  assert.ok(
+    sandbox.calls.some((call) => call[0] === 'timeout' && call[1] === sandbox.idle),
+    'answering the question hands the turn back to the watch'
+  )
+  // The other gate: a wait this phone started is still on its own clock, so a stale
+  // boundary that arrives under it cannot be read as this turn having gone idle.
+  sandbox.arm(60)
+  sandbox.update([{ event: { seq: 61, type: 'turn/start' } }])
+  sandbox.arm(70)
+  sandbox.calls.length = 0
+  sandbox.update([{ event: { seq: 5, type: 'turn/end' } }])
+  assert.ok(
+    !sandbox.calls.some((call) => call[0] === 'timeout'),
+    'a boundary below the watermark of an unsettled wait is not an idle turn'
+  )
 })
 
 // ------------------------------------------------------------------ M17 the echo
