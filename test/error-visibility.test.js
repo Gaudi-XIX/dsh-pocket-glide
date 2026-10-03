@@ -23,6 +23,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mobilePageAssets, renderMobilePage } from '../lib/pages.js'
+import { SSE_KEEPALIVE_MS, SSE_STATUS_MS } from '../lib/constants.js'
 
 const { js } = mobilePageAssets({ locale: 'zh' })
 const { js: jsEn } = mobilePageAssets({ locale: 'en' })
@@ -418,6 +419,26 @@ test('the status poll leaves a standing notice alone instead of blanking it', as
 
 const staleLine = () => js.match(/const SSE_KEEPALIVE_MS=[^\n]*/)[0]
 
+/**
+ * RC-8 (2026-10-02 rescan): the page script cannot import `lib/constants.js` (it is
+ * rendered into a `script` element as text), so the copy is technically
+ * necessary. What was wrong is that this file pinned the COPY as a literal —
+ * `assert.match(staleLine(), /const SSE_KEEPALIVE_MS=15000,.../)` — so changing
+ * `SSE_KEEPALIVE_MS` in `lib/constants.js` would move the server keepalive
+ * without moving the client watchdog, and every test stayed green. These helpers
+ * parse the page's number and compare it to the constant instead.
+ */
+const pageKeepaliveMs = () => {
+  const match = staleLine().match(/const SSE_KEEPALIVE_MS=(\d+)/)
+  assert.ok(match, `the page must define its keepalive period; got ${JSON.stringify(staleLine())}`)
+  return Number(match[1])
+}
+const pageStaleMultiplier = () => {
+  const match = staleLine().match(/STREAM_STALE_MS=SSE_KEEPALIVE_MS\*(\d+)/)
+  assert.ok(match, `the page threshold must be a multiple of its keepalive; got ${JSON.stringify(staleLine())}`)
+  return Number(match[1])
+}
+
 test('AC-C3 every frame branch refreshes the staleness clock', () => {
   const open = between('function openSessionStream(sessionId)', 'async function showSessionList()')
   for (const branch of ['snapshot', 'event', 'token']) {
@@ -435,13 +456,28 @@ test('AC-C3 every frame branch refreshes the staleness clock', () => {
 })
 
 test('AC-C3 the threshold is a multiple of the server keepalive period', () => {
-  assert.match(staleLine(), /const SSE_KEEPALIVE_MS=15000,STREAM_STALE_MS=SSE_KEEPALIVE_MS\*4/)
+  // RC-8: the copy is pinned to the CONSTANT, not to the digits it happened to
+  // hold on the day this test was written.
+  assert.equal(
+    pageKeepaliveMs(),
+    SSE_KEEPALIVE_MS,
+    `the page copy must track lib/constants.js SSE_KEEPALIVE_MS (${SSE_KEEPALIVE_MS}); got ${pageKeepaliveMs()}`
+  )
+  assert.match(staleLine(), /const SSE_KEEPALIVE_MS=\d+,STREAM_STALE_MS=SSE_KEEPALIVE_MS\*\d+/, 'and the threshold is still expressed as a multiple')
   assert.ok(js.includes('},SSE_KEEPALIVE_MS)}'), 'the watch ticks on the keepalive period')
   // Deviation registered in the handoff: two keepalive cycles (30s) is the same length
   // as the status frame the page can actually see (lib/constants.js SSE_STATUS_MS), so
   // it would tear down every healthy idle chat twice a minute.
-  const [, multiplier] = staleLine().match(/SSE_KEEPALIVE_MS\*(\d+)/)
-  assert.ok(Number(multiplier) >= 4, `threshold must cover two status cycles, got ${multiplier} keepalive periods`)
+  const multiplier = pageStaleMultiplier()
+  assert.ok(multiplier >= 4, `threshold must cover two status cycles, got ${multiplier} keepalive periods`)
+  // RC-8 invariant: the threshold has to outlast at least two status frames,
+  // otherwise a healthy idle chat is torn down. Derived from the constants, so a
+  // change to either number is caught here rather than on a phone.
+  const staleMs = pageKeepaliveMs() * multiplier
+  assert.ok(
+    staleMs >= SSE_STATUS_MS * 2,
+    `the stale threshold (${staleMs}ms) must outlast two status frames (${SSE_STATUS_MS * 2}ms)`
+  )
 })
 
 function buildStaleSandbox({ hidden = false, clock = 1_000 } = {}) {

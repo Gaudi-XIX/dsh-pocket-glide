@@ -19,7 +19,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { apply, notReadyBody, describeListenFailure } from '../lib/index.js'
@@ -265,6 +265,109 @@ test('the proxy still refuses cross-site traffic before anything else', async ()
     handler({ method: 'POST', url: '/desktop/pin/consent', headers: { 'sec-fetch-site': 'cross-site' } }, answered)
     assert.equal(answered.statusCode, 403)
     assert.match(answered.body, /Cross-site request rejected\./)
+  } finally {
+    await dispose(container)
+    if (savedDshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = savedDshHome
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// RC-1 (2026-10-02 rescan) — the dispose race. `start()`'s two settle arms were
+// both skippable: `onFulfilled` returned early once `disposed` was set, and a
+// `close()` that landed before the listen callback emitted no `error`, so the
+// promise watching only error/listening stayed PENDING for ever. The three tests
+// below pin the three observable halves: no false failure line, no unhandled
+// rejection, and a `start()` that always settles.
+// ---------------------------------------------------------------------------
+
+test('RC-1: a stop that lands during startup settles start() and logs no false failure', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'pocket-index-race-'))
+  const savedDshHome = process.env.DSH_HOME
+  process.env.DSH_HOME = root
+  const { LanMobileBridge } = await import('../lib/bridge.js')
+  const lines = []
+  let bridge
+  try {
+    bridge = new LanMobileBridge({
+      harnessUrl: () => 'http://127.0.0.1:9',
+      innerAuth: { ready: async () => undefined, invalidate: () => {} },
+      // Port 0 makes the listen callback asynchronous, which is the window
+      // `stop()` has to land in.
+      port: 0,
+      pairingPinStore: { load: () => ({}), save: () => true },
+      log: (level, message) => lines.push(`${level} ${message}`),
+    })
+    const started = bridge.start()
+    // Synchronously after start(): the server exists but the listen callback has
+    // not run, so this is exactly the race the rescan describes.
+    const stopped = bridge.stop()
+    const settled = await started.then(
+      () => ({ state: 'resolved' }),
+      (error) => ({ state: 'rejected', message: error instanceof Error ? error.message : String(error) })
+    )
+    await stopped
+    assert.equal(settled.state, 'rejected', 'a start() that lost its listener must not resolve as ready')
+    assert.doesNotMatch(String(settled.message), /Cannot read properties of undefined/, 'no TypeError leaks out')
+    assert.deepEqual(
+      lines.filter((line) => line.includes('bridge failed to start')),
+      [],
+      `a teardown is not a start failure: ${lines.join(' | ')}`
+    )
+  } finally {
+    await bridge?.stop().catch(() => {})
+    if (savedDshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = savedDshHome
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('RC-1: the dispose path reads the file-log counters and stays silent when they are clean', async () => {
+  // R-T6: the four counters `lib/file-log.js` keeps had no production reader, so
+  // a log that had stopped accepting lines looked identical to a healthy one. The
+  // reader now runs at teardown — an existing moment, no timer — and an all-zero
+  // reading must produce no line at all.
+  const root = mkdtempSync(join(tmpdir(), 'pocket-index-logok-'))
+  const savedDshHome = process.env.DSH_HOME
+  const container = fakeContainer()
+  try {
+    process.env.DSH_HOME = root
+    apply(container.ctx, { locale: 'zh', port: 0 })
+    await waitFor(() => container.lines.some((line) => line.includes('Pocket bridge ready')))
+    await dispose(container)
+    assert.deepEqual(
+      container.lines.filter((line) => line.includes('pocket file log degraded')),
+      [],
+      `a healthy log must not be reported: ${container.lines.join(' | ')}`
+    )
+  } finally {
+    await dispose(container)
+    if (savedDshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = savedDshHome
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('RC-1: the dispose path reports the file-log counters once they are abnormal', async () => {
+  // The same teardown, with the log directory occupied by a regular file: every
+  // write fails, `writeFailures` climbs, and the single summary line must name
+  // the counter. This is the state that used to be invisible from the host log.
+  const root = mkdtempSync(join(tmpdir(), 'pocket-index-logbad-'))
+  const savedDshHome = process.env.DSH_HOME
+  const container = fakeContainer()
+  try {
+    process.env.DSH_HOME = root
+    // `defaultLogDir()` is `<DSH_HOME>/pocket/logs`; a FILE there makes
+    // `mkdirSync(recursive)` fail on every write attempt.
+    mkdirSync(join(root, 'pocket'), { recursive: true })
+    writeFileSync(join(root, 'pocket', 'logs'), 'not a directory')
+    apply(container.ctx, { locale: 'zh', port: 0 })
+    await waitFor(() => container.lines.some((line) => line.includes('Pocket bridge ready')))
+    await dispose(container)
+    const degraded = container.lines.filter((line) => line.includes('pocket file log degraded'))
+    assert.equal(degraded.length, 1, `exactly one summary line: ${container.lines.join(' | ')}`)
+    assert.match(degraded[0], /writeFailures=[1-9]/, 'the failing counter is named')
   } finally {
     await dispose(container)
     if (savedDshHome === undefined) delete process.env.DSH_HOME

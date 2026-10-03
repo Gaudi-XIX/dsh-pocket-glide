@@ -5,6 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { compactSessionRecords, compactSessionFrame, stripRecordsThrough, compactSessionRows } from '../lib/bridge.js'
+import { SESSION_ROW_ARRAY_MAX, SESSION_ROW_TEXT_LIMIT } from '../lib/projections.js'
 
 const assistantMessage = {
   type: 'assistant/message',
@@ -169,4 +170,76 @@ test('rows without projections and non-row values survive', () => {
   assert.equal(rows[1], null)
   assert.equal(rows[2], 'nope')
   assert.equal(compactSessionRows(undefined), undefined)
+})
+
+// ---------------------------------------------------------------------------
+// RC-3 (2026-10-02 rescan): the allowlist named `todos` and `modelSelection` by
+// intent, not by size, and `compactRowValues` `continue`d past the string cap
+// for them — so an arbitrarily large array/object went to the phone whole, by
+// reference. The cap must bite without changing the shape `lib/pages.js` reads:
+// `updateTodos` needs an array of `{content: string, status: pending|in_progress|completed}`
+// and `modelSelectionOf` needs `next.{provider,model}`.
+// ---------------------------------------------------------------------------
+
+test('RC-3: an oversized todos array is paged and its items keep content/status', () => {
+  const todos = Array.from({ length: 3000 }, (_, i) => ({ content: `task ${i}`, status: 'pending', extra: 'x'.repeat(400) }))
+  const [row] = compactSessionRows([{ ...fatRow, projections: { ...fatRow.projections, values: { ...fatRow.projections.values, todos } } }])
+  const kept = row.projections.values.todos
+
+  assert.ok(Array.isArray(kept), 'the shape stays an array')
+  assert.equal(kept.length, SESSION_ROW_ARRAY_MAX, 'the array is cut to the page size')
+  assert.ok(kept.length < todos.length, 'and it is smaller than what came in')
+  assert.notEqual(kept, todos, 'no longer handed over by reference')
+  assert.deepEqual(
+    kept.map((item) => item.status),
+    Array.from({ length: SESSION_ROW_ARRAY_MAX }, () => 'pending'),
+    'every kept item still carries the status the dock counts'
+  )
+  assert.ok(kept.every((item) => typeof item.content === 'string' && item.content.length > 0), 'and the content the dock prints')
+  // The phone's own filter (updateTodos) must still accept every item.
+  assert.equal(
+    kept.filter((item) => item && typeof item.content === 'string' && ['pending', 'in_progress', 'completed'].includes(item.status)).length,
+    kept.length
+  )
+  assert.equal(todos.length, 3000, 'the list it was given is never mutated')
+})
+
+test('RC-3: modelSelection keeps next.{provider,model} and caps the rest', () => {
+  const modelSelection = { next: { provider: 'p'.repeat(2000), model: 'm', reasoningEffort: 'high' }, catalogue: { deep: 'z'.repeat(50_000) } }
+  const [row] = compactSessionRows([{ ...fatRow, projections: { ...fatRow.projections, values: { ...fatRow.projections.values, modelSelection } } }])
+  const kept = row.projections.values.modelSelection
+
+  assert.equal(kept.next.model, 'm', 'normalizeSelection reads the model')
+  assert.equal(kept.next.provider.length, SESSION_ROW_TEXT_LIMIT, 'a long provider is capped, not dropped')
+  assert.ok(kept.next.provider.length > 0, 'so the selection is still usable')
+  assert.equal(kept.next.reasoningEffort, 'high', 'the effort survives')
+  assert.ok(Buffer.byteLength(JSON.stringify(kept)) <= 1024, `the whole selection stays inside the byte budget, got ${Buffer.byteLength(JSON.stringify(kept))}`)
+  assert.equal(modelSelection.next.provider.length, 2000, 'the value it was given is never mutated')
+})
+
+test('RC-3: a normal-sized row is byte-identical to what it was before the cap', () => {
+  const values = { title: 'ab', todos: [{ content: 'a', status: 'completed' }], modelSelection: { next: { provider: 'p', model: 'm' } } }
+  const [row] = compactSessionRows([{ sessionId: 's2', projections: { values } }])
+
+  assert.deepEqual(row.projections.values, {
+    title: 'ab',
+    todos: [{ content: 'a', status: 'completed' }],
+    modelSelection: { next: { provider: 'p', model: 'm' } }
+  })
+})
+
+test('RC-3: a bounded row is orders of magnitude smaller than the raw one', () => {
+  const raw = {
+    sessionId: 's3',
+    projections: {
+      values: {
+        todos: Array.from({ length: 3000 }, (_, i) => ({ content: `task ${i}`, status: 'pending' })),
+        modelSelection: { next: { provider: 'p'.repeat(2000), model: 'm' } }
+      }
+    }
+  }
+  const [row] = compactSessionRows([raw])
+  const ratio = JSON.stringify(row).length / JSON.stringify(raw).length
+
+  assert.ok(ratio < 0.05, `a row this fat must collapse, got ratio ${ratio.toFixed(3)}`)
 })
