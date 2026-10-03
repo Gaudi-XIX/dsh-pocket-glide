@@ -32,7 +32,7 @@ test('skills.list / commands.list pass the allowlist and carry the Host wire sha
       200,
       [
         'skills.list must reach the Harness',
-        ...(t.transportFailures?.() ?? []),
+        ...(t.transportFailures?.() ?? ['(this fixture exposes no transport diagnostics)']),
         `(HTTP ${res.status})`,
       ].join(' | '),
     )
@@ -48,7 +48,7 @@ test('skills.list / commands.list pass the allowlist and carry the Host wire sha
       200,
       [
         'commands.list must reach the Harness',
-        ...(t.transportFailures?.() ?? []),
+        ...(t.transportFailures?.() ?? ['(this fixture exposes no transport diagnostics)']),
         `(HTTP ${res.status})`,
       ].join(' | '),
     )

@@ -255,10 +255,13 @@ export function startFakeHarness(options = {}) {
     res.end(JSON.stringify({ rpcId: body.rpcId, result: { ok: true, value: { echoed: true } } }))
   })
 
-  // The fake harness holds no keep-alive sockets: every HTTP response announces
-  // Connection: close and the server drops idle connections immediately, so a
-  // later bridge call cannot be handed a dead or recycled socket (same reason
-  // helpers.httpFetch uses `agent: false`).
+  // The fake harness wants no socket reuse across bridge calls, so a later call
+  // can never be handed a dead or recycled socket (same reason helpers.httpFetch
+  // uses `agent: false`). Two parts, and only one of them is what closes a
+  // socket: the `Connection: close` header above tells the peer to hang up,
+  // while `keepAliveTimeout = 0` DISABLES the server-side idle timeout — a
+  // probed keep-alive client still holds one live idle socket under it, exactly
+  // as under the 5000ms default. Set both; do not read either as sufficient.
   server.keepAliveTimeout = 0
 
   server.on('upgrade', (req, socket) => {
