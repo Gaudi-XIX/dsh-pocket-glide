@@ -159,8 +159,12 @@ test('B-2 a rejected answer releases the composer lock too', async () => {
 
 test('B-3 armStreamSnapshot releases the promise it replaces', () => {
   const body = extractFunction(js, 'armStreamSnapshot')
+  // indexOf on a deleted line returns -1, and -1 < anything, so the ordering check
+  // below would pass on exactly the regression it guards. Pin the presence first.
+  const settledAt = body.indexOf('settleStreamSnapshot(false)')
+  assert.notEqual(settledAt, -1, 'armStreamSnapshot must settle the promise it is about to replace')
   assert.ok(
-    body.indexOf('settleStreamSnapshot(false)') < body.indexOf('streamSnapshotReady=new Promise'),
+    settledAt < body.indexOf('streamSnapshotReady=new Promise'),
     'the previous arm must be settled before the resolver is overwritten',
   )
   assert.equal(
@@ -184,7 +188,18 @@ test('B-3 a second arm does not strand the first await on the fallback timer', a
   sandbox.arm()
   const second = sandbox.ready()
   assert.notEqual(first, second, 'the second arm replaces the promise')
-  assert.equal(await first, false, 'the replaced promise must settle as false, not hang until the 900ms fallback')
+  // The 900ms watchdog is not part of this sandbox, so a stranded promise never
+  // settles at all. Bound the wait: a lost guard must go red, not hang the runner.
+  let deadline
+  const outcome = await Promise.race([
+    first.then((value) => ({ value })),
+    new Promise((resolve) => {
+      deadline = setTimeout(() => resolve({ stranded: true }), 500)
+    }),
+  ])
+  clearTimeout(deadline)
+  assert.ok(!outcome.stranded, 'the replaced promise must settle instead of hanging forever')
+  assert.equal(outcome.value, false, 'the replaced promise must settle as false, not wait for the 900ms fallback')
 })
 
 // ---------------------------------------------------------------------------- B-4
