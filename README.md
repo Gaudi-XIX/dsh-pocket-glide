@@ -99,16 +99,17 @@ node --input-type=module -e "import('./lib/index.js').then(m=>console.log(JSON.s
 ## 安全模型
 
 - **配对**：桌面「连接手机」面板展示二维码与连接密码；一次性配对 token 短时有效、用后即焚。
-  连接密码位数由 `lib/constants.js` 的 `PAIRING_PIN_DIGITS` 决定（**现值 6 位纯数字**，生成空间
+  连接密码位数由 `lib/constants.js` 的 `PAIRING_PIN_DIGITS` 决定（**现值 8 位纯数字**，生成空间
   `PAIRING_PIN_SPACE = 10 ** PAIRING_PIN_DIGITS`）。一次性密码 `PIN_TTL_MS` = 5 分钟；
   开隧道时临时密码当场换新（`rotateEphemeralPinForTunnel()`），长效密码（`pinConsent`）跨隧道续用、不自动过期。
-- **位数是跨文件量，改它的顺序不能倒**：`PAIRING_PIN_MIN_DIGITS`/`PAIRING_PIN_MAX_DIGITS`（现值 6–12）加
-  `PAIRING_PIN_PATTERN` 已经是 `lib/pin-store.js` 读写校验的唯一门 ⇒ **盘上存量 6 位密码零迁移继续可用**，
-  落 8 位也接得住，兼容层已就位。但把 `PAIRING_PIN_DIGITS` 提到 8 之前必须**先**放宽 `lib/pages.js` 里那两枚
-  PIN 输入框（`renderPairingPinPage` 与 `renderMobileReconnectPage` 各一枚 `<input id="pin">`，渲染出的属性现值
-  `maxlength="6" pattern="\d{6}"`；源码在模板串里把反斜杠写成 `\\d{6}`）与配套文案。
-  **倒过来的后果是现网配对失败**：桥发 8 位、手机打不进第 7 位，新配对接不上，重置长效密码等于把自己锁在门外。
-  这两处 `maxlength`/`pattern` 就是那个硬挡点。改之前跑这两条：
+- **位数是跨文件量，改动必须整组走**：`PAIRING_PIN_MIN_DIGITS`/`PAIRING_PIN_MAX_DIGITS`（现值 6–12）加
+  `PAIRING_PIN_PATTERN` 是 `lib/pin-store.js` 读写校验的唯一门 ⇒ **盘上存量 6 位密码零迁移继续可用**。
+  手机侧那两枚 PIN 输入框（`renderPairingPinPage` 与 `renderMobileReconnectPage` 各一枚 `<input id="pin">`）
+  现在是 `maxlength="12" pattern="\d{6,12}"`，**与 `PAIRING_PIN_PATTERN` 同域而不是恰好 8 位**，所以新发的 8 位密码
+  和盘上的 6 位密码在同一个框里都打得进去（源码在模板串里把反斜杠写成 `\\d{6,12}`），配套文案也刻意不写死位数。
+  **把这个框收窄成 `maxlength="8" pattern="\d{8}"` 就会造成现网配对失败**：桥发 8 位、拿着旧密码的手机卡在第 7 位，
+  新配对接不上，重置长效密码等于把自己锁在门外。`test/pin-field-width.test.js` 正面钉住「6 位与 8 位都接受、13 位被拒」。
+  改之前跑这两条：
 
 ```
 node --input-type=module -e "import('./lib/constants.js').then(c=>console.log(c.PAIRING_PIN_DIGITS, c.PAIRING_PIN_SPACE, c.PAIRING_PIN_MIN_DIGITS, c.PAIRING_PIN_MAX_DIGITS, String(c.PAIRING_PIN_PATTERN)))"
