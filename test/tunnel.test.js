@@ -1270,3 +1270,25 @@ test('M4: an in-flight switch is reported honestly instead of racing a second tu
     await t.stop()
   }
 })
+
+// ---------------------------------------------------------------------------
+// Windows black-window reduction: extracting the cloudflared archive spawns a
+// child, and a child spawned without `windowsHide` flashes a console window on
+// Windows. This pin is source-level on purpose — `extractCloudflaredArchive` is
+// private, so there is no seam to call it through — and it is an ANCHORED slice
+// rather than a whole-file `includes`: three other `windowsHide: true` sites in
+// the same file would make a whole-file check pass even after this one regressed.
+// ---------------------------------------------------------------------------
+
+test('Bug 2: the cloudflared archive extraction spawns with windowsHide', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('../lib/tunnel.js', import.meta.url)), 'utf8')
+  const anchor = src.indexOf("execFile('tar'")
+  assert.ok(anchor > 0, 'the tar extraction call moved — re-anchor this pin instead of deleting it')
+  const open = src.indexOf('{', anchor)
+  const close = src.indexOf('}', open)
+  assert.ok(open > anchor && close > open, 'the tar call must still carry an inline options object')
+  const options = src.slice(open, close + 1)
+  assert.ok(options.length < 200, 'that slice must be the options object, not the rest of the file')
+  assert.match(options, /windowsHide:\s*true/, 'the extraction child must be hidden on Windows')
+  assert.match(options, /timeout:\s*60000/, 'and it must keep its 60s extraction timeout')
+})

@@ -1,4 +1,4 @@
-/* @defws/dsh-pocket client —— 侧栏常驻「连接手机」按钮 + dataelement 原版配对页。
+/* @defws/dsh-pocket client —— 侧栏常驻「pocket」按钮 + dataelement 原版配对页。
  * 注册纪律：必须用 window.__ModuleLoader__.load({id, factory}) 按【包名】注册，
  * 不能写 ESM export（宿主客户端半区不走 ESM 解析，SyntaxError 会触发安全模式）。
  *
@@ -18,11 +18,11 @@ window.__ModuleLoader__.load({
      * 语言判定优先宿主 locale 服务（ctx.locale.getLocale().active，与 dsh-memory-river
      * client 半区同机制），服务缺席时退回 <html lang>；判定式 /^zh/i 与 pages 侧统一，
      * 未知语言一律回落 en。
-     * 字面配对齐 lib/pages.js 桌面配对页既有中英：入口名 Connect Phone（手机端页面
+     * 字面配对齐 lib/pages.js 桌面配对页既有中英：入口名 pocket（手机端页面
      * 指引里指代本按钮的同一称呼），内嵌页标题 Connect Mobile Device（= text.title）。 */
     var I18N = {
       zh: {
-        label: '连接手机',
+        label: 'pocket',
         close: '关闭',
         opening: '正在打开手机连接…',
         frameTitle: '连接移动设备',
@@ -31,7 +31,7 @@ window.__ModuleLoader__.load({
         slotsUnavailable: 'slots 服务不可用：UI 未挂载（请核对 package.json dsh.client.inject）',
       },
       en: {
-        label: 'Connect Phone',
+        label: 'pocket',
         close: 'Close',
         opening: 'Opening phone connection…',
         frameTitle: 'Connect Mobile Device',

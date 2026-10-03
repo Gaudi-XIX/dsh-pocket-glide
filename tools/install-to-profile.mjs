@@ -104,7 +104,7 @@ function nextStepNotice() {
   console.log('  1. restart DeepSeek Harness — the host loads bundles at start-up,')
   console.log('     and a source edit under a junction is not hot-mounted.')
   console.log(`  2. after the restart, the desktop pairing surface is ${PACKAGE_NAME}'s`)
-  console.log('     `/desktop` route: the sidebar button "连接手机" opens it in an in-app')
+  console.log('     `/desktop` route: the sidebar button "pocket" opens it in an in-app')
   console.log('     iframe (same origin as the host GUI), and the same path is')
   console.log('     reachable directly on the host web server. The phone page is served')
   console.log('     by the bridge itself — its port comes from the start-up snapshot, not')

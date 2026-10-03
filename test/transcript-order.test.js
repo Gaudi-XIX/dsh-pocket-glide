@@ -443,11 +443,11 @@ function buildRunningSandbox() {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const bound = Number((js.match(/AWAITING_TURN_MAX_MS=(\d+)/) || [])[1])
   assert(bound > 0, 'the page declares its fallback bound')
-  const names = ['eventSeq', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'updateRunning']
+  const names = ['eventSeq', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(`
     const AWAITING_TURN_MAX_MS=${bound}
-    let awaitingTurnSeq=null,awaitingTurnTimer=null,agentRunning=false,lastHistoryKey='',activeSession='s1'
+    let awaitingTurnSeq=null,awaitingTurnTimer=null,agentRunning=false,lastHistoryKey='',activeSession='s1',turnRunningSeq=-1,turnRunningOpen=false
     const calls=[]
     const setTimeout=(fn,ms)=>{calls.push(['timeout',ms]);return 1}
     const clearTimeout=handle=>{calls.push(['clear',handle])}
@@ -459,7 +459,7 @@ function buildRunningSandbox() {
       arm(value){armAwaitingTurn(value)},
       update(events){updateRunning(events)},
       expire(){expireAwaitingTurn()},
-      state:()=>({awaitingTurnSeq,awaitingTurnTimer,agentRunning,lastHistoryKey}),
+      state:()=>({awaitingTurnSeq,awaitingTurnTimer,agentRunning,lastHistoryKey,turnRunningSeq,turnRunningOpen}),
       calls,
     }
   `)()
@@ -512,6 +512,49 @@ test('M6 an unreachable judgement still clears, within the 8-10s band', () => {
   assert.ok(sandbox.calls.some((call) => call[0] === 'status'), 'the status node comes off screen')
   assert.ok(sandbox.calls.some((call) => call[0] === 'prompt'), 'and the send/cancel pair is put back')
   assert.ok(sandbox.calls.some((call) => call[0] === 'poll'), 'the poll is re-armed at the idle rate')
+})
+
+// ------------------------------------------------------- BUG1 the run state is monotonic
+
+test('BUG1 trimming the event window cannot end a turn that is still open', () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, type: 'turn/start', time: 1 } }])
+  assert.equal(sandbox.state().agentRunning, true, 'the turn opens with its own boundary in the window')
+  // This is the regression: the window has since dropped everything but chunks, so a
+  // re-scan of it can no longer see the turn/start, and the status used to vanish.
+  sandbox.update([{ event: { seq: 35, type: 'assistant/chunk', time: 1 } }])
+  assert.equal(sandbox.state().agentRunning, true, 'a window without its turn/start still says running')
+  assert.equal(sandbox.state().turnRunningSeq, 10, 'the high-water mark keeps the newest boundary it saw')
+  sandbox.update([{ event: { seq: 40, type: 'turn/end', time: 1 } }])
+  assert.equal(sandbox.state().agentRunning, false, 'the turn ends when its own boundary arrives')
+})
+
+test('BUG1 an out-of-order older boundary never rewinds the turn', () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 40, type: 'turn/end', time: 1 } }])
+  assert.equal(sandbox.state().agentRunning, false, 'the newest boundary closed the turn')
+  sandbox.update([{ event: { seq: 12, type: 'turn/end', time: 1 } }])
+  sandbox.update([{ event: { seq: 13, type: 'turn/start', time: 1 } }])
+  assert.equal(sandbox.state().agentRunning, false, 'a replayed older boundary is ignored')
+  assert.equal(sandbox.state().turnRunningSeq, 40, 'the mark only moves forward')
+  sandbox.update([{ event: { seq: 41, type: 'turn/start', time: 1 } }])
+  assert.equal(sandbox.state().agentRunning, true, 'a strictly newer boundary still opens the next turn')
+})
+
+test('BUG1 the run state reads a high-water mark, not the visible window', () => {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const update = betweenA3('function updateRunning(events)', 'function todoProgress(', js)
+  assert.ok(update.includes('noteTurnBoundary(entry)'), 'every boundary feeds the high-water mark')
+  assert.ok(
+    /agentRunning=turnRunningOpen\|\|awaitingTurnSeq!==null/.test(update),
+    'the run state reads the mark and the wait instead of re-scanning the window'
+  )
+  const mark = betweenA3('function noteTurnBoundary(entry)', 'function updateRunning(events)', js)
+  assert.ok(mark.includes('if(seq<turnRunningSeq)return'), 'an older boundary never rewinds the mark')
+  assert.ok(mark.includes("turnRunningOpen=type==='turn/start'"), 'the open flag follows the newest boundary')
+  const watchdog = betweenA3('function expireAwaitingTurn()', 'function noteTurnBoundary(entry)', js)
+  assert.ok(watchdog.includes('turnRunningSeq=-1'), 'the watchdog resets the mark with the wait')
+  assert.ok(watchdog.includes('turnRunningOpen=false'), 'and closes it')
 })
 
 // ------------------------------------------------------------------ M17 the echo

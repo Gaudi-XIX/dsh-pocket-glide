@@ -10,7 +10,7 @@
 #     onto the application origin so the GUI can frame it same-origin.
 #   - browser half: client/client.js, mounted through `dsh.client.inject`
 #     (@deepseek-ai/dsh-client-ui-slots + @deepseek-ai/dsh-client-ui-sidebar).
-#     It registers exactly one thing: the sidebar footer's "Connect Phone"
+#     It registers exactly one thing: the sidebar footer's "pocket"
 #     action, which opens that /desktop surface in an in-app modal iframe.
 # What this package deliberately has NO need for is a built front end: every
 # phone page is a plain HTML string produced by the host and served over the

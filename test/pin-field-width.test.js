@@ -112,9 +112,9 @@ test('the pages do not spell the password width out', () => {
   assert.equal(PIN_PAGE_EN.includes('the 6-digit password'), false)
   // The wording still has to tell the user where the password is.
   assert.ok(RECONNECT_ZH.includes('显示的密码即可继续'))
-  assert.ok(RECONNECT_EN.includes('Enter the password shown in Connect Phone'))
+  assert.ok(RECONNECT_EN.includes('Enter the password shown in pocket'))
   assert.ok(PIN_PAGE_ZH.includes('窗口查看密码'))
-  assert.ok(PIN_PAGE_EN.includes('Find the password in Connect Phone'))
+  assert.ok(PIN_PAGE_EN.includes('Find the password in pocket'))
 })
 
 test('the desktop panel shows a password as long as the one it issues', () => {

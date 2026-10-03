@@ -1,6 +1,6 @@
 # @defws/dsh-pocket
 
-手机远程 DSH 桥（phone remote selfbuild）。**跑在宿主进程里的 DSH 插件**：桌面端侧栏「连接手机」打开配对面板，
+手机远程 DSH 桥（phone remote selfbuild）。**跑在宿主进程里的 DSH 插件**：桌面端侧栏「pocket」打开配对面板，
 手机浏览器用二维码/连接密码配对后，经桥访问本机 DSH 会话——会话列表、历史、发送、流式回复、模型/preset 设置、
 斜杠命令、附件上传、会话导出。局域网（LAN）直连与 Cloudflare quick tunnel 两条来路。
 
@@ -15,7 +15,7 @@
   - **node 半区**：桥、配对门禁、设备登记表、隧道管理、手机路由；并把桌面配对面
     （`/desktop`、`/brand-logo`）代理到应用 origin，好让 GUI 用同源 iframe 显示。
   - **浏览器半区**：`client/client.js`，经 `dsh.client.inject`（`@deepseek-ai/dsh-client-ui-slots` +
-    `-ui-sidebar`）装载，只注册一件事——侧栏页脚「连接手机」动作，点开就是上面那个内嵌 `/desktop`。
+    `-ui-sidebar`）装载，只注册一件事——侧栏页脚「pocket」动作，点开就是上面那个内嵌 `/desktop`。
     它是源码直出的单文件，无构建产物。
 - 所有手机页面也是宿主产出的纯 HTML 串（`lib/pages.js`），经桥自己的路由下发 ⇒ 本仓没有 React bundle、没有构建步骤。
 
@@ -98,7 +98,7 @@ node --input-type=module -e "import('./lib/index.js').then(m=>console.log(JSON.s
 
 ## 安全模型
 
-- **配对**：桌面「连接手机」面板展示二维码与连接密码；一次性配对 token 短时有效、用后即焚。
+- **配对**：桌面「pocket」面板展示二维码与连接密码；一次性配对 token 短时有效、用后即焚。
   连接密码位数由 `lib/constants.js` 的 `PAIRING_PIN_DIGITS` 决定（**现值 8 位纯数字**，生成空间
   `PAIRING_PIN_SPACE = 10 ** PAIRING_PIN_DIGITS`）。一次性密码 `PIN_TTL_MS` = 5 分钟；
   开隧道时临时密码当场换新（`rotateEphemeralPinForTunnel()`），长效密码（`pinConsent`）跨隧道续用、不自动过期。
@@ -326,7 +326,7 @@ node tools/gen-qr-fixtures.mjs                    # 重生成 test/fixtures/qr-m
   `LICENSE`、`CHANGELOG.md`。本机装机是 `link:` **junction**，白名单只对发布态（`npm pack`/publish）生效，不影响装机态；
   列全 `test`/`tools` 的意义是：发布件里 `npm test` 与 README 承诺的工具面真能跑。
 - 许可 Apache-2.0，正文见 `LICENSE`。
-- 版本策略：现值 `0.2.0`。逐版的**对外变化**（修复 / 契约变更 / 已知边界）见根 `CHANGELOG.md`；
+- 版本策略：现值 `0.2.1`。逐版的**对外变化**（修复 / 契约变更 / 已知边界）见根 `CHANGELOG.md`；
   更细的逐笔施工账在 `git log` 与 flow change 卡里。从 `0.2.0` 起本仓维护这份 CHANGELOG，
   README 承诺的是「它存在且跟着版本走」，不承诺它随每一笔提交更新。
 

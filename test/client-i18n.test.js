@@ -202,6 +202,12 @@ function openModal(r) {
 
 const statusOf = (m) => m.panel.children[0].querySelector('.dsh-pocket-status')
 
+// The sidebar label is the product name `pocket` in BOTH packs, so it can no
+// longer separate the locales on its own (that is the point of the rename).
+// Every locale-resolution assertion below is therefore paired with the zh-only
+// close string, which is what actually proves which pack the client resolved.
+const closeLabel = (r) => openModal(r).close.getAttribute('aria-label')
+
 /* ------------------------------------------------------------------ *
  * I18N table, read straight off the source text
  * ------------------------------------------------------------------ */
@@ -227,34 +233,41 @@ test('the client registers once by package name and keeps inject = ["slots"]', (
 })
 
 test('with no host locale service the client falls back to <html lang>, unknown tags resolve to en', () => {
-  assert.equal(label(mount('zh-CN')), '连接手机', 'html lang=zh-CN → zh')
-  assert.equal(label(mount('en-US')), 'Connect Phone', 'html lang=en-US → en')
-  assert.equal(label(mount('ja-JP')), 'Connect Phone', 'unknown language ja falls back to en')
-  assert.equal(label(mount('')), 'Connect Phone', 'an empty lang attribute falls back to en')
-  assert.equal(label(mount('zh-TW')), '连接手机', 'zh-TW must not degrade to English (/^zh/i)')
+  assert.equal(label(mount('zh-CN')), 'pocket', 'html lang=zh-CN → zh')
+  assert.equal(closeLabel(mount('zh-CN')), '关闭', 'html lang=zh-CN really resolved the zh pack')
+  assert.equal(label(mount('en-US')), 'pocket', 'html lang=en-US → en')
+  assert.equal(closeLabel(mount('en-US')), 'Close', 'html lang=en-US really resolved the en pack')
+  assert.equal(label(mount('ja-JP')), 'pocket', 'unknown language ja falls back to en')
+  assert.equal(label(mount('')), 'pocket', 'an empty lang attribute falls back to en')
+  assert.equal(label(mount('zh-TW')), 'pocket', 'zh-TW must not degrade to English (/^zh/i)')
+  assert.equal(closeLabel(mount('zh-TW')), '关闭', 'zh-TW must not degrade to English (/^zh/i)')
 })
 
 test('the host locale service outranks <html lang> in both directions', () => {
-  assert.equal(label(mount('en-US', 'zh-TW')), '连接手机', 'ctx.locale overrides html lang')
-  assert.equal(label(mount('zh-CN', 'en-US')), 'Connect Phone', 'ctx.locale overrides html lang (reverse)')
+  assert.equal(label(mount('en-US', 'zh-TW')), 'pocket', 'ctx.locale overrides html lang')
+  assert.equal(closeLabel(mount('en-US', 'zh-TW')), '关闭', 'ctx.locale overrides html lang')
+  assert.equal(label(mount('zh-CN', 'en-US')), 'pocket', 'ctx.locale overrides html lang (reverse)')
+  assert.equal(closeLabel(mount('zh-CN', 'en-US')), 'Close', 'ctx.locale overrides html lang (reverse)')
 })
 
 test('the visible label, the rail title and the omitted text node share one source', () => {
   const zh = mount('zh-CN', 'zh')
-  assert.equal(renderBtn(zh).kids[1].kids[0], '连接手机', 'the wide label comes from the same key')
-  assert.equal(renderBtn(zh, false).props.title, '连接手机', 'the narrow title comes from the same key')
+  assert.equal(renderBtn(zh).kids[1].kids[0], 'pocket', 'the wide label comes from the same key')
+  assert.equal(renderBtn(zh, false).props.title, 'pocket', 'the narrow title comes from the same key')
   assert.equal(renderBtn(zh, false).kids[1], null, 'the rail renders no text node')
 })
 
 test('locale/change withdraws the old registration and re-registers exactly once', () => {
   const live = mount('en-US', 'en-US')
-  assert.equal(label(live), 'Connect Phone')
+  assert.equal(label(live), 'pocket')
+  assert.equal(closeLabel(live), 'Close', 'the en pack is the one on screen before the switch')
 
   live.setLocale('zh-CN')
   live.fireLocale({ active: 'zh-CN' })
   assert.deepEqual(live.disposals, ['sidebar.footer.action'], 'switching language must withdraw the old registration')
   assert.equal(live.registrations.length, 2, 'switching language re-registers once')
-  assert.equal(label(live), '连接手机')
+  assert.equal(label(live), 'pocket')
+  assert.equal(closeLabel(live), '关闭', 'the switch really moved the shell to the zh pack')
 
   live.fireLocale({ active: 'zh-CN' })
   assert.equal(live.registrations.length, 2, 'a burst of the same language must not re-register')
@@ -279,13 +292,13 @@ test('dispose unwinds the subscription and the registration, and later events st
 
 test('every string on the modal shell comes from the table, in zh and in en', () => {
   const zhModal = openModal(mount('zh-CN', 'zh'))
-  assert.equal(zhModal.panel.getAttribute('aria-label'), '连接手机')
+  assert.equal(zhModal.panel.getAttribute('aria-label'), 'pocket')
   assert.equal(zhModal.close.getAttribute('aria-label'), '关闭')
   assert.equal(zhModal.frame.getAttribute('title'), '连接移动设备')
   assert.equal(zhModal.status.textContent, '正在打开手机连接…')
 
   const enModal = openModal(mount('en-US', 'en-US'))
-  assert.equal(enModal.panel.getAttribute('aria-label'), 'Connect Phone')
+  assert.equal(enModal.panel.getAttribute('aria-label'), 'pocket')
   assert.equal(enModal.close.getAttribute('aria-label'), 'Close')
   assert.equal(enModal.frame.getAttribute('title'), 'Connect Mobile Device')
   assert.equal(enModal.status.textContent, 'Opening phone connection…')
@@ -313,7 +326,7 @@ test('a locale switch while the modal is open re-resolves every shell string', (
 
   live.r.setLocale('zh-CN')
   live.r.fireLocale({ active: 'zh-CN' })
-  assert.equal(live.panel.getAttribute('aria-label'), '连接手机')
+  assert.equal(live.panel.getAttribute('aria-label'), 'pocket')
   assert.equal(live.close.getAttribute('aria-label'), '关闭')
   assert.equal(live.frame.getAttribute('title'), '连接移动设备')
   assert.equal(statusOf(live).textContent, '手机连接打开失败，请重启 DSH 后再试。', 'the remembered status key re-resolves')
@@ -391,7 +404,7 @@ test('no CJK survives outside the I18N table and the string literals equal its z
   const wholeTable = (SRC.match(/var I18N = \{[\s\S]*?\n    \}/) ?? [''])[0]
   assert.ok(wholeTable.length > 0, 'the I18N table must exist in the source')
   const zhPart = wholeTable.slice(wholeTable.indexOf('zh:'), wholeTable.indexOf('en:'))
-  assert.ok(zhPart.length > 0 && zhPart.includes('连接手机'), 'the I18N.zh pack must be present')
+  assert.ok(zhPart.length > 0 && zhPart.includes('关闭'), 'the I18N.zh pack must be present')
 
   const inZhTable = zhPart.replace(/[^\u2e80-\u9fff\uff00-\uffef\u3000-\u303f]/g, '')
   assert.equal(
@@ -419,17 +432,23 @@ test('the client half stays a classic script: no ESM form, loader registration i
   assert.match(SRC, /id: '@defws\/dsh-pocket'/, 'registered by package name')
 })
 
-test('the zh and en packs expose the same seven keys with distinct text', () => {
+test('the zh and en packs expose the same seven keys, with one shared product-name literal', () => {
   assert.ok(I18N, 'the I18N table must be readable from the source')
   const zhKeys = Object.keys(I18N.zh).sort()
   const enKeys = Object.keys(I18N.en).sort()
   assert.deepEqual(enKeys, zhKeys, 'zh/en key sets must be equal')
   assert.deepEqual(zhKeys, [...KEYS].sort(), 'the table holds exactly the seven AC-CLI keys')
+  // The desktop entry is the product name: one lowercase literal, deliberately
+  // identical in both packs, so it is the only key allowed to read the same.
+  assert.equal(I18N.zh.label, 'pocket', 'the desktop entry is named pocket in zh')
+  assert.equal(I18N.en.label, 'pocket', 'and the very same literal in en')
   for (const k of zhKeys) {
     assert.equal(typeof I18N.zh[k], 'string', k + ' must be a string in zh')
     assert.equal(typeof I18N.en[k], 'string', k + ' must be a string in en')
     assert.ok(I18N.zh[k].length > 0 && I18N.en[k].length > 0, k + ' must not be empty')
-    assert.notEqual(I18N.en[k], I18N.zh[k], k + ' must read differently in each pack')
+    if (k !== 'label') {
+      assert.notEqual(I18N.en[k], I18N.zh[k], k + ' must read differently in each pack')
+    }
     assert.ok(!CJK.test(I18N.en[k]), k + ' must stay CJK-free in the en pack')
   }
 })
