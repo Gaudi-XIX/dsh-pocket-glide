@@ -323,10 +323,12 @@ node tools/gen-qr-fixtures.mjs                    # 重生成 test/fixtures/qr-m
 ## 打包与许可
 
 - `package.json files` = `lib/**/*.js`、`client/**/*.js`、`test`、`tools`、`cordis.patch.yml`、`README.md`、
-  `LICENSE`。本机装机是 `link:` **junction**，白名单只对发布态（`npm pack`/publish）生效，不影响装机态；
+  `LICENSE`、`CHANGELOG.md`。本机装机是 `link:` **junction**，白名单只对发布态（`npm pack`/publish）生效，不影响装机态；
   列全 `test`/`tools` 的意义是：发布件里 `npm test` 与 README 承诺的工具面真能跑。
 - 许可 Apache-2.0，正文见 `LICENSE`。
-- 版本策略：现值 `0.1.0`，本仓**不维护 CHANGELOG**（变更账在 `git log` 与 flow change 卡里）；README 不承诺它。
+- 版本策略：现值 `0.2.0`。逐版的**对外变化**（修复 / 契约变更 / 已知边界）见根 `CHANGELOG.md`；
+  更细的逐笔施工账在 `git log` 与 flow change 卡里。从 `0.2.0` 起本仓维护这份 CHANGELOG，
+  README 承诺的是「它存在且跟着版本走」，不承诺它随每一笔提交更新。
 
 ## 已知边界
 

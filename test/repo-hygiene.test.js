@@ -12,8 +12,10 @@
 // 反过来做（删断言保字面）就是让同一句谎话重新上岗。
 //
 // 这份文件**故意不钉**的东西（不是漏了，别顺手补上）：
-//   · `package.json version`、有没有 CHANGELOG —— 提位属发布决策，LEAD 未批；钉住现值
-//     等于替那个决策投票。README「打包与许可」已经把「本仓不维护 CHANGELOG」写实。
+//   · `package.json version` 的**数值** —— 提位属发布决策，钉住现值等于替那个决策投票。
+//     从 0.2.0 起本仓维护 `CHANGELOG.md`（README「打包与许可」已改写成引它为准），
+//     所以 ⑨ 钉的是「CHANGELOG 在场 + 其中最新一节就是当前版本 + README 不再声称不维护它」，
+//     仍然不钉版本号本身、也不钉任何条目的正文。
 //   · `pnpm-workspace.yaml` 是否存在 —— LEAD（K-3）裁的是「删，或缩成真实需要的最小声明」
 //     两条都可，而且 `pnpm approve-builds` 这类正常操作本来就会把它再生成一遍；
 //     钉存在性会把合法的工具行为读成红。WP-REPO-B 已经把它删了，账在 handoff 里。
@@ -34,13 +36,13 @@ const pkg = JSON.parse(read('package.json'))
 
 // ①（tasks.md AC-R 第①条）
 // 钉的是哪句语义：README「打包与许可」第一行——「`package.json files` = lib/**/*.js、
-// client/**/*.js、`test`、`tools`、`cordis.patch.yml`、`README.md`、`LICENSE`」，加上同节
+// client/**/*.js、`test`、`tools`、`cordis.patch.yml`、`README.md`、`LICENSE`、`CHANGELOG.md`」，加上同节
 // 那句「列全 `test`/`tools` 的意义是：发布件里 `npm test` 与 README 承诺的工具面真能跑」。
 // `test` 不在 files 里 ⇒ `npm pack` 出来的包跑不出 README 承诺的验证；`tools` 不在 ⇒ README
 // 「测试与工具」整节对发布态用户是空头话。同时钉「每一项都真在盘上」：`files` 里的幽灵项
 // 是下一次「声明了一个已经不存在的东西」的起点，而这正是本卡整族错误的形状。
 test('① files 收编了 README 承诺的每一项，且每一项都在盘上', () => {
-  for (const promised of ['test', 'tools', 'LICENSE', 'cordis.patch.yml', 'README.md']) {
+  for (const promised of ['test', 'tools', 'LICENSE', 'cordis.patch.yml', 'README.md', 'CHANGELOG.md']) {
     assert(pkg.files.includes(promised), `package.json files 必须含 '${promised}'（README 正在承诺它）`)
     assert(existsSync(join(root, promised)), `files 里的 '${promised}' 必须真在仓里，不能只是声明`)
   }
@@ -230,4 +232,27 @@ test('⑧ fetch-cloudflared 与 tunnel.js 的 vendor 契约同源（--print 不�
   } else {
     assert.equal(run.status, 0, `--print 应零退出：${run.stderr?.trim()}`)
   }
+})
+
+// ⑨（ship 随发布，2026-10-03 起）
+// 钉的是哪句语义：README「打包与许可」的版本策略句。0.1.0 那会儿它写的是「本仓**不维护
+// CHANGELOG**（变更账在 git log 与 flow change 卡里）」——那是一句**事实陈述**，不是愿望清单；
+// 既然 0.2.0 起建了 CHANGELOG，就必须同时把那句改成指向它，否则 README 就在撒谎（本卡纪律：
+// 删掉一句错话必须配一句对话，见 ⑤ 的负正成对）。
+// 仍然**不钉**：版本号的数值（提位是发布决策，钉住现值等于替那个决策投票）、任何条目的正文。
+test('⑨ CHANGELOG.md 在场、最新一节跟着 version 走，且 README 不再声称不维护它', () => {
+  const changelogPath = join(root, 'CHANGELOG.md')
+  assert(existsSync(changelogPath), 'CHANGELOG.md 必须在仓里（README「打包与许可」正在承诺它）')
+  assert(pkg.files.includes('CHANGELOG.md'), 'package.json files 必须把 CHANGELOG.md 收进去（README 已列它）')
+  const changelog = read('CHANGELOG.md')
+  const headings = [...changelog.matchAll(/^##\s+(\S+)/gm)].map((m) => m[1])
+  assert(headings.length >= 2, `CHANGELOG 至少要有「本版」与「上一版」两节，实际：${headings.join(', ')}`)
+  assert.equal(
+    headings[0],
+    pkg.version,
+    `CHANGELOG 最新一节必须就是当前 package.json version（${pkg.version}），实际最新是 ${headings[0]}`,
+  )
+  const readme = read('README.md')
+  assert.match(readme, /CHANGELOG\.md/, 'README 必须指向 CHANGELOG.md')
+  assert.doesNotMatch(readme, /不维护\s*CHANGELOG/i, 'README 不得再声称本仓不维护 CHANGELOG —— 它现在维护')
 })
