@@ -23,7 +23,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, statSync, globSync } from 'node:fs';
+import { readdirSync, statSync, globSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { mobilePageAssets } from '../lib/pages.js';

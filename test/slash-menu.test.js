@@ -27,7 +27,15 @@ test('skills.list / commands.list pass the allowlist and carry the Host wire sha
 
     let res = await rpcCall(t, cookie, 'skills.list', { sessionId: 'sess-9' })
     assert.notEqual(res.status, 403, 'skills.list must be allowlisted')
-    assert.equal(res.status, 200)
+    assert.equal(
+      res.status,
+      200,
+      [
+        'skills.list must reach the Harness',
+        ...(t.transportFailures?.() ?? []),
+        `(HTTP ${res.status})`,
+      ].join(' | '),
+    )
     const skills = t.harness.records.calls.find((c) => c.url === '/api/skills/list')
     assert.ok(skills, 'bridge must POST /api/skills/list')
     // Typert declares a single json-wire param named `request`: it must be wrapped.
@@ -35,7 +43,15 @@ test('skills.list / commands.list pass the allowlist and carry the Host wire sha
 
     res = await rpcCall(t, cookie, 'commands.list', { sessionId: 'sess-9' })
     assert.notEqual(res.status, 403, 'commands.list must be allowlisted')
-    assert.equal(res.status, 200)
+    assert.equal(
+      res.status,
+      200,
+      [
+        'commands.list must reach the Harness',
+        ...(t.transportFailures?.() ?? []),
+        `(HTTP ${res.status})`,
+      ].join(' | '),
+    )
     const commands = t.harness.records.calls.find((c) => c.url === '/api/commands/list')
     assert.ok(commands, 'bridge must POST /api/commands/list')
     // commands/list scopes on the agent lookup, whose wire name is `agentId`.

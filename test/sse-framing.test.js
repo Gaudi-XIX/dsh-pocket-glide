@@ -23,10 +23,22 @@ const frames = [
 ]
 
 test('SSE maps assistant-stream -> token, snapshot -> snapshot, other -> event', async () => {
+  // A dedicated session for this example: the healthy-stream cadence assertion
+  // must compare against a value sampled at the same moment the stream opens, so
+  // no other example may perturb this session's failure state.
+  const sessionId = 'sess-framing-healthy'
   const t = await startBridge({ harness: 'fake', harnessOptions: { frames } })
   try {
     const cookie = await t.pairMobile()
-    const res = await httpFetch(`${t.base}/api/session/stream?sessionId=sess-1`, {
+    // Sample the cadence at the same moment the stream is about to open — the
+    // retry: frame carries this exact value, so `the frame must state the
+    // cadence this bridge is actually publishing` is a same-time comparison, not
+    // one against a live value read after the stream (a time-of-check vs.
+    // time-of-use defect that reddened intermittently when a stream-transport
+    // termination bumped the live value from 500 to 1000 mid-request).
+    const expectedRetry = t.bridge.streamRetryDelayMs(sessionId)
+    assert.equal(expectedRetry, STREAM_RETRY_BASE_MS, 'a session with no recorded failure publishes the base cadence')
+    const res = await httpFetch(`${t.base}/api/session/stream?sessionId=${sessionId}`, {
       headers: { cookie },
     })
     assert.equal(res.status, 200)
@@ -50,9 +62,16 @@ test('SSE maps assistant-stream -> token, snapshot -> snapshot, other -> event',
     // clean conversation, and the escalation ladder — are pinned by name below.
     const opening = raw.match(/^retry: (\d+)\n\n/)
     assert.ok(opening, `the stream must open with a retry directive; got ${JSON.stringify(raw.slice(0, 40))}`)
+    // Carrier health first: if the fake harness died mid-stream (a transport
+    // failure event in the body), the failure here is about the carrier, not
+    // about the cadence — say so instead of masquerading as a cadence regression.
+    assert.ok(
+      !raw.includes('__bridge/stream-transport'),
+      'the framing example needs a healthy carrier; the stream lost its transport',
+    )
     assert.equal(
       Number(opening[1]),
-      t.bridge.streamRetryDelayMs('sess-1'),
+      expectedRetry,
       'the frame must state the cadence this bridge is actually publishing',
     )
     // Exactly one retry directive on a clean open: the escalation is written on the

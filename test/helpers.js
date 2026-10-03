@@ -71,13 +71,28 @@ export function httpFetch(url, options = {}) {
 // suite is deterministic even if the environment exports a fixed port.
 process.env.DSH_MOBILE_PORT = ''
 
+/** Log lines that prove a bridge↔harness transport failure (see lib/bridge.js). */
+const TRANSPORT_FAILURE_FRAGMENTS = [
+  'harness call dropped',
+  'harness transport failed',
+  'harness answered ',
+  'harness envelope unreadable',
+  'harness rpc answer mismatched',
+]
+
 /**
  * Start a real bridge on an ephemeral port.
  * @param {{ harness?: 'fake', harnessOptions?: object, bridgeOptions?: object }} [opts]
  *   bridgeOptions: extra LanMobileBridge options (e.g. { sseStatusMs: 25 }).
+ *   The returned `logs` and `transportFailures()` are ONLY-augment additions:
+ *   a caller-supplied `bridgeOptions.log` is still invoked (merge, never override).
  */
 export async function startBridge(opts = {}) {
   const harness = opts.harness === 'fake' ? await startFakeHarness(opts.harnessOptions) : null
+  // Collect the bridge's own log lines into an array readable after stop(), while
+  // still forwarding to a caller-supplied logger.
+  const logs = []
+  const callerLog = opts.bridgeOptions?.log
   const bridge = new LanMobileBridge({
     harnessUrl: () => (harness ? harness.url : 'http://127.0.0.1:9'),
     innerAuth: { ready: async () => undefined, invalidate: () => {} },
@@ -86,6 +101,10 @@ export async function startBridge(opts = {}) {
     pairingPinStore: { load: () => ({}), save: () => true },
     tunnelLog: () => {},
     ...(opts.bridgeOptions ?? {}),
+    log: (level, message) => {
+      logs.push({ level, message })
+      callerLog?.(level, message)
+    },
   })
   const snap = await bridge.start()
   assert.notEqual(snap.port, 43127, 'bridge must not bind the hardcoded default')
@@ -114,7 +133,14 @@ export async function startBridge(opts = {}) {
     if (harness) await harness.stop()
   }
 
-  return { bridge, snap, base, harness, pairMobile, pairDesktop, stop }
+  /** The transport-failure classes seen on the bridge log, oldest first. */
+  function transportFailures() {
+    return logs
+      .filter(({ message }) => TRANSPORT_FAILURE_FRAGMENTS.some((f) => message.includes(f)))
+      .map(({ level, message }) => `[${level}] ${message}`)
+  }
+
+  return { bridge, snap, base, harness, pairMobile, pairDesktop, stop, logs, transportFailures }
 }
 
 // ---------------------------------------------------------------------------
@@ -203,11 +229,11 @@ export function startFakeHarness(options = {}) {
     const parsedUrl = new URL(req.url ?? '/', 'http://fake-harness')
     if (req.method === 'GET' || req.method === 'HEAD') {
       if (options.get && (await options.get(req, res, parsedUrl))) return
-      res.writeHead(404).end()
+      res.writeHead(404, { 'Connection': 'close' }).end()
       return
     }
     if (req.method !== 'POST' || !parsedUrl.pathname.startsWith('/api/')) {
-      res.writeHead(404).end()
+      res.writeHead(404, { 'Connection': 'close' }).end()
       return
     }
     const chunks = []
@@ -221,13 +247,19 @@ export function startFakeHarness(options = {}) {
     }
     const override = options.respond?.(parsedUrl.pathname, body.payload?.args, body)
     if (override !== undefined) {
-      res.writeHead(200, { 'content-type': 'application/json' })
+      res.writeHead(200, { 'content-type': 'application/json', 'Connection': 'close' })
       res.end(JSON.stringify({ rpcId: body.rpcId, result: override }))
       return
     }
-    res.writeHead(200, { 'content-type': 'application/json' })
+    res.writeHead(200, { 'content-type': 'application/json', 'Connection': 'close' })
     res.end(JSON.stringify({ rpcId: body.rpcId, result: { ok: true, value: { echoed: true } } }))
   })
+
+  // The fake harness holds no keep-alive sockets: every HTTP response announces
+  // Connection: close and the server drops idle connections immediately, so a
+  // later bridge call cannot be handed a dead or recycled socket (same reason
+  // helpers.httpFetch uses `agent: false`).
+  server.keepAliveTimeout = 0
 
   server.on('upgrade', (req, socket) => {
     const key = req.headers['sec-websocket-key']
