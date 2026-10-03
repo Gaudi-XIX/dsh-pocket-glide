@@ -218,6 +218,55 @@ test('AC-C2 an ordinary copy is still cleared, and only the named line is touche
   assert.equal(sandbox.containers.listError.textContent, '会话列表加载失败', 'and nothing else is erased')
 })
 
+// V-4 (independent verify round, 2026-10-03): nothing pinned what the recovery path
+// does to a standing copy it did not itself write. Pinning it settled two facts.
+// First, L.disconnectedRetry IS one of the down copies (isStreamDownCopy names it),
+// so the recovery frame retires a standing RPC disconnect by itself — that is the
+// reachable interleave the first pass carried nowhere. Second, a copy outside that
+// family (a failure frame's text: important, but not the outage notice) survives the
+// recovery while the guard is still released, and releasing the guard is exactly what
+// lets the next poll that answers clear it — keeping the guard instead would leave
+// that copy on screen for good.
+test('the recovery frame retires a standing RPC disconnect, not just its own notice (V-4)', () => {
+  const sandbox = buildNoticeSandbox()
+  sandbox.showError('chatError', { disconnected: true })
+  assert.equal(sandbox.containers.chatError.textContent, L.disconnectedRetry, 'the disconnect names itself')
+  assert.equal(sandbox.importantErrorActive, true, 'and stands as the important message')
+
+  sandbox.noteStreamRecovery()
+  assert.equal(sandbox.containers.chatError.textContent, '', 'but the recovery answers it, so it goes')
+  assert.equal(sandbox.importantErrorActive, false, 'and the guard goes with it')
+})
+
+test('a copy the recovery did not write survives it until a poll can answer for it (V-4 residual)', () => {
+  const sandbox = buildNoticeSandbox()
+  const failure = `${L.streamFailTransport} (E_STREAM)`
+  sandbox.showError('chatError', { message: failure, important: true })
+  assert.equal(sandbox.containers.chatError.textContent, failure, 'a failure frame states itself')
+  assert.equal(sandbox.importantErrorActive, true, 'and is important')
+
+  sandbox.noteStreamRecovery()
+  assert.equal(
+    sandbox.containers.chatError.textContent,
+    failure,
+    'the recovery only retracts the copy it wrote',
+  )
+  assert.equal(sandbox.importantErrorActive, false, 'while the guard it drops is what makes the copy retractable')
+
+  sandbox.clearTransientError('chatError')
+  assert.equal(sandbox.containers.chatError.textContent, '', 'so the next poll that answers may clear it')
+})
+
+test('the recovery still retires the outage notice it answered (V-4 companion)', () => {
+  const sandbox = buildNoticeSandbox()
+  sandbox.notifyStreamDown()
+  assert.equal(sandbox.importantErrorActive, true, 'the outage stands')
+
+  sandbox.noteStreamRecovery()
+  assert.equal(sandbox.containers.chatError.textContent, '', 'and the notice the recovery answered is gone')
+  assert.equal(sandbox.importantErrorActive, false)
+})
+
 // ------------------------------------------------- 每轮断开最多一次（闩锁，不是绝对计数）
 
 test('the disconnect notice speaks once per drop and re-arms on the first frame back', () => {

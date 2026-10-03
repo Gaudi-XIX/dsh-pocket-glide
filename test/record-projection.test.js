@@ -243,3 +243,25 @@ test('RC-3: a bounded row is orders of magnitude smaller than the raw one', () =
 
   assert.ok(ratio < 0.05, `a row this fat must collapse, got ratio ${ratio.toFixed(3)}`)
 })
+
+// 2026-10-02 audit, AC-D8: the host stamps every record with its own wall clock
+// (`time`), and M6 now orders the transcript by seq instead of by that stamp. The
+// stamp still has to survive the projection: neither a record's own `time` nor a
+// `time` sitting on its `data` may be stripped, so a later edit to
+// PHONE_RECORD_DROP_KEYS cannot silently take it away. The design called this the
+// M6 premise guard; the first verify pass found it was the one acceptance item
+// with no assertion behind it at all.
+test('AC-D8: the projection never strips the host timestamp', () => {
+  const frame = {
+    type: 'snapshot',
+    records: [{ type: 'turn/start', seq: 1, time: 123, data: { time: 456, turn: 1 } }],
+    projections: {},
+    hasMore: false
+  }
+  const compact = compactSessionFrame(frame)
+
+  assert.equal(compact.records[0].time, 123, 'the record-level host stamp survives')
+  assert.equal(compact.records[0].data.time, 456, 'and so does a data-level key the drop list must never name')
+  assert.equal(compact.records[0].data.turn, 1, 'the projection still carries the turn the renderer reads')
+  assert.deepEqual(frame.records[0].data, { time: 456, turn: 1 }, 'the frame it was handed is never mutated')
+})
