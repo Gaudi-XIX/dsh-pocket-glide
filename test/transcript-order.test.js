@@ -115,6 +115,33 @@ test('mergeEntries dedupes by seq keeping the first copy', () => {
   assert.deepEqual(merged.map((entry) => entry.tag), ['first'])
 })
 
+test('AC-PERF a seq-less record keeps the same key across repaints and history paging', () => {
+  const sandbox = buildSandbox()
+  const batch = [{ seq: 1, tag: 'a' }, { tag: 'x1' }, { tag: 'x2' }, { seq: 2, tag: 'b' }, { tag: 'x3' }]
+  sandbox.mergeEntries(batch)
+  const keys1 = sandbox.mergeEntries.lastKeys
+  sandbox.mergeEntries(batch)
+  const keys2 = sandbox.mergeEntries.lastKeys
+  assert.deepEqual(JSON.stringify(keys1), JSON.stringify(keys2), 'two repaints of the same batch agree on every key')
+
+  // The defect this replaces: the key was anchored to the running max seq, so a
+  // record that carries no seq changed key the moment a history page landed
+  // above it and the transcript could jump.
+  const stream = [{ seq: 100, tag: 's1' }, { tag: 'noSeq' }, { seq: 101, tag: 's2' }]
+  const keyOf = (list, tag) => {
+    const order = sandbox.mergeEntries(list).map((entry) => entry.tag)
+    return sandbox.mergeEntries.lastKeys[order.indexOf(tag)]
+  }
+  const before = keyOf([{ seq: 1, tag: 'o1' }].concat(stream), 'noSeq')
+  const after = keyOf([{ seq: 1, tag: 'o1' }, { seq: 2, tag: 'o2' }].concat(stream), 'noSeq')
+  assert.equal(before, after, 'a prepended history page must not move a seq-less record key')
+  assert.deepEqual(
+    sandbox.mergeEntries([{ seq: 1, tag: 'o1' }, { seq: 2, tag: 'o2' }].concat(stream)).map((entry) => entry.tag),
+    ['o1', 'o2', 's1', 'noSeq', 's2'],
+    'and it still sits between its own neighbours',
+  )
+})
+
 test('the history page is merged into the live buffer, never assigned over it', () => {
   const { js } = mobilePageAssets({ locale: 'zh' })
   assert.ok(js.includes('streamEvents=mergeEntries(streamEvents.concat(fetched))'), 'history must append')
@@ -227,6 +254,51 @@ test('reaching the start of the conversation is final for the row', () => {
     'a poll may arm the row, but never re-arm it after the start was reached',
   )
   assert.ok(js.includes('olderHasMore=false;olderBusy=false;olderExhausted=false;'), 'leaving the session resets it')
+})
+
+// AC-PERF the exhausted latch must survive a re-entry without ever becoming a
+// wall: it is restored with the session it belongs to, cleared when a fresh
+// snapshot arrives, and every paging gate lets an empty transcript through it so
+// the bootstrap path can still pull the first page.
+test('AC-PERF the exhausted latch follows its session and never blocks an empty buffer', () => {
+  const { js } = mobilePageAssets({ locale: 'zh' })
+
+  // Restored with the cache it was stored in, and dropped when the handoff
+  // snapshot supersedes it — a latch that outlived its session would disable the
+  // row in a conversation that was never exhausted.
+  assert.ok(
+    js.includes('olderHasMore=cached.olderHasMore;olderExhausted=cached.olderExhausted===true;'),
+    'the cached latch comes back with its own session',
+  )
+  assert.ok(
+    js.includes('olderHasMore=embeddedFocus.history.hasMore===true;olderExhausted=false;'),
+    'a fresh handoff snapshot clears it',
+  )
+
+  // The latch only ever closes the row for a session that has real content; an
+  // empty buffer keeps all three gates open, which is the bootstrap A-7③④ relies on.
+  const gates = [
+    ['the fill loop', 'if(!olderHasMore&&transcriptHasContent())return'],
+    ['the page fetch', 'if(olderBusy||!activeSession||(!olderHasMore&&transcriptHasContent()))return false'],
+    ['the multi-page pull', 'if(olderRunBusy||!activeSession||(!olderHasMore&&transcriptHasContent()))return false'],
+  ]
+  for (const [why, gate] of gates) assert.ok(js.includes(gate), `${why} exempts an empty transcript: ${gate}`)
+  assert.ok(
+    js.includes('while(activeSession&&(olderHasMore||!transcriptHasContent())&&pages<8'),
+    'and the fill loop keeps paging while nothing is painted',
+  )
+
+  // Once the start is reached the latch can only be armed by a later fetch, never
+  // by a poll that reports more.
+  assert.ok(
+    js.includes('if(!olderHasMore)olderExhausted=true'),
+    'only a real empty page sets it',
+  )
+  assert.equal(js.split('olderExhausted=true').length - 1, 1, 'nothing else sets it')
+  assert.ok(
+    js.includes('olderHasMore=olderExhausted?false:olderHasMore||value.hasMore===true'),
+    'the poll honours the latch',
+  )
 })
 
 test('the list follows the finger and springs back without the old ring', () => {
