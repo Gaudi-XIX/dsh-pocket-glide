@@ -182,6 +182,7 @@ test('AC-A6 the head pull really goes out with no beforeSeq', async () => {
     const calls=[]
     const $=()=>box
     function oldestEventSeq(){return -1}
+    function transcriptHasContent(){return Boolean(streamEvents.length||olderEvents.length)}
     function renderOlderButton(){}
     function windowEvents(){return []}
     function mergeEntries(list){return list}
