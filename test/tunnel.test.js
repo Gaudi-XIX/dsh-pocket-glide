@@ -7,9 +7,10 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { Readable } from 'node:stream'
 import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import {
   resolveCloudflared,
   ensureCloudflared,
@@ -414,6 +415,9 @@ test('migration does not run when the new cache dir already has content', async 
 
     const resolved = await ensureCloudflared(undefined, () => {}, {
       pathProbe: async () => undefined,
+      // R-T2 added a health gate on the cache hit; this case is about WHICH
+      // candidate the read chain picks, so the gate is injected as passing.
+      versionProbe: async () => true,
       asset: { file: 'unused', sha256: sha256Hex(payload) },
     })
     assert.ok(resolved.startsWith(newDir))
@@ -499,6 +503,10 @@ test('a pinned binary already in the machine cache is reused, not re-downloaded 
         throw new Error('must not download: a pinned binary already exists')
       },
       pathProbe: async () => undefined,
+      // R-T2: the hit is now health-checked first; this case pins the reuse
+      // decision, so the gate is injected as passing (a real probe is exercised
+      // by the R-T2 cases below).
+      versionProbe: async () => true,
       asset: { file: 'unused', sha256: 'x' },
     })
     assert.equal(resolved, unifiedBinary, 'the existing binary was used as it is')
@@ -508,6 +516,487 @@ test('a pinned binary already in the machine cache is reused, not re-downloaded 
     fs.rmSync(root, { recursive: true, force: true })
     fs.rmSync(unified, { recursive: true, force: true })
   }
+})
+
+// ---------------------------------------------------------------------------
+// WP-RESCAN-A / R-T1 — the landing move must survive a cross-volume cache.
+// `fs.renameSync` is rename(2): same-mount only. The download workdir is
+// `os.tmpdir()` (the system temp volume) while the cache lives under the data
+// root, so on a machine whose temp and data roots are different volumes the
+// landing threw `EXDEV: cross-device link not permitted`, the freshly verified
+// 55 MB binary was discarded, and the next tunnel start downloaded it again —
+// for ever, ~55 MB per start (probe-01 / probe-05 / probe-06).
+// ---------------------------------------------------------------------------
+
+test('R-T1: an EXDEV landing falls back to copy+unlink and still caches the binary', async () => {
+  const saved = saveEnv()
+  const tempDirs = []
+  try {
+    clearEnv()
+    const root = useTempCacheRoot()
+    tempDirs.push(root)
+    const payload = Buffer.from('cross-volume-binary')
+    const asset = { file: 'fake-exdev.bin', sha256: sha256Hex(payload) }
+
+    // Inject the cross-device error rather than depending on this machine having
+    // a second writable volume: a rename out of the temp workdir fails exactly
+    // the way rename(2) does across mounts, while the staged rename inside the
+    // cache dir is left alone. (The live error was reproduced too — renaming
+    // C:\Users\...\Temp\x to F:\...\x throws `EXDEV: cross-device link not
+    // permitted` — and the env-gated case below exercises the real thing.)
+    const realRename = fs.renameSync
+    const attempts = []
+    fs.renameSync = (from, to) => {
+      attempts.push({ from: String(from), to: String(to) })
+      if (String(from).startsWith(os.tmpdir()) && !String(from).endsWith('.part')) {
+        const error = new Error(`EXDEV: cross-device link not permitted, rename '${from}' -> '${to}'`)
+        error.code = 'EXDEV'
+        throw error
+      }
+      return realRename(from, to)
+    }
+    let finalPath
+    try {
+      finalPath = await ensureCloudflared(undefined, () => {}, {
+        fetchImpl: fetchReturning(payload),
+        pathProbe: async () => undefined,
+        asset,
+      })
+    } finally {
+      fs.renameSync = realRename
+    }
+
+    assert.equal(attempts.length, 2, 'one EXDEV rename, then the staged one')
+    assert.ok(attempts[0].from.startsWith(os.tmpdir()), 'the landing started as a rename out of the temp dir')
+    assert.ok(attempts[1].from.endsWith('.part'), 'the fallback staged a .part first, never a truncated final name')
+    assert.equal(fs.readFileSync(finalPath, 'utf8'), 'cross-volume-binary', 'the verified bytes survived the fallback')
+    assert.deepEqual(
+      fs.readdirSync(path.dirname(finalPath)).filter((name) => name.endsWith('.part')),
+      [],
+      'no half-written .part was left behind',
+    )
+    assert.equal(
+      fs.existsSync(path.join(os.tmpdir(), `dsh-pocket-${asset.file}-${process.pid}`)),
+      false,
+      'and the temp artifact is gone',
+    )
+  } finally {
+    restoreEnv(saved)
+    for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('R-T1: a non-EXDEV landing failure is still fatal, not papered over', async () => {
+  const saved = saveEnv()
+  const tempDirs = []
+  try {
+    clearEnv()
+    const root = useTempCacheRoot()
+    tempDirs.push(root)
+    const payload = Buffer.from('locked-binary')
+    const asset = { file: 'fake-locked.bin', sha256: sha256Hex(payload) }
+
+    const realRename = fs.renameSync
+    fs.renameSync = (from, to) => {
+      if (String(from).startsWith(os.tmpdir())) {
+        const error = new Error(`EPERM: operation not permitted, rename '${from}' -> '${to}'`)
+        error.code = 'EPERM'
+        throw error
+      }
+      return realRename(from, to)
+    }
+    try {
+      await assert.rejects(
+        ensureCloudflared(undefined, () => {}, {
+          fetchImpl: fetchReturning(payload),
+          pathProbe: async () => undefined,
+          asset,
+        }),
+        /EPERM/,
+        'only EXDEV gets the copy fallback — a locked file must not be silently copied around',
+      )
+    } finally {
+      fs.renameSync = realRename
+    }
+  } finally {
+    restoreEnv(saved)
+    for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('R-T1: a real cross-volume cache root still caches the binary (needs POCKET_XVOL_ROOT)', async (t) => {
+  // The injection above pins the fallback's shape; this one proves it on real
+  // volumes, and is env-gated because only the operator knows which of this
+  // machine's volumes is writable and different from `os.tmpdir()`.
+  const target = process.env.POCKET_XVOL_ROOT?.trim()
+  if (!target) {
+    t.skip('需要 POCKET_XVOL_ROOT 指到与 os.tmpdir() 不同卷的可写目录才验（本仓约定：环境相关验证 env-gated）')
+    return
+  }
+  const saved = saveEnv()
+  let root
+  try {
+    clearEnv()
+    root = fs.mkdtempSync(path.join(target, 'dsh-pocket-xvol-'))
+    if (process.platform === 'win32') process.env.LOCALAPPDATA = root
+    else process.env.XDG_CACHE_HOME = root
+
+    // First prove the two roots really are on different volumes, otherwise this
+    // test would pass for the wrong reason.
+    const probeFrom = path.join(os.tmpdir(), `dsh-pocket-xvol-probe-${process.pid}`)
+    fs.writeFileSync(probeFrom, 'probe')
+    assert.throws(
+      () => fs.renameSync(probeFrom, path.join(root, 'probe.bin')),
+      /EXDEV/,
+      `POCKET_XVOL_ROOT (${target}) must be on another volume than os.tmpdir() (${os.tmpdir()})`,
+    )
+    fs.rmSync(probeFrom, { force: true })
+
+    const payload = Buffer.from('real-cross-volume-binary')
+    const asset = { file: 'fake-xvol.bin', sha256: sha256Hex(payload) }
+    const finalPath = await ensureCloudflared(undefined, () => {}, {
+      fetchImpl: fetchReturning(payload),
+      pathProbe: async () => undefined,
+      asset,
+      // This test measures the cross-volume landing, not the health gate: the
+      // payload is a few bytes of text and would be judged dead by R-T2's probe.
+      versionProbe: async () => true,
+    })
+
+    assert.equal(fs.readFileSync(finalPath, 'utf8'), 'real-cross-volume-binary')
+    assert.ok(finalPath.startsWith(path.join(root, 'dsh-pocket', 'cloudflared')), finalPath)
+    assert.deepEqual(
+      fs.readdirSync(path.dirname(finalPath)).filter((name) => name.endsWith('.part')),
+      [],
+      'no .part left on the far volume',
+    )
+    // A second call reuses the cached binary instead of re-downloading it — the
+    // whole point of R-T1: without the fallback the cache stayed empty for ever.
+    let downloads = 0
+    const reused = await ensureCloudflared(undefined, () => {}, {
+      fetchImpl: async () => {
+        downloads += 1
+        throw new Error('must not download: the cross-volume landing cached the binary')
+      },
+      pathProbe: async () => undefined,
+      asset,
+      versionProbe: async () => true,
+    })
+    assert.equal(reused, finalPath, 'the cached binary is found on the next start')
+    assert.equal(downloads, 0, 'and nothing is downloaded again')
+  } finally {
+    restoreEnv(saved)
+    if (root) fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// WP-RESCAN-A / R-T2 — a name match is not a working binary.
+// `isExecutableFile()` only proves "a regular file sits under the expected
+// name", which is also what a truncated download, an HTML error page saved by an
+// interrupted script, or a half-written vendored copy look like. Honoring such a
+// hit made the tunnel fail at every start with zero repair attempts (probe-10:
+// `spawn --version` → `spawn error = UNKNOWN`; probe-13: 1.5 MB of 0x41 at the
+// cached name, downloads attempted 0).
+// ---------------------------------------------------------------------------
+
+test('R-T2: a dead vendored file is rejected and the resolver self-repairs', async () => {
+  const saved = saveEnv()
+  const tempDirs = []
+  const root = fileURLToPath(new URL('..', import.meta.url))
+  const vendorFile = path.join(root, 'vendor', process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared')
+  const hadVendor = fs.existsSync(vendorFile)
+  const vendorDirExisted = fs.existsSync(path.join(root, 'vendor'))
+  try {
+    clearEnv()
+    const cacheRoot = useTempCacheRoot()
+    tempDirs.push(cacheRoot)
+    // A truncated/garbage vendored copy — exactly what an interrupted
+    // `tools/fetch-cloudflared.mjs` leaves behind.
+    fs.mkdirSync(path.dirname(vendorFile), { recursive: true })
+    fs.writeFileSync(vendorFile, 'not-a-real-binary')
+
+    const probed = []
+    const payload = Buffer.from('repaired-binary')
+    const finalPath = await ensureCloudflared(undefined, () => {}, {
+      fetchImpl: fetchReturning(payload),
+      pathProbe: async () => undefined,
+      versionProbe: async (candidate) => {
+        probed.push(candidate)
+        return false
+      },
+      asset: { file: 'fake-vendor-repair.bin', sha256: sha256Hex(payload) },
+    })
+
+    assert.deepEqual(probed, [vendorFile], 'the vendored hit was health-checked before being honored')
+    assert.equal(
+      fs.existsSync(vendorFile),
+      false,
+      'the dead vendored file was removed, so the next start does not re-probe it for ever',
+    )
+    assert.equal(fs.readFileSync(finalPath, 'utf8'), 'repaired-binary', 'the resolver repaired itself by downloading')
+    assert.ok(finalPath.includes(`${path.sep}dsh-pocket${path.sep}cloudflared`), finalPath)
+  } finally {
+    restoreEnv(saved)
+    for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
+    fs.rmSync(vendorFile, { force: true })
+    // Never leave a vendor/ dir the repo did not have (repo-hygiene ⑧ pins this).
+    if (!vendorDirExisted && fs.existsSync(path.join(root, 'vendor'))) {
+      fs.rmSync(path.join(root, 'vendor'), { recursive: true, force: true })
+    }
+    assert.equal(hadVendor, fs.existsSync(vendorFile), 'the pre-test vendor state was restored')
+  }
+})
+
+test('R-T2: a healthy vendored file is still honored without downloading', async () => {
+  const saved = saveEnv()
+  const root = fileURLToPath(new URL('..', import.meta.url))
+  const vendorFile = path.join(root, 'vendor', process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared')
+  const vendorDirExisted = fs.existsSync(path.join(root, 'vendor'))
+  try {
+    clearEnv()
+    fs.mkdirSync(path.dirname(vendorFile), { recursive: true })
+    fs.writeFileSync(vendorFile, 'healthy-vendored-binary')
+
+    const resolved = await ensureCloudflared(undefined, () => {}, {
+      fetchImpl: async () => {
+        throw new Error('must not download: the vendored file is healthy')
+      },
+      pathProbe: async () => undefined,
+      versionProbe: async () => true,
+      asset: { file: 'unused', sha256: 'x' },
+    })
+    assert.equal(resolved, vendorFile, 'a vendored file that starts is used as it is')
+    assert.equal(fs.existsSync(vendorFile), true, 'and it is not deleted')
+  } finally {
+    restoreEnv(saved)
+    fs.rmSync(vendorFile, { force: true })
+    if (!vendorDirExisted && fs.existsSync(path.join(root, 'vendor'))) {
+      fs.rmSync(path.join(root, 'vendor'), { recursive: true, force: true })
+    }
+  }
+})
+
+test('R-T2: an operator override is trusted as given, never health-gated', async () => {
+  // binaryPath / DSH_POCKET_CLOUDFLARED / DSH_PHONE_NATIVE_CLOUDFLARED /
+  // CLOUDFLARED_BIN are deliberate out-of-band choices (a wrapper script would
+  // even read as "broken"). The gate is for files this plugin wrote itself.
+  const saved = saveEnv()
+  const dir = makeTempDir('dsh-pocket-test-override-')
+  try {
+    clearEnv()
+    const override = path.join(dir, 'my-wrapper.cmd')
+    fs.writeFileSync(override, '@echo off\r\n')
+    process.env.DSH_POCKET_CLOUDFLARED = override
+
+    let probed = 0
+    const resolved = await ensureCloudflared(undefined, () => {}, {
+      fetchImpl: async () => {
+        throw new Error('must not download: an override was given')
+      },
+      pathProbe: async () => undefined,
+      versionProbe: async () => {
+        probed += 1
+        return false
+      },
+      asset: { file: 'unused', sha256: 'x' },
+    })
+    assert.equal(resolved, override, 'the override is returned untouched')
+    assert.equal(probed, 0, 'and was not probed — an override that does not answer --version is still the operator choice')
+    assert.equal(fs.existsSync(override), true, 'nor deleted')
+  } finally {
+    restoreEnv(saved)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('R-T2: a dead cached binary is re-downloaded instead of returned', async () => {
+  const saved = saveEnv()
+  const tempDirs = []
+  try {
+    clearEnv()
+    const root = useTempCacheRoot()
+    tempDirs.push(root)
+    const key = process.platform === 'win32' ? `win32-${process.arch}` : `${process.platform}-${process.arch}`
+    const ext = process.platform === 'win32' ? '.exe' : ''
+    const cacheDir = path.join(root, 'dsh-pocket', 'cloudflared')
+    fs.mkdirSync(cacheDir, { recursive: true })
+    const dead = path.join(cacheDir, `cloudflared-2026.8.2-${key}${ext}`)
+    fs.writeFileSync(dead, 'dead-cached-binary')
+
+    const payload = Buffer.from('fresh-binary')
+    const finalPath = await ensureCloudflared(undefined, () => {}, {
+      fetchImpl: fetchReturning(payload),
+      pathProbe: async () => undefined,
+      versionProbe: async (candidate) => candidate !== dead,
+      asset: { file: 'fake-cache-repair.bin', sha256: sha256Hex(payload) },
+    })
+
+    assert.equal(finalPath, dead, 'the repaired binary lands at the pinned cache name')
+    assert.equal(fs.readFileSync(finalPath, 'utf8'), 'fresh-binary', 'the dead file was replaced by a verified download')
+  } finally {
+    restoreEnv(saved)
+    for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('R-T2: the real health probe rejects garbage and accepts a runnable file', async () => {
+  // Exercises the DEFAULT probe (not an injected one): a garbage file must fail
+  // the gate, and a file that really answers `--version` with exit 0 must pass.
+  const saved = saveEnv()
+  const dir = makeTempDir('dsh-pocket-test-healthprobe-')
+  const tempDirs = []
+  try {
+    clearEnv()
+    const cacheRoot = useTempCacheRoot()
+    tempDirs.push(cacheRoot)
+
+    // A real, runnable "binary" for this platform: node itself, copied under the
+    // cached name. It answers `--version` with exit 0.
+    const key = process.platform === 'win32' ? `win32-${process.arch}` : `${process.platform}-${process.arch}`
+    const ext = process.platform === 'win32' ? '.exe' : ''
+    const cacheDir = path.join(cacheRoot, 'dsh-pocket', 'cloudflared')
+    fs.mkdirSync(cacheDir, { recursive: true })
+    const runnable = path.join(cacheDir, `cloudflared-2026.8.2-${key}${ext}`)
+    fs.copyFileSync(process.execPath, runnable)
+
+    const resolved = await ensureCloudflared(undefined, () => {}, {
+      fetchImpl: async () => {
+        throw new Error('must not download: the cached file really runs')
+      },
+      pathProbe: async () => undefined,
+      asset: { file: 'unused', sha256: 'x' },
+    })
+    assert.equal(resolved, runnable, 'the default probe accepted a file that answers --version with exit 0')
+
+    // And garbage under the same name is refused by the same default probe.
+    fs.writeFileSync(runnable, 'garbage-not-a-program')
+    const payload = Buffer.from('replaced')
+    const repaired = await ensureCloudflared(undefined, () => {}, {
+      fetchImpl: fetchReturning(payload),
+      pathProbe: async () => undefined,
+      asset: { file: 'fake-healthprobe.bin', sha256: sha256Hex(payload) },
+    })
+    assert.equal(fs.readFileSync(repaired, 'utf8'), 'replaced', 'garbage failed the real probe and was replaced')
+  } finally {
+    restoreEnv(saved)
+    fs.rmSync(dir, { recursive: true, force: true })
+    for (const d of tempDirs) fs.rmSync(d, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// WP-RESCAN-A / R-T2 + R-T3 + R-T10 — the vendor fetch script's own contract.
+// R-T3: `--allow-unverified` relaxed the FETCH but never the CHECK, so a
+// non-pinned `--check` compared against the PINNED digest and always exited 1
+// (probe-09), while `--print` was blocked outright by the version gate (probe-04).
+// R-T2: the script renamed into vendor/ BEFORE probing and left the broken file
+// there on failure (probe-11). R-T10: the curl argv had no proto/redirect limits
+// and nothing looked at the artifact's magic bytes.
+// ---------------------------------------------------------------------------
+
+const FETCH_SCRIPT = fileURLToPath(new URL('../tools/fetch-cloudflared.mjs', import.meta.url))
+const VENDOR_DIR = fileURLToPath(new URL('../vendor/', import.meta.url))
+const VENDOR_FILE = path.join(VENDOR_DIR, process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared')
+
+/** Run the fetch script offline with a clean CLOUDFLARED_VERSION, restoring vendor/ after. */
+function runFetchScript(args, { version } = {}) {
+  const env = { ...process.env }
+  if (version === undefined) delete env.CLOUDFLARED_VERSION
+  else env.CLOUDFLARED_VERSION = version
+  const vendorDirExisted = fs.existsSync(VENDOR_DIR)
+  try {
+    return spawnSync(process.execPath, [FETCH_SCRIPT, ...args], { cwd: path.dirname(FETCH_SCRIPT), encoding: 'utf8', env })
+  } finally {
+    fs.rmSync(VENDOR_FILE, { force: true })
+    fs.rmSync(path.join(VENDOR_DIR, 'cloudflared.manifest.json'), { force: true })
+    fs.rmSync(path.join(VENDOR_DIR, 'cloudflared.download'), { force: true })
+    fs.rmSync(path.join(VENDOR_DIR, 'cloudflared.exe.download'), { force: true })
+    if (!vendorDirExisted) fs.rmSync(VENDOR_DIR, { recursive: true, force: true })
+  }
+}
+
+test('R-T3: --print is never blocked by the unpinned gate', () => {
+  const run = runFetchScript(['--print'], { version: '2026.9.1' })
+  assert.equal(run.status, 0, `an unpinned --print must still report the contract: ${run.stderr?.trim()}`)
+  assert.match(run.stdout, /would fetch .*\/2026\.9\.1\//, 'and it prints the version that would be fetched')
+  // "writes nothing" means no artifact: vendor/ itself is a gitignored, possibly
+  // pre-existing directory (repo-hygiene ⑧ pins that --print leaves it alone).
+  assert.equal(fs.existsSync(VENDOR_FILE), false, '--print must not create the vendor file')
+  assert.equal(fs.existsSync(path.join(VENDOR_DIR, 'cloudflared.manifest.json')), false, 'nor a manifest')
+})
+
+test('R-T3: --check --allow-unverified verifies the manifest digest of a non-pinned file', () => {
+  const payload = Buffer.alloc(1024 * 1024 + 16, 0x41)
+  payload.write('MZ', 0, 'ascii')
+  const digest = createHash('sha256').update(payload).digest('hex')
+  const writeVendor = (manifest) => {
+    fs.mkdirSync(VENDOR_DIR, { recursive: true })
+    fs.writeFileSync(VENDOR_FILE, payload)
+    if (manifest) fs.writeFileSync(path.join(VENDOR_DIR, 'cloudflared.manifest.json'), JSON.stringify(manifest))
+  }
+
+  // No manifest yet: --check falls back to the weak (exists + plausible image)
+  // check and says so, instead of comparing against the pinned digest.
+  writeVendor(null)
+  const weak = runFetchScript(['--check', '--allow-unverified'], { version: '2026.9.1' })
+
+  writeVendor({ version: '2026.9.1', sha256: digest, file: 'cloudflared-windows-amd64.exe' })
+  const manifestOk = runFetchScript(['--check', '--allow-unverified'], { version: '2026.9.1' })
+
+  assert.equal(weak.status, 0, `a plausible non-pinned file passes the weak check: ${weak.stderr?.trim()}`)
+  assert.match(weak.stderr, /weak check/, 'and the operator is told no digest is known')
+  assert.equal(manifestOk.status, 0, `the recorded digest is the honest one to compare: ${manifestOk.stderr?.trim()}`)
+  assert.match(manifestOk.stdout, /sha256 verified/, 'and it really verified a digest, not just existence')
+})
+
+test('R-T3: --check --allow-unverified still fails a wrong digest and a wrong magic', () => {
+  const payload = Buffer.alloc(1024 * 1024 + 16, 0x41)
+  payload.write('MZ', 0, 'ascii')
+  const digest = createHash('sha256').update(payload).digest('hex')
+
+  // A manifest that does not match the file must fail (no silent pass).
+  fs.mkdirSync(VENDOR_DIR, { recursive: true })
+  fs.writeFileSync(VENDOR_FILE, payload)
+  fs.writeFileSync(
+    path.join(VENDOR_DIR, 'cloudflared.manifest.json'),
+    JSON.stringify({ version: '2026.9.1', sha256: 'deadbeef', file: 'cloudflared-windows-amd64.exe' }),
+  )
+  const mismatch = runFetchScript(['--check', '--allow-unverified'], { version: '2026.9.1' })
+
+  // Garbage magic with no manifest must also fail the weak check.
+  fs.mkdirSync(VENDOR_DIR, { recursive: true })
+  fs.writeFileSync(VENDOR_FILE, Buffer.alloc(1024 * 1024 + 16, 0x41))
+  const wrongMagic = runFetchScript(['--check', '--allow-unverified'], { version: '2026.9.1' })
+
+  assert.equal(mismatch.status, 1, 'a recorded-but-wrong digest is a real mismatch')
+  assert.match(mismatch.stderr, /digest mismatch/, 'and it says so')
+  assert.equal(wrongMagic.status, 1, 'a file that is not a plausible image fails the weak check')
+  assert.match(wrongMagic.stderr, /weak check failed/, 'and the reason names the magic check')
+})
+
+test('R-T10: the fetch argv pins https for the request AND redirects, and bounds the chain', () => {
+  const src = fs.readFileSync(FETCH_SCRIPT, 'utf8')
+  const argv = /spawn\(\s*'curl',\s*\[([\s\S]*?)\],\s*\{\s*stdio/.exec(src)?.[1] ?? ''
+  assert.ok(argv.length > 0, 'the curl argv shape changed — update this pin with it')
+  for (const flag of ['--proto', '=https', '--proto-redir', '=https', '--max-redirs', '3']) {
+    assert.match(argv, new RegExp(flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `curl argv must carry ${flag}`)
+  }
+  assert.match(src, /looksLikeTargetBinary/, 'and the artifact is magic-checked before landing')
+})
+
+test('R-T2: the fetch script probes BEFORE landing and never leaves the broken file', () => {
+  const src = fs.readFileSync(FETCH_SCRIPT, 'utf8')
+  const probeAt = src.indexOf("spawn(tempFile, ['--version']")
+  const landAt = src.indexOf('fs.renameSync(tempFile, vendorFile)')
+  assert.ok(probeAt > 0, 'the probe must run against the .download artifact')
+  assert.ok(landAt > probeAt, 'the probe must come BEFORE the rename into vendor/ (that order was the bug)')
+  assert.doesNotMatch(
+    src,
+    /spawn\(vendorFile, \['--version'\]/,
+    'probing the landed file is what left a dead binary in vendor/ for ever',
+  )
+  assert.match(src, /fs\.rmSync\(tempFile, \{ force: true \}\)[\s\S]{0,200}fail\(`--version exited/, 'a failed probe removes the artifact')
 })
 
 // ---------------------------------------------------------------------------

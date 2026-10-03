@@ -25,6 +25,11 @@
  *   node tools/fetch-cloudflared.mjs --check      # verify the existing vendor file only (offline)
  *   node tools/fetch-cloudflared.mjs --print      # show what would be fetched, write nothing
  *   node tools/fetch-cloudflared.mjs --force      # overwrite an existing vendor file
+ *   CLOUDFLARED_VERSION=2026.9.1 node tools/fetch-cloudflared.mjs --allow-unverified
+ *                                                # non-pinned fetch: no digest is known,
+ *                                                # so it lands only after a --version probe
+ *                                                # and records what landed in the manifest
+ *                                                # beside vendor/ for a later --check
  *
  * Network: only the fetch path touches the network (through `curl`, so proxy
  * environment variables apply). --check and --print never do.
@@ -45,6 +50,13 @@ const vendorFile = path.join(
   process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared',
 )
 const BASE_URL = 'https://github.com/cloudflare/cloudflared/releases/download'
+/**
+ * What actually landed in vendor/ after a successful fetch: `{version, sha256,
+ * file}`. `--check` needs it to verify a NON-pinned version honestly (see the
+ * --allow-unverified interaction below); the pinned path never needs it because
+ * lib/tunnel.js already carries that digest. Lives inside the ignored vendor/.
+ */
+const manifestFile = path.join(vendorDir, 'cloudflared.manifest.json')
 
 /**
  * Pull the pinned release tag and this platform's asset out of lib/tunnel.js.
@@ -105,6 +117,41 @@ function digestMatches(filePath, expected) {
   return true
 }
 
+/** The manifest a previous fetch left, or null when there is none/unreadable. */
+function readManifest() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestFile, 'utf8'))
+    if (typeof parsed?.version === 'string' && typeof parsed?.sha256 === 'string') return parsed
+  } catch {
+    /* no manifest, or not ours — --check falls back to a weaker check */
+  }
+  return null
+}
+
+/**
+ * First-bytes sanity check on the downloaded artifact. `curl --fail` plus a size
+ * floor already rules out most junk, but under `--allow-unverified` nothing else
+ * looks at the content at all: probe-11 installed 1.5 MB of arbitrary bytes into
+ * vendor/ that then failed to spawn. Branched by what this platform's asset
+ * really is, so a future archive path is not rejected for being an archive.
+ */
+function looksLikeTargetBinary(filePath) {
+  const head = Buffer.alloc(4)
+  let fd
+  try {
+    fd = fs.openSync(filePath, 'r')
+    if (fs.readSync(fd, head, 0, 4, 0) < 4) return false
+  } catch {
+    return false
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd)
+  }
+  if (/\.tgz$/.test(asset.file)) return head[0] === 0x1f && head[1] === 0x8b
+  if (process.platform === 'win32') return head[0] === 0x4d && head[1] === 0x5a
+  if (process.platform === 'linux') return head.readUInt32BE(0) === 0x7f454c46
+  return true // unknown platform: do not invent a magic number we cannot verify
+}
+
 const argv = process.argv.slice(2)
 const checkOnly = argv.includes('--check')
 const printOnly = argv.includes('--print')
@@ -130,9 +177,6 @@ console.log(`[fetch-cloudflared] runtime pin  : ${pinned} (${asset.file})`)
 console.log(`[fetch-cloudflared] expected sha : ${asset.sha256}`)
 console.log(`[fetch-cloudflared] vendor target: ${vendorFile}`)
 
-if (requested !== pinned && !allowUnverified) {
-  fail(`CLOUDFLARED_VERSION=${requested} is not the pinned ${pinned} and its digest is unknown here. Pass --allow-unverified to accept an unverified binary.`)
-}
 if (/\.tgz$/.test(asset.file)) {
   fail(
     `${asset.file} is an archive; vendor/ is only probed as a bare executable. ` +
@@ -151,10 +195,40 @@ if (checkOnly) {
     console.error(`[fetch-cloudflared] no vendor file at ${vendorFile}`)
     process.exit(1)
   }
-  if (requested !== pinned && !allowUnverified) {
+  if (unpinned && allowUnverified) {
+    // R-T3: --allow-unverified used to relax the FETCH but never the CHECK, so
+    // `CLOUDFLARED_VERSION=2026.9.1 --check --allow-unverified` compared a
+    // non-pinned file against the PINNED digest and always exited 1 (probe-09).
+    // The manifest a fetch writes beside vendor/ is the honest answer: it
+    // records what actually landed, so --check verifies THAT digest.
+    const manifest = readManifest()
+    if (manifest !== null && manifest.version === requested && manifest.file === asset.file) {
+      process.exit(digestMatches(vendorFile, manifest.sha256) ? 0 : 1)
+    }
+    console.warn(
+      `[fetch-cloudflared] no manifest for ${requested}; only checking that the file exists and looks like a ${asset.file} image.`,
+    )
+    const size = fs.statSync(vendorFile).size
+    const plausible = size >= 1024 * 1024 && looksLikeTargetBinary(vendorFile)
+    console.error(
+      plausible
+        ? `[fetch-cloudflared] weak check passed (${size} bytes). No digest is known for ${requested} — re-run the fetch to record one.`
+        : `[fetch-cloudflared] weak check failed (${size} bytes, wrong magic) for ${requested}.`,
+    )
+    process.exit(plausible ? 0 : 1)
+  }
+  if (unpinned) {
     console.warn('[fetch-cloudflared] --check against a non-pinned version compares the pinned digest anyway.')
   }
   process.exit(digestMatches(vendorFile, asset.sha256) ? 0 : 1)
+}
+
+// R-T3: the unpinned gate lives in the FETCH branch only. --print and --check
+// are read-only; blocking them on "digest unknown here" made an operator unable
+// to even inspect the contract they were about to fetch (probe-04:
+// `CLOUDFLARED_VERSION=2026.9.1 --print` exited 1 without printing).
+if (unpinned && !allowUnverified) {
+  fail(`CLOUDFLARED_VERSION=${requested} is not the pinned ${pinned} and its digest is unknown here. Pass --allow-unverified to accept an unverified binary.`)
 }
 
 if (fs.existsSync(vendorFile)) {
@@ -166,9 +240,30 @@ fs.mkdirSync(vendorDir, { recursive: true })
 const tempFile = `${vendorFile}.download`
 
 console.log(`[fetch-cloudflared] ${url}`)
-const curl = spawn('curl', ['-sSL', '--fail', '--retry', '3', '--max-time', '300', '-o', tempFile, url], {
-  stdio: ['ignore', 'inherit', 'inherit'],
-})
+// R-T10: --proto/--proto-redir keep a redirected fetch on https (a hostile or
+// misconfigured redirect must not hand us a plaintext binary), and --max-redirs
+// bounds the chain. Without them curl follows whatever the server says.
+const curl = spawn(
+  'curl',
+  [
+    '-sSL',
+    '--fail',
+    '--proto',
+    '=https',
+    '--proto-redir',
+    '=https',
+    '--max-redirs',
+    '3',
+    '--retry',
+    '3',
+    '--max-time',
+    '300',
+    '-o',
+    tempFile,
+    url,
+  ],
+  { stdio: ['ignore', 'inherit', 'inherit'] },
+)
 curl.on('error', (error) => {
   fs.rmSync(tempFile, { force: true })
   fail(`could not run curl: ${error.message}`)
@@ -190,20 +285,36 @@ curl.on('close', (code) => {
     fs.rmSync(tempFile, { force: true })
     fail('refusing to install a binary the bridge would not accept')
   }
-  fs.renameSync(tempFile, vendorFile)
-  if (process.platform !== 'win32') fs.chmodSync(vendorFile, 0o755)
-  console.log(`[fetch-cloudflared] wrote ${(size / 1024 / 1024).toFixed(1)} MB -> ${vendorFile}`)
+  if (!looksLikeTargetBinary(tempFile)) {
+    fs.rmSync(tempFile, { force: true })
+    fail(`download is not a plausible ${asset.file} image (wrong magic bytes) — refusing to install it`)
+  }
 
-  const probe = spawn(vendorFile, ['--version'], { stdio: ['ignore', 'inherit', 'inherit'] })
+  // R-T2: probe BEFORE landing. The old order renamed into vendor/ first and
+  // only then ran `--version`; on failure it exited 1 and LEFT the broken file in
+  // place, so the resolver kept handing a dead binary to every tunnel start
+  // (probe-11: 1.5 MB of junk landed in vendor/, `spawn UNKNOWN`).
+  const probe = spawn(tempFile, ['--version'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true })
   probe.on('error', (error) => {
-    console.error(`[fetch-cloudflared] binary will not start: ${error.message}`)
-    process.exit(1)
+    fs.rmSync(tempFile, { force: true })
+    fail(`the downloaded binary will not start (${error.message}) — vendor/ was left untouched`)
   })
   probe.on('close', (probeCode) => {
     if (probeCode !== 0) {
-      console.error(`[fetch-cloudflared] --version exited ${probeCode}`)
-      process.exit(probeCode ?? 1)
+      fs.rmSync(tempFile, { force: true })
+      fail(`--version exited ${probeCode} — vendor/ was left untouched`)
     }
+    fs.renameSync(tempFile, vendorFile)
+    if (process.platform !== 'win32') fs.chmodSync(vendorFile, 0o755)
+    // Record what landed so --check can verify a non-pinned version honestly.
+    const landed = { version: requested, sha256: sha256OfFile(vendorFile), file: asset.file }
+    try {
+      fs.writeFileSync(manifestFile, `${JSON.stringify(landed, null, 2)}\n`)
+    } catch (error) {
+      console.warn(`[fetch-cloudflared] could not write ${manifestFile}: ${error.message}`)
+    }
+    console.log(`[fetch-cloudflared] wrote ${(size / 1024 / 1024).toFixed(1)} MB -> ${vendorFile}`)
+    console.log(`[fetch-cloudflared] probed OK (--version exit 0) before landing; sha256 ${landed.sha256}`)
     console.log('[fetch-cloudflared] OK. Note the rank: resolveCloudflared() only reaches')
     console.log('  vendor/ when no override is set — DSH_POCKET_CLOUDFLARED,')
     console.log('  DSH_PHONE_NATIVE_CLOUDFLARED and CLOUDFLARED_BIN all outrank it.')

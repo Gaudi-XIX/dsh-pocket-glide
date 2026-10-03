@@ -6,10 +6,11 @@ node_modules/
 # <DSH_HOME>/pocket/cloudflared when an isolated data root is in force)
 vendor/
 
-# pocket's file logger writes pocket.log + one rotated pocket.log.1; tools may
-# drop run logs here too
+# pocket's file logger writes pocket.log plus a cascade of rotated generations
+# (pocket.log.1 … pocket.log.<ROTATIONS>, see lib/file-log.js); tools may drop
+# run logs here too. The glob covers every generation, not just the first.
 *.log
-*.log.1
+*.log.*
 
 # Packaging/unpacking byproducts. Empirical reason (change
 # 2026-10-02-fix-pocket-audit-remediation): a worker's `git archive HEAD` copy left
