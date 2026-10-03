@@ -5,7 +5,36 @@
 // the rest of the payload was rendered onto the phone screen as a wall of text.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderMobilePage, renderPairingPinPage } from '../lib/pages.js'
+import { readFileSync } from 'node:fs'
+import { renderMobilePage, renderMobileReconnectPage, renderPairingPinPage } from '../lib/pages.js'
+
+// The reconnect handoff and the pairing page used to carry their own copy of the
+// same five stage functions. They now pull one block from `sharedStageScript()`,
+// so every organ below must exist exactly once in the source and once per page.
+const SHARED_ORGANS = [
+  'const STEP_DWELL_MS=180,FETCH_TIMEOUT_MS=10000;',
+  'function withTimeout(promise,ms){',
+  'function pinError(message){',
+  'const rpc=async(method,payload={})=>{',
+  'const stageRunner=(setStep)=>async(index,work)=>{',
+  'async function verifyPin(pin){',
+  'async function showPinOnDesktop(){'
+]
+
+function occurrences(haystack, needle) {
+  let seen = 0
+  let at = 0
+  for (;;) {
+    const found = haystack.indexOf(needle, at)
+    if (found < 0) return seen
+    seen += 1
+    at = found + needle.length
+  }
+}
+
+function scriptBodies(html) {
+  return [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((match) => match[1])
+}
 
 const nastyBoot = JSON.stringify({
   ws: { items: [] },
@@ -45,4 +74,39 @@ test('the pairing page escapes the locale payload the same way', () => {
 
   assert.match(html, /const T=\{\{?/)
   assert.doesNotMatch(html, /\$\{JSON\.stringify/)
+})
+
+test('the two bootstrap pages share one copy of the stage script', () => {
+  const source = readFileSync(new URL('../lib/pages.js', import.meta.url), 'utf8')
+
+  assert.equal(occurrences(source, 'function sharedStageScript()'), 1, 'one definition, module scope')
+  assert.equal(occurrences(source, '${sharedStageScript()}'), 2, 'both bootstrap pages pull it')
+  for (const organ of SHARED_ORGANS) {
+    assert.equal(occurrences(source, organ), 1, `${organ} must not be written twice`)
+  }
+  assert.equal(occurrences(source, 'const stage=stageRunner(setStep);'), 2, 'each page keeps its own binding')
+})
+
+test('the shared block obeys the page template rules', () => {
+  const source = readFileSync(new URL('../lib/pages.js', import.meta.url), 'utf8')
+  const start = source.indexOf('function sharedStageScript(')
+  const block = source.slice(start, source.indexOf('export function renderMobileReconnectPage('))
+
+  assert.ok(block.length > 400, 'the block must still hold the whole stage script')
+  assert.equal(occurrences(block, '`'), 2, 'the block itself is one template literal')
+  assert.doesNotMatch(block, /<script/i, 'no opening tag inside the page template')
+  assert.doesNotMatch(block, /nonce/i, 'the nonce is the renderer own business')
+  assert.doesNotMatch(block, /\son(click|error|load|input|change|submit|keydown|keyup|focus|blur|touchstart|touchend)=/, 'no inline handler')
+})
+
+test('both bootstrap pages carry the shared block exactly once', () => {
+  const reconnect = scriptBodies(renderMobileReconnectPage('zh', 'lan', {})).join('\n')
+  const pairing = scriptBodies(renderPairingPinPage('zh', null, {})).join('\n')
+
+  for (const organ of SHARED_ORGANS) {
+    assert.equal(occurrences(reconnect, organ), 1, `the reconnect page must carry ${organ} once`)
+    assert.equal(occurrences(pairing, organ), 1, `the pairing page must carry ${organ} once`)
+  }
+  assert.equal(occurrences(reconnect, 'const stage=stageRunner(setStep);'), 1)
+  assert.equal(occurrences(pairing, 'const stage=stageRunner(setStep);'), 1)
 })
