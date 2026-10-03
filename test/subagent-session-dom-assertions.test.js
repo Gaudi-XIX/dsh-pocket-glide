@@ -23,7 +23,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, globSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { mobilePageAssets } from '../lib/pages.js';
@@ -56,21 +56,6 @@ function extractFunction(source, name) {
   throw new Error(`unbalanced braces after ${name}`);
 }
 
-function between(startAnchor, endAnchor, source = js) {
-  const start = source.indexOf(startAnchor);
-  const end = source.indexOf(endAnchor, start);
-  assert.notEqual(start, -1, `anchor ${startAnchor} must exist in the page script`);
-  assert.notEqual(end, -1, `anchor ${endAnchor} must exist in the page script`);
-  return source.slice(start, end);
-}
-
-// extractFunction counts braces from the signature, so a parameter with an object default
-// closes the count early: rpc(method,payload={},timeoutMs) yields a 30-byte fragment.
-// For those the slice runs to the next definition instead — still the real text, just wider.
-function extractUntil(name, endAnchor, source = js) {
-  return between(`function ${name}(`, endAnchor, source).replace(/\s+$/, '');
-}
-
 // The page's own label tables, so every copy asserted below is what the phone renders.
 function pageLabels(source) {
   const line = source.match(/^const L=(\{.*\});/m);
@@ -81,13 +66,11 @@ function pageLabels(source) {
 const L = pageLabels(js);
 const HISTORY_IDLE_CAP = Number(js.match(/HISTORY_POLL_IDLE_CAP_MS=(\d+)/)[1]);
 
-// The real rpc, real rpcFailure, real transport codes — loadHistory's catch reads the
-// errorCode off the thrown Error, so the thrower has to be the page's own thrower.
-const RPC_ORGANS = [
-  js.match(/const BRIDGE_TRANSPORT_CODES=[^\n]*/)[0],
-  extractFunction(js, 'rpcFailure'),
-  extractUntil('rpc', '// A dropped stream'),
-].join('\n');
+// loadHistory's catch reads the errorCode off whatever its rpc rejected with, so the
+// sandbox below hands it a hand-written `rpc` stub that throws the Error this file
+// controls. The page's own rpc / rpcFailure are deliberately NOT spliced in: the case is
+// about loadHistory's catch branch, and driving the real transport would test the bridge
+// instead while making the branch's own error handling harder to see.
 
 function fakeElement() {
   const el = {
@@ -329,49 +312,77 @@ test('R1.3 mutation: unprojected rows ghost, leak and steal focus — the projec
 
 // ------------------------------------------------- R1.4 default-entry drift guard
 
-test('R1.4 the default entry cannot pick up the DOM script — one-level glob, proven on disk', () => {
+test('R1.4 the default entry cannot pick up the DOM script — one-level glob, resolved by node:fs', () => {
   // WP-2 (test/dom/subagent-session-dom.mjs) needs a browser and must stay out of the
-  // default entry. The claim "test/*.test.js is a ONE-level glob" is the whole safety
-  // argument, so it is checked against the filesystem rather than restated:
+  // default entry. The safety argument is not about file NAMES — it is about how the
+  // entry's PATTERN RESOLVES — so the pattern is resolved here, by Node's own glob engine
+  // (`node:fs` `globSync`), the resolver `npm test` hands `test/*.test.js` to. A
+  // hand-rolled readdir list only resembles a glob: it can go red, or stay green, for
+  // reasons that have nothing to do with glob semantics.
   //
-  //   defaultSet — what `test/*.test.js` actually resolves to (immediate children only),
-  //   deepSet    — a recursive listing, which is what a * would have matched.
+  //   entry      — `*.test.js` over test/, the default entry spelled as package.json spells it;
+  //   domModules — `*.mjs` over test/dom/;
+  //   domEntry   — `*.test.js` over test/dom/: the SAME one-level pattern, asked of the
+  //                directory that holds the browser script;
+  //   deep       — an independent recursive walk, the second opinion on what a `*` does
+  //                not reach.
   //
-  // Both halves matter. If only the first were asserted, the test would also pass on a
-  // repository where the DOM script does not exist (vacuous). The second half proves the
-  // file is really there and really reachable by a recursive glob.
-  const domScript = path.join(TEST_DIR, 'dom', 'subagent-session-dom.mjs');
+  // The load-bearing pair is domModules + domEntry: the engine really does look inside
+  // test/dom/ (the .mjs pattern resolves the script there) and really is pattern-selective
+  // once it is there (.test.js resolves to nothing). Without the first half the second
+  // would be vacuous — an empty result is also exactly what a silently skipped directory
+  // produces. Drop any .test.js into test/dom/ and the domEntry line is what turns red,
+  // with glob semantics as its reason.
+  const domDir = path.join(TEST_DIR, 'dom');
+  const domScript = path.join(domDir, 'subagent-session-dom.mjs');
   const selfPath = fileURLToPath(import.meta.url);
 
-  const immediate = readdirSync(TEST_DIR, { withFileTypes: true })
-    .filter((entry) => !entry.isDirectory() && entry.name.endsWith('.test.js'))
-    .map((entry) => entry.name);
+  // Results are normalised against the directory each pattern ran in, so the assertions
+  // read the same whether the engine hands back relative names or absolute paths.
+  const resolved = (dir, pattern) => globSync(pattern, { cwd: dir })
+    .map((hit) => path.resolve(dir, hit));
+  const namesIn = (dir, pattern) => globSync(pattern, { cwd: dir })
+    .map((hit) => path.relative(dir, path.resolve(dir, hit)));
 
+  const entry = resolved(TEST_DIR, '*.test.js');
+  const domModules = namesIn(domDir, '*.mjs');
+  const domEntry = namesIn(domDir, '*.test.js');
+
+  assert.ok(statSync(domScript).isFile(), 'the DOM script exists where WP-2 put it');
+
+  // Non-vacuity: the one-level pattern really does resolve the whole suite, so "the DOM
+  // script is not in it" is a fact about this entry, not about an empty match.
+  assert.ok(entry.length > 30, `the default entry is the whole suite (${entry.length} files), not a stub`);
+  assert.ok(entry.includes(path.resolve(selfPath)), 'and this very file IS in the default entry');
+
+  assert.deepEqual(
+    domModules,
+    ['subagent-session-dom.mjs'],
+    'node:fs descends into test/dom/ — the .mjs pattern resolves the script there, which is what keeps the next line from being vacuous',
+  );
+  assert.deepEqual(
+    domEntry,
+    [],
+    'and the same one-level pattern over test/dom/ resolves no .test.js at all, which is what keeps a browser out of the default entry',
+  );
+
+  // The default entry, resolved by the same engine over the same tree, does not contain it.
+  assert.ok(!entry.includes(path.resolve(domScript)), 'a one-level glob over test/ does not descend into test/dom/');
+
+  // Independent second opinion, not glob-based: a recursive walk does see the script,
+  // and does not see any .test.js hiding under test/dom/.
   const deep = [];
   const walk = (dir, prefix = '') => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const next = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(next, `${prefix}${entry.name}/`);
-      else deep.push(`${prefix}${entry.name}`);
+    for (const entryItem of readdirSync(dir, { withFileTypes: true })) {
+      const next = path.join(dir, entryItem.name);
+      if (entryItem.isDirectory()) walk(next, `${prefix}${entryItem.name}/`);
+      else deep.push(`${prefix}${entryItem.name}`);
     }
   };
   walk(TEST_DIR);
-
-  // The DOM script is not a .test.js at all — the guard holds on two independent facts.
-  assert.ok(statSync(domScript).isFile(), 'the DOM script exists where WP-2 put it');
-  assert.ok(!domScript.endsWith('.test.js'), 'and it is not named like a test file');
-  assert.ok(
-    !immediate.includes('dom/subagent-session-dom.mjs'),
-    'a one-level glob over test/ never descends into test/dom/',
-  );
+  assert.ok(deep.includes('dom/subagent-session-dom.mjs'), 'a recursive glob would have found it');
   assert.ok(
     !deep.some((name) => name.startsWith('dom/') && name.endsWith('.test.js')),
     'and no .test.js hides under test/dom/, which is what would pull the browser in',
   );
-
-  // Non-vacuity: the recursive listing really does see the script, so the two assertions
-  // above are discriminating — they would fail the moment the file moved up into test/.
-  assert.ok(deep.includes('dom/subagent-session-dom.mjs'), 'a recursive glob would have found it');
-  assert.ok(immediate.includes(path.basename(selfPath)), 'and this very file IS in the default entry');
-  assert.ok(immediate.length > 30, `the default entry is the whole suite (${immediate.length} files), not a stub`);
 });

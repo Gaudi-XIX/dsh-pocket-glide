@@ -21,6 +21,14 @@
 //       a regression; stderr prints a pasteable launch command so the next run just works)
 //
 // Zero new dependencies: Node ≥22 ships a global WebSocket, and CDP needs nothing else.
+//
+// Scope of the refusal assertion: the only request this file makes for the child address is a
+// bare `fetch('/api/rpc', …)` written by the DRIVER, not the page's own rpc() — it runs
+// through no product code, and its answer is matched against this file's own REFUSAL
+// constants, so it demonstrates that the FAKE host contract echoes, nothing more. The
+// product-level guarantee (a refused host makes the page write nothing) lives in the sibling
+// file's R1.1-a, which drives the real loadHistory catch. A green run here is not product
+// coverage.
 
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -317,8 +325,17 @@ async function scenarioChat(host, port, failures) {
     await wait(6500);
     const second = await page.evaluate(SNAPSHOT);
 
-    // Non-hollow anchor (see handoff): drive ONE direct request for the child address so
-    // the sequence provably contains it and the mock's refusal is exercised end to end.
+    // Non-hollow anchor (see handoff): the DRIVER asks the mock host directly for the child
+    // address, so the sequence provably contains it and the mock's refusal branch is
+    // exercised. Read carefully what that proves: this is a bare `fetch('/api/rpc', …)` typed
+    // here by the test — it calls NO product code (no rpc / loadHistory / openSession /
+    // __pocket lies on this path), and the answer is compared against this file's OWN
+    // module-level REFUSAL constants. So it verifies an ECHO of the fake host contract, and
+    // only that: if the mock's refusal branch were wrong, this probe would reproduce the wrong
+    // branch faithfully. The product-level guarantee — a host refusal makes the page write
+    // nothing — is carried by R1.1-a in test/subagent-session-dom-assertions.test.js, which
+    // runs the page's real loadHistory and its real catch (deleting the busy branch turns
+    // that case red). Do not read a green run here as product coverage.
     const refusal = await page.evaluate(
       `fetch('/api/rpc',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({method:'session.history',payload:{sessionId:'${SUBAGENT_ID}'}})}).then((r)=>r.json())`,
     );
