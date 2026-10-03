@@ -14,9 +14,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { LanMobileBridge } from '../lib/bridge.js'
+import { EVENT_STREAM_ID, USER_QUESTION_EVENT } from '../lib/constants.js'
 import {
   MAX_PENDING_QUESTIONS,
   MAX_QUESTION_OPTIONS,
+  inspectPendingQuestion,
   parsePendingQuestion,
   parseQuestionResponse,
   validateQuestionAnswers,
@@ -191,4 +194,140 @@ test('custom text is kept only when it carries something', () => {
   })
   assert.equal(parsed.answers[0].custom, '  typed  ')
   assert.equal('custom' in parsed.answers[1], false, 'whitespace-only text is not an answer')
+})
+
+// WP-QUESTION-LOG / RA-5 observability: a refused set is refused OUT LOUD.
+//
+// The rescan found the last silent path in this file's story: `consumeMuxEnvelope`
+// called the parser, got `undefined`, and returned — no log, no counter, no
+// trace. A question the phone never renders is a prompt the operator waits on
+// forever. `inspectPendingQuestion` exists so the refusal can name itself.
+//
+// The log discipline is the other half of the assertion: reason and size only.
+// The Host's event id and the prose of a question are not this log's to hold,
+// matching the precedent already set by `rememberPendingQuestion`.
+
+/** A bridge reduced to what `consumeMuxEnvelope` touches on the question path. */
+function fakeBridge() {
+  const logs = []
+  return {
+    logs,
+    bridge: {
+      pendingQuestions: new Map(),
+      log(level, message) {
+        logs.push({ level, message })
+      },
+      rememberPendingQuestion(eventId, pending) {
+        this.pendingQuestions.set(eventId, pending)
+      },
+    },
+  }
+}
+
+/** One forwarded `user-questions/request` waterfall item, as the Host emits it. */
+function questionEnvelope(eventId, request) {
+  return JSON.stringify({
+    type: 'item',
+    streamId: EVENT_STREAM_ID,
+    value: {
+      type: 'waterfall',
+      event: USER_QUESTION_EVENT,
+      eventId,
+      agentId: 'sess-1',
+      request,
+    },
+  })
+}
+
+test('a refusal names its reason, and the wrapper still says undefined', () => {
+  const payloads = [
+    { reason: 'session', payload: { questions: [] } },
+    { reason: 'session', payload: { sessionId: 7, questions: [] } },
+    { reason: 'empty-question-set', payload: { sessionId: 's', questions: [] } },
+    { reason: 'empty-question-set', payload: { sessionId: 's' } },
+    {
+      reason: 'too-many-questions',
+      payload: questionSet(MAX_PENDING_QUESTIONS + 1),
+      count: MAX_PENDING_QUESTIONS + 1,
+    },
+    {
+      reason: 'too-many-options',
+      payload: questionSet(1, MAX_QUESTION_OPTIONS + 1),
+      count: MAX_QUESTION_OPTIONS + 1,
+    },
+    { reason: 'malformed-question', payload: { sessionId: 's', questions: [{ id: 'q1' }] } },
+    {
+      reason: 'duplicate-question-id',
+      payload: {
+        sessionId: 's',
+        questions: [
+          { id: 'q1', question: 'first?' },
+          { id: 'q1', question: 'second?' },
+        ],
+      },
+    },
+    {
+      reason: 'malformed-option',
+      payload: { sessionId: 's', questions: [{ id: 'q1', question: 'a?', options: [{ description: 'no label' }] }] },
+    },
+  ]
+  const seen = new Set()
+  for (const item of payloads) {
+    const inspected = inspectPendingQuestion('rpc-1', item.payload)
+    assert.equal(inspected.ok, false, `expected a refusal for ${item.reason}`)
+    assert.equal(inspected.reason, item.reason)
+    assert.equal('value' in inspected, false, 'a refusal carries no value')
+    if (item.count !== undefined) assert.equal(inspected.count, item.count)
+    assert.equal(parsePendingQuestion('rpc-1', item.payload), undefined, 'the wrapper is unchanged')
+    seen.add(inspected.reason)
+  }
+  assert.deepEqual(
+    [...seen].sort(),
+    ['duplicate-question-id', 'empty-question-set', 'malformed-option', 'malformed-question', 'session', 'too-many-options', 'too-many-questions'],
+    'every refusal path is reachable and named',
+  )
+})
+
+test('a carried set reports ok with the same value the wrapper returns', () => {
+  const payload = questionSet(2, 2)
+  const inspected = inspectPendingQuestion('rpc-1', payload)
+  assert.equal(inspected.ok, true)
+  assert.deepEqual(inspected.value, parsePendingQuestion('rpc-1', payload))
+  assert.equal(inspected.value.questions.length, 2)
+})
+
+test('the bridge logs a refused question exactly once, with no identity in it', () => {
+  const { bridge, logs } = fakeBridge()
+  const eventId = 'evt-secret-9d2f'
+  const prose = 'SECRET-PROSE'
+  // Two questions sharing one id: refused, and the payload still carries prose
+  // and an id the log must not repeat.
+  LanMobileBridge.prototype.consumeMuxEnvelope.call(
+    bridge,
+    questionEnvelope(eventId, {
+      questions: [
+        { id: 'q1', question: prose },
+        { id: 'q1', question: 'second?' },
+      ],
+    }),
+  )
+  assert.equal(logs.length, 1, 'exactly one line, not zero and not two')
+  assert.equal(logs[0].level, 'warn')
+  assert.match(logs[0].message, /reason=duplicate-question-id/)
+  assert.ok(!logs[0].message.includes(eventId), 'the Host event id is not this log to hold')
+  assert.ok(!logs[0].message.includes(prose), 'nor is the prose of a question')
+  assert.equal(bridge.pendingQuestions.size, 0, 'a refused set is not remembered')
+})
+
+test('a size refusal states the count, and a carried set logs nothing', () => {
+  const { bridge, logs } = fakeBridge()
+  LanMobileBridge.prototype.consumeMuxEnvelope.call(bridge, questionEnvelope('evt-1', questionSet(MAX_PENDING_QUESTIONS + 1)))
+  assert.equal(logs.length, 1)
+  assert.match(logs[0].message, new RegExp(`reason=too-many-questions count=${String(MAX_PENDING_QUESTIONS + 1)}`))
+  assert.equal(bridge.pendingQuestions.size, 0)
+
+  const carried = fakeBridge()
+  LanMobileBridge.prototype.consumeMuxEnvelope.call(carried.bridge, questionEnvelope('evt-2', questionSet(2)))
+  assert.equal(carried.logs.length, 0, 'a carried set is not an event')
+  assert.equal(carried.bridge.pendingQuestions.size, 1, 'and it is held for the answer')
 })
