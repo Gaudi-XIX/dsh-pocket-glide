@@ -4,6 +4,24 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.2.1 — 2026-10-03
+
+本卡四类修复（审计整改收尾）。生效同样需要重启 DeepSeek Harness。
+
+### 修复（用户可见）
+
+- 回合运行状态指示器（「深度思考中…」）在事件密集的长回合里会提前消失：流缓冲裁剪最老边后，
+  运行态被重新算成「未运行」。改为在事件到达时记录单调高水位，裁剪不再影响结论。
+- 手机端会话列表过滤 `origin === 'subagent'` 的子会话；命中宿主 `session/agent-busy`
+  （durable parent address）时回退到会话列表，不再把宿主的英文报错与粘住的「重试」留在屏上。
+- 桌面入口文案统一改名：`连接手机` / `Connect Phone` → `pocket`（`client/client.js` 与
+  `README`、`cordis.patch.yml`、`tools/install-to-profile.mjs` 同批）。
+
+### 修复（Windows 观感）
+
+- 解包 cloudflared 归档的那次 `tar` 调用补 `windowsHide`，减少 Windows 上多弹的黑窗。
+  真正的黑窗来源在宿主侧的 worker，不在本仓（见卡内证据报告）。
+
 ## 0.2.0 — 2026-10-03
 
 一轮覆盖全仓的审计整改（flow change `2026-10-02-fix-pocket-audit-remediation`）。
