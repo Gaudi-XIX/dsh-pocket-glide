@@ -344,4 +344,5 @@ node tools/gen-qr-fixtures.mjs                    # 重生成 test/fixtures/qr-m
     镜像名校验」，**不能按镜像名扫杀**（那会打到别人为别的端口跑的隧道）。
   - 会话级载体 WS 复用没做（本卡选了「退避」那一支）；`_sessionCursors` 运行中既不淘汰也不按 seq 前进刷新
     （只有 `stop()` 收尾）——这一条本卡另有包在推进，落地后本节须随动。
+- **刻意代价（不是缺陷）：进入「一条都还没画出来」的会话会多发一次头页请求**。触发面＝每次进入一个缓冲为空的会话，含全新空会话：页面侧 `fetchOlderPage()` 遇到 `anchorSeq<0` 按「从头拉」处理，发一条**不带 `beforeSeq`** 的 `session.history`（`maxMessages: 30`）去铺第一页；`ensureTranscriptFilled()` 的空转录自举循环因此会先走这一条。**为什么可接受**：这一条请求本身就是空缓冲会话唯一的自举路径，去掉它「加载更多」就没有出口；它拿到的是最新一页，且两道门都不会让它空转——页面侧 `ensureTranscriptFilled()` 用 `count()<=before` 判「没多出消息就停」，桥侧 `LanMobileBridge.forwardRpc` 的 `session.history` 分支在不带 `beforeSeq` 时保留三级阶梯护栏（`pageRequests` 三种形状）。行为锁在 `test/stream-watermark.test.js` 的 `AC-A6 an empty buffer pulls the head page without beforeSeq` 与 `test/transcript-order.test.js` 的头页用例里。
 - 一切页面/桥侧改动的上线方式都是「改完 → 用户重启 DSH → 手机上目验」，中途不催重启。
