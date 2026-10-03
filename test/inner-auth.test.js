@@ -299,3 +299,156 @@ test('a phone cookie presented to the Host surface is not the inner credential',
     await host.stop()
   }
 })
+
+// ---------------------------------------------------------------------------
+// RA-1 / RA-4 (rescan-auth): the redemption must be bounded, and invalidating
+// it must actually take effect.
+//
+// Before this change `redeem()` sent no signal and `ready()` handed out one
+// promise that could stay pending forever, while `invalidate()` cleared only
+// the settled cache — so a stalled exchange pinned every caller, could not be
+// discarded, and its (already rejected) credential was written back into the
+// cache the moment it did settle.
+//
+// `node --test` has no default per-test timeout, so every await on a possibly
+// hung promise below is wrapped in a race against a local deadline: a
+// regression fails the assertion instead of hanging the run.
+// ---------------------------------------------------------------------------
+
+/** Resolve to `{ settled, value }` instead of hanging when the promise never settles. */
+function settlesWithin(promise, milliseconds) {
+  return Promise.race([
+    promise.then((value) => ({ settled: true, value })),
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ settled: false }), milliseconds)
+      timer.unref?.()
+    }),
+  ])
+}
+
+test('a redemption that never answers releases its caller instead of pinning it', async () => {
+  // An honest stalled Host: the launch request is accepted and simply never
+  // answered, so only the redemption deadline can end the wait. The production
+  // deadline is 30 s; `AbortSignal.timeout` is a live, writable static that the
+  // module reads at call time, so it is shortened for the test and restored.
+  const held = []
+  const server = http.createServer(() => {
+    // Never respond.
+  })
+  server.on('connection', (socket) => held.push(socket))
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+  const originalTimeout = AbortSignal.timeout
+  AbortSignal.timeout = (milliseconds) => originalTimeout(Math.min(milliseconds, 50))
+  try {
+    const innerAuth = createInnerAuth(
+      () => `http://127.0.0.1:${String(port)}/connection/launch?token=${LAUNCH_TOKEN}`,
+    )
+    const first = await settlesWithin(innerAuth.ready(), 2000)
+    assert.equal(first.settled, true, 'the deadline ended the stalled redemption')
+    assert.equal(first.value, undefined, 'a stalled redemption yields no credential, it does not throw')
+    // The in-flight slot was cleared too, so the handle is usable rather than
+    // permanently attached to a dead exchange.
+    const second = await settlesWithin(innerAuth.ready(), 2000)
+    assert.equal(second.settled, true, 'the next call is not stuck behind the dead exchange')
+  } finally {
+    AbortSignal.timeout = originalTimeout
+    for (const socket of held) socket.destroy()
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test('the redemption always carries a deadline, and a caller signal joins it', async () => {
+  /** @type {any} */
+  let seen
+  const innerAuth = createInnerAuth(
+    () => 'http://inner.invalid/connection/launch?token=t',
+    async (_url, init) => {
+      seen = init
+      return { headers: { get: () => null } }
+    },
+  )
+  await innerAuth.ready()
+  assert.ok(seen.signal instanceof AbortSignal, 'the exchange is always cancellable')
+
+  const controller = new AbortController()
+  const other = createInnerAuth(
+    () => 'http://inner.invalid/connection/launch?token=t',
+    async (_url, init) => {
+      seen = init
+      return { headers: { get: () => null } }
+    },
+  )
+  await other.ready(controller.signal)
+  controller.abort()
+  assert.equal(seen.signal.aborted, true, 'the caller signal is combined into the redemption signal')
+
+  const already = new AbortController()
+  already.abort()
+  assert.equal(await other.ready(already.signal), undefined, 'an already-aborted caller starts nothing')
+})
+
+test('invalidate() discards an exchange that is still in flight', async () => {
+  let redemptions = 0
+  /** @type {() => void} */
+  let releaseFirst
+  const firstGate = new Promise((resolve) => {
+    releaseFirst = resolve
+  })
+  const innerAuth = createInnerAuth(
+    () => `http://inner.invalid/connection/launch?token=${LAUNCH_TOKEN}`,
+    async () => {
+      redemptions += 1
+      const mine = redemptions
+      if (mine === 1) await firstGate
+      return { headers: { get: () => `dsh-auth-g${String(mine)}=value-${String(mine)}` } }
+    },
+  )
+  const stale = innerAuth.ready() // exchange #1, still pending
+  innerAuth.invalidate() // the Host just rejected generation 1
+  const fresh = innerAuth.ready() // must not join the rejected exchange
+  releaseFirst()
+  assert.equal(await fresh, 'dsh-auth-g2=value-2', 'invalidation started a fresh redemption')
+  assert.equal(await stale, 'dsh-auth-g1=value-1', 'the older exchange still answers its own caller')
+  assert.equal(redemptions, 2, 'exactly one new redemption, no concurrent duplicate')
+  assert.equal(await innerAuth.ready(), 'dsh-auth-g2=value-2', 'the stale value did not repopulate the cache')
+  assert.equal(redemptions, 2, 'and nothing was redeemed again')
+})
+
+test('a cached credential expires so the next call re-redeems', async () => {
+  // RA-3 (rescan-auth): the cache used to have no age, so a consumer that has
+  // no 401 retry of its own (the mux carrier, the session stream) kept
+  // presenting a credential the Host had already rotated away.
+  let redemptions = 0
+  const innerAuth = createInnerAuth(
+    () => `http://inner.invalid/connection/launch?token=${LAUNCH_TOKEN}`,
+    async () => {
+      redemptions += 1
+      return { headers: { get: () => `dsh-auth-g${String(redemptions)}=value-${String(redemptions)}` } }
+    },
+    { ttlMs: 40 },
+  )
+  assert.equal(await innerAuth.ready(), 'dsh-auth-g1=value-1')
+  assert.equal(await innerAuth.ready(), 'dsh-auth-g1=value-1', 'inside the TTL the copy is reused')
+  assert.equal(redemptions, 1, 'so the single-use token is not burned on every call')
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(await innerAuth.ready(), 'dsh-auth-g2=value-2', 'past the TTL it is re-redeemed')
+  assert.equal(redemptions, 2, 'exactly once, not once per caller')
+})
+
+test('the cached credential is bounded well inside the host cookie lifetime', async () => {
+  // The host issues the browser-auth cookie for 30 days by default. The bridge
+  // must distrust its own copy long before the host would reject it, otherwise
+  // a rotation leaves the retry-less consumers stuck on a dead credential.
+  const { INNER_AUTH_TTL_MS, INNER_AUTH_TIMEOUT_MS } = await import('../lib/inner-auth.js')
+  assert.ok(INNER_AUTH_TTL_MS > 0, 'there is a TTL at all')
+  assert.ok(
+    INNER_AUTH_TTL_MS < 24 * 60 * 60 * 1000,
+    `the TTL is shorter than a day, saw ${String(INNER_AUTH_TTL_MS)}ms`,
+  )
+  assert.ok(INNER_AUTH_TIMEOUT_MS > 0, 'the redemption deadline is real')
+  assert.ok(
+    INNER_AUTH_TIMEOUT_MS <= 60_000,
+    `the deadline is bounded, saw ${String(INNER_AUTH_TIMEOUT_MS)}ms`,
+  )
+})

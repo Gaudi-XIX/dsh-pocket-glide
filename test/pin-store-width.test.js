@@ -7,7 +7,7 @@
 // %LOCALAPPDATA%\dsh-pocket\mobile-pairing-pin.json is never touched.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import {
@@ -82,4 +82,73 @@ test('no expiry field exists in the persisted document', () => {
   writePairingPinState(file, { pin: '222222', pinConsent: true })
   const raw = readFileSync(file, 'utf8')
   assert.doesNotMatch(raw, /expires|ttl|expiry/i, 'a durable password stays durable')
+})
+
+// ---------------------------------------------------------------------------
+// RA-2 (rescan-auth): a failed rename must not destroy the stored password.
+//
+// The previous build removed the destination *before* the rename, so any
+// transient rename failure (on Windows the destination is briefly held open by
+// a scanner or the indexer, which surfaces as EPERM) left no password on disk
+// at all — every already-paired phone was then asked for a brand-new PIN.
+//
+// `node:fs` cannot be stubbed here: `pin-store.js` imports `renameSync` as an
+// ESM named binding, and patching the `node:fs` module object is invisible to
+// it (measured: the module still made the real call). So the failure has to be
+// a real filesystem condition. Holding an open handle on the destination is
+// the deterministic one: rename then throws EPERM and the destination content
+// survives.
+// ---------------------------------------------------------------------------
+
+test('a failed rename leaves the stored password untouched and reports false', () => {
+  const durable = join(dir, 'durable-pin.json')
+  writeFileSync(durable, JSON.stringify({ pin: '135790', pinConsent: true }))
+  const holder = openSync(durable, 'r')
+  try {
+    assert.equal(
+      writePairingPinState(durable, { pin: '246801', pinConsent: true }),
+      false,
+      'a rename that cannot land is a failed write, not a successful one'
+    )
+    assert.deepEqual(
+      JSON.parse(readFileSync(durable, 'utf8')),
+      { pin: '135790', pinConsent: true },
+      'the previously stored password is still there'
+    )
+    assert.equal(readPairingPinState(durable).pin, '135790', 'and it still loads')
+  } finally {
+    closeSync(holder)
+  }
+  // The moment the destination is no longer held open the same write lands,
+  // so the failure above was the rename and not a broken store.
+  assert.equal(writePairingPinState(durable, { pin: '246801', pinConsent: true }), true)
+  assert.equal(readPairingPinState(durable).pin, '246801')
+})
+
+test('the write documents where 0600 actually holds', () => {
+  // RA-6 (rescan-auth): `{ mode: 0o600 }` is a no-op on Windows — the file
+  // lands 0666 and the real protection is the directory ACL. The doc comment
+  // must not keep claiming an unconditional 0600.
+  const source = readFileSync(new URL('../lib/pin-store.js', import.meta.url), 'utf8')
+  const start = source.indexOf('Atomically write the PIN state')
+  const end = source.indexOf('export function writePairingPinState')
+  assert.ok(start !== -1 && end > start, 'the write function carries a doc comment')
+  const doc = source.slice(start, end)
+  assert.match(doc, /POSIX/i, 'the doc names the platform where 0600 is enforced')
+  assert.match(doc, /Windows/i, 'and the platform where it is not')
+  assert.match(doc, /ACL/i, 'and what actually protects the file there')
+})
+
+test('a write leaves no temporary file behind, successful or not', () => {
+  const scratch = join(dir, 'scratch-pin.json')
+  writeFileSync(scratch, JSON.stringify({ pin: '111222', pinConsent: true }))
+  const holder = openSync(scratch, 'r')
+  try {
+    assert.equal(writePairingPinState(scratch, { pin: '333444', pinConsent: true }), false)
+  } finally {
+    closeSync(holder)
+  }
+  assert.equal(writePairingPinState(scratch, { pin: '333444', pinConsent: true }), true)
+  const leftovers = readdirSync(dir).filter((name) => name.startsWith('scratch-pin.json.') && name.endsWith('.tmp'))
+  assert.deepEqual(leftovers, [], 'no temporary file survives either path')
 })
