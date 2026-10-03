@@ -104,8 +104,19 @@ test('the error line carries a dropped stream; the transcript still carries the 
     "source.addEventListener('failure'",
     'source.onerror',
   )
-  assert.ok(streamSlice.includes("showError('chatError',{message:(frame.message||L.streamFailure)"), 'the failure frame still writes chatError')
+  assert.ok(streamSlice.includes("showError('chatError',{message:streamFailureCopy(frame)"), 'the failure frame still writes chatError')
   assert.ok(streamSlice.includes('important:true'), 'and is flagged so a clean poll cannot erase it')
+  // RC-7 moved the copy off the raw English frame.message and onto the bridge's
+  // locale-free `reason`. Both halves of that contract are pinned so a later worker
+  // cannot drop the reason table, nor drop the local-label fallback underneath it.
+  const copyFn = between('function streamFailureCopy(frame){', 'function showError(id,error,fallback){')
+  for (const key of ['L.streamFailBackoff', 'L.streamFailTransport', 'L.streamFailHost']) {
+    assert.ok(copyFn.includes(key), `${key} must localize its own reason`)
+  }
+  assert.ok(copyFn.includes('||L.streamFailure'), 'an unknown reason still falls back to the local label')
+  for (const key of ['streamFailBackoff', 'streamFailTransport', 'streamFailHost']) {
+    assert.ok(source.includes(`,${key}:`), `${key} must have a label beside streamFailure`)
+  }
 
   // 2. The transcript renderer never speaks for the transport.
   const renderer = source.slice(source.indexOf('function renderMessage('), source.indexOf('\n', source.indexOf('function renderMessage(')))
