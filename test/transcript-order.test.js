@@ -645,16 +645,25 @@ test('WD4 the watch stays off while a wait or a question owns the turn', () => {
   )
 })
 
-test('WD5 a question that owns the turn keeps the status up even when the idle bound fires without a scan in between', () => {
+test('WD5 a question that owns the turn keeps the status up, and the bound keeps watching', () => {
   const sandbox = buildRunningSandbox()
   sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
   sandbox.calls.length = 0
   sandbox.setQuestion('do it?')
   sandbox.expireTurn()
-  const after = sandbox.state()
-  assert.equal(after.turnRunningOpen, true, 'a question that owns the turn is not an idle turn, so the thinking status stays up')
-  assert.equal(after.agentRunning, true, 'and the run status stays with it')
-  assert.equal(after.turnRunningTimer, null, 'the timer is cleared, not left dangling')
+  const held = sandbox.state()
+  assert.equal(held.turnRunningOpen, true, 'a question that owns the turn is not an idle turn, so the thinking status stays up')
+  assert.equal(held.agentRunning, true, 'and the run status stays with it')
+  assert.ok(held.turnRunningTimer !== null, 'the watch is re-armed rather than dropped, so the mark stays bounded')
+  // The other half of the same promise: holding the mark must not mean holding it
+  // forever. Once the question is answered and no fresh event re-arms the watch,
+  // the very next expiry still retires the idle turn.
+  sandbox.calls.length = 0
+  sandbox.setQuestion(null)
+  sandbox.expireTurn()
+  const closed = sandbox.state()
+  assert.equal(closed.turnRunningOpen, false, 'an answered question hands the turn back to the bound')
+  assert.equal(closed.agentRunning, false, 'so nothing is left pinned')
 })
 
 // ------------------------------------------------------------------ M17 the echo
