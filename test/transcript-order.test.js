@@ -645,6 +645,18 @@ test('WD4 the watch stays off while a wait or a question owns the turn', () => {
   )
 })
 
+test('WD5 a question that owns the turn keeps the status up even when the idle bound fires without a scan in between', () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
+  sandbox.calls.length = 0
+  sandbox.setQuestion('do it?')
+  sandbox.expireTurn()
+  const after = sandbox.state()
+  assert.equal(after.turnRunningOpen, true, 'a question that owns the turn is not an idle turn, so the thinking status stays up')
+  assert.equal(after.agentRunning, true, 'and the run status stays with it')
+  assert.equal(after.turnRunningTimer, null, 'the timer is cleared, not left dangling')
+})
+
 // ------------------------------------------------------------------ M17 the echo
 
 test('M17 an older message with the same text never retires a fresh echo', () => {
