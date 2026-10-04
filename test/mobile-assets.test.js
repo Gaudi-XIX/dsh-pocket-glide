@@ -541,3 +541,29 @@ test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
   )
 })
 
+// ---------------------------------------------------------------------------
+// WP1 (change 2026-10-04-fix-pocket-r1-audit-batch, item 3): the shell has a
+// size ceiling. This is an arrival-green guard — it does not fail on the code
+// as inherited — so its red state is self-proven by temporarily setting
+// ASSET_BUDGET_BYTES below the measured weight and watching it go red (2026-10-04,
+// recorded in the change's progress log). Measure with Buffer.byteLength over
+// mobilePageAssets({locale}); 2026-10-04 that read zh css 30,438 B + js 136,451 B
+// = 166,889 B. Raise the constant deliberately if the shell must grow: the diff
+// of this test is the receipt.
+// ---------------------------------------------------------------------------
+
+const ASSET_BUDGET_BYTES = 200_000
+
+test('WP1 the shell assets stay inside the per-locale byte budget', () => {
+  for (const locale of ['zh', 'en']) {
+    const { css, js } = mobilePageAssets({ locale })
+    const cssBytes = Buffer.byteLength(css)
+    const jsBytes = Buffer.byteLength(js)
+    const total = cssBytes + jsBytes
+    assert.ok(
+      total <= ASSET_BUDGET_BYTES,
+      `${locale} shell assets weigh ${total} B (css ${cssBytes} B + js ${jsBytes} B), over the ${ASSET_BUDGET_BYTES} B budget — raise ASSET_BUDGET_BYTES deliberately if the growth is intended`
+    )
+  }
+})
+
