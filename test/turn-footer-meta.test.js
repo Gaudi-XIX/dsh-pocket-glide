@@ -345,8 +345,12 @@ test('A7 a sample without cacheWriteTokens still shows the pill', () => {
 })
 
 test('A7 an explicit zero cacheWriteTokens is accepted the same way', () => {
-  const html = assistantHtml({ inputTokens: 100, outputTokens: 20, totalTokens: 500, cacheReadTokens: 300, cacheWriteTokens: 0 })
-  assert.equal(pillText(html), '用量 500 tok')
+  // totalTokens must be 420, not 500: once the host declares cacheWriteTokens (even
+  // as zero) it declares the whole prompt, so the total has to equal
+  // input+cacheRead+cacheWrite+output. Probed against 3704 live assistant records,
+  // exactPrompt equalled the declared buckets in every single one.
+  const html = assistantHtml({ inputTokens: 100, outputTokens: 20, totalTokens: 420, cacheReadTokens: 300, cacheWriteTokens: 0 })
+  assert.equal(pillText(html), '用量 420 tok')
 })
 
 // ---------------------------------------------------------------- A8 sessions without usage
@@ -538,6 +542,47 @@ test('A15 the projection keeps eventTime and normalizeUsage nested, not top leve
   const window = between('function pad2(', 'function syncPromptUi(')
   assert.ok(!window.includes('function eventTime('), 'eventTime must not become a top-level dependency')
   assert.ok(!window.includes('function normalizeUsage('), 'normalizeUsage must not become a top-level dependency')
+})
+
+// --------------------------------------------------------- A16 one pill per turn (F-1)
+// F-1: eventSeq returns -1 for a seq-less record, so two assistant records in one
+// turn that both lack `seq` used to share _seq -1 and both satisfied the
+// `item.seq === turn.lastTextSeq` sentinel — printing the same total twice. The
+// winner is now decided by node identity (the last entry of textItems), which is
+// immune to a missing seq. mergeEntries explicitly supports seq-less entries, so
+// this input is anticipated rather than pathological.
+test('A16 a turn whose records carry no seq still shows exactly one usage pill', () => {
+  const bare = (step, text, total) => ({
+    event: {
+      type: 'assistant/message',
+      data: {
+        turn: 't1',
+        step,
+        message: { content: [{ type: 'text', text }] },
+        usage: { inputTokens: 100, outputTokens: 20, totalTokens: total, cacheReadTokens: 300 },
+      },
+    },
+  })
+  const events = [
+    { event: { type: 'user/message', data: { message: { source: { kind: 'user' }, content: [{ type: 'text', text: 'q' }] } } } },
+    bare(1, 'part one', 420),
+    bare(2, 'part two', 430),
+  ]
+  const html = renderAll(project(events)).join('')
+  const pills = html.match(/<span class="usage-pill"/g) || []
+  assert.equal(pills.length, 1, `only the turn's last text message carries the pill, saw ${pills.length}`)
+})
+
+// --------------------------------------------------------- A17 exact prompt parity
+// The desktop requires exactPrompt === knownPrompt once both cache keys are present.
+// Probed against 3704 live assistant records: in every sample carrying both keys,
+// and in every cacheRead-only sample, the total matched the declared buckets exactly.
+// A total that contradicts the declared buckets therefore cannot occur, and the one
+// that does show up in the fixtures must be hidden exactly as the desktop hides it.
+test('A17 a total that contradicts both declared cache buckets shows no pill', () => {
+  const html = assistantHtml({ inputTokens: 100, outputTokens: 20, totalTokens: 500, cacheReadTokens: 300, cacheWriteTokens: 0 })
+  assert.equal(pillText(html), null, 'exactPrompt 480 must not pass as knownPrompt 400')
+  assert.ok(clockText(html), 'hiding a contradictory pill must not cost the message its clock')
 })
 
 // ===== 变异实证 =====
