@@ -1,12 +1,20 @@
 // BF — a boot focus may not be another session's tool.
 //
-// The page filters the session list through one projection, and every load path
-// goes through it. The boot focus is the hole that survived: the host picks a
-// focus row without any origin filter, and the focus that travels in the
-// payload carries only a session id, so the page cannot tell a subagent row from
-// a real one unless it joins the id back to the raw row. This file pins that
-// join in both directions, drives the real reconcileBoot for both directions in
-// one case, and pins the projection that must not be rewritten along the way.
+// Two guards now stand between a subagent session and the phone's first paint,
+// and both are pinned here:
+//
+//   1. the bridge picker (`LanMobileBridge.pickFocusItem`) refuses a subagent row
+//      outright, so the doomed `session/page` ladder is never walked;
+//   2. the page (`openableFocus`) judges the focus the payload carried against the
+//      raw rows and falls back, so a payload that predates (1), or that arrives
+//      from anywhere else, still cannot drag the phone into a child session.
+//
+// (2) used to be the only guard, and that is why the host picker was described
+// here as "unfiltered" — the premise AC-1/AC-2 used to pin. The picker is filtered
+// now, so that premise is gone and those two cases assert the new invariant
+// instead. (2) is kept deliberately: it costs one join, and it is the layer that
+// still protects the phone when the focus arrives from a payload the bridge did
+// not build.
 //
 // Anchors are symbol anchors (function name + the exact statement), never line
 // numbers: line anchors drift with every neighbouring commit.
@@ -118,10 +126,12 @@ function runReconcileBoot({ fresh, activeSession = null, previousFocus = null })
   return { run, opened, fetchCalls }
 }
 
-test('AC-1 the boot payload can point its focus at a subagent row, and that focus carries no origin', async () => {
-  // The premise of the whole guard: the host picker is unfiltered, so the focus
-  // can be a subagent row, and the focus payload is structurally unable to say
-  // so. Only the raw row in sess.items can.
+test('AC-1 the bridge picker no longer offers a subagent row as the boot focus', async () => {
+  // The primary guard. A subagent row is the newest one here, which is exactly
+  // what the unfiltered picker used to land on — and it then spent the whole
+  // history ladder on attempts the Host refuses (`session/agent-busy`) before
+  // returning no focus history at all. Picking the real row instead is what
+  // gives the phone its instant first paint back.
   const bridge = makeBridge({
     items: hostRows(),
     invokeHarness: async () => ({ ok: true, value: { records: [{ seq: 1 }], hasMore: false } }),
@@ -129,19 +139,61 @@ test('AC-1 the boot payload can point its focus at a subagent row, and that focu
 
   const payload = await bridge.buildMobileBoot()
 
-  assert.equal(payload.focus.sessionId, 'child', 'the unfiltered host picker lands on the newest row')
-  assert.equal('origin' in payload.focus, false, 'the focus payload cannot carry the verdict')
+  assert.equal(payload.focus.sessionId, 'parent', 'the filtered picker lands on the real row')
+  assert.equal('origin' in payload.focus, false, 'the focus payload still carries no origin of its own')
   assert.equal(
     payload.sess.items.find((item) => item.sessionId === 'child').origin,
     'subagent',
-    'the raw row does carry it',
+    'the raw row does carry it — that is what the picker and the page guard read',
   )
 })
 
-test('AC-2 the trimmed boot list still keeps the focus row, so the guard can see the verdict', async () => {
-  // /api/boot ships listLimit 1. If the focus row were dropped there, a guard
-  // could not block it without also blocking every older payload, so the row
-  // being present under the limit is what makes failing open safe.
+test('AC-1b the Host is never asked to page the subagent row', async () => {
+  // The behavioural teeth of AC-1: AC-1 could pass on a picker that returned the
+  // right id and still paged the wrong session. Here every session the history
+  // ladder asks about is recorded, so a picker that merely relabelled the row —
+  // or that fell back to the newest row somewhere downstream — still goes red.
+  const paged = []
+  const bridge = makeBridge({
+    items: hostRows(),
+    invokeHarness: async (method, payloadIn) => {
+      if (method === 'session/page') {
+        paged.push(payloadIn?.request?.address?.sessionId)
+      }
+      return { ok: true, value: { records: [{ seq: 1 }], hasMore: false } }
+    },
+  })
+
+  const payload = await bridge.buildMobileBoot()
+
+  assert.ok(paged.length > 0, 'the ladder must actually have run — otherwise this proves nothing')
+  assert.deepEqual([...new Set(paged)], ['parent'], 'the ladder may only ever ask about the row it picked')
+  assert.equal(payload.focus.sessionId, 'parent')
+})
+
+test('AC-1c the picker fails open, so a row without a known origin still wins', () => {
+  // A guard that refused on anything unfamiliar would strand a phone whose list
+  // carries no origin key at all. Only a positively known subagent is turned away.
+  const pick = LanMobileBridge.prototype.pickFocusItem
+  const rows = [
+    { sessionId: 'no-key', updatedAt: 9 },
+    { sessionId: 'local', updatedAt: 8, origin: 'local' },
+  ]
+  assert.equal(pick.call({}, rows).sessionId, 'no-key', 'a row with no origin key is still a candidate')
+
+  const allSubagents = [
+    { sessionId: 'a', updatedAt: 9, origin: 'subagent' },
+    { sessionId: 'b', updatedAt: 8, origin: 'subagent' },
+  ]
+  assert.equal(pick.call({}, allSubagents), null, 'no real row means no focus at all')
+  assert.equal(pick.call({}, []), null)
+  assert.equal(pick.call({}, undefined), null)
+})
+
+test('AC-2 the trimmed boot list still keeps the row it picked', async () => {
+  // /api/boot ships listLimit 1. Whatever the picker chose must survive the
+  // trim, or the page has no row to judge the focus against and the boot payload
+  // describes a conversation the list never shows.
   const bridge = makeBridge({
     items: hostRows(),
     invokeHarness: async () => ({ ok: true, value: { records: [{ seq: 1 }], hasMore: false } }),
@@ -151,7 +203,8 @@ test('AC-2 the trimmed boot list still keeps the focus row, so the guard can see
 
   assert.equal(payload.sess.partial, true)
   assert.equal(payload.sess.items.length, 1)
-  assert.equal(payload.sess.items[0].origin, 'subagent')
+  assert.equal(payload.sess.items[0].sessionId, 'parent', 'the kept row is the one the payload focuses')
+  assert.equal(payload.sess.items[0].origin, undefined)
 })
 
 test('AC-3 a focus joined to an explicit subagent row is not openable', () => {
