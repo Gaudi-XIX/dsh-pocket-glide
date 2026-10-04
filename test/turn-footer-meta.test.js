@@ -108,13 +108,15 @@ function messageSandbox(locale) {
       `const esc=v=>String(v==null?'':v)`,
       `const markdown=text=>String(text||'')`,
       `const renderTurnProcess=()=>'<details class="turn-process"></details>'`,
+      `let agentRunning=false`,
+      `const setAgentRunning=v=>{agentRunning=v}`,
       source.slice(blockStart, blockEnd),
       between('function renderMessage(', 'function syncPromptUi(', source),
     ].join('\n')
     return new Function(
       'L',
       'activeSession',
-      `${body};return { renderMessage, renderMessageTail, formatMessageClock, formatTokens }`,
+      `${body};return { renderMessage, renderMessageTail, formatMessageClock, formatTokens, setAgentRunning }`,
     )(pageLabels(locale), 's1')
   })
 }
@@ -535,6 +537,14 @@ test('A15 renderMessage stays one line and appends the footer inside the message
   assert.ok(line.includes("role==='turn-error'"), 'the error bubble must still branch out first')
 })
 
+test('A19c the clock is gated by the running flag, not always stamped', () => {
+  const tail = between('function renderMessageTail(', 'function syncPromptUi(')
+  assert.ok(tail.includes('!agentRunning&&message.messageTime'),
+    'the clock must be suppressed while the session is running')
+  assert.ok(!tail.includes('message.messageTime?formatMessageClock'),
+    'the unguarded clock form must stay gone')
+})
+
 test('A15 the projection keeps eventTime and normalizeUsage nested, not top level', () => {
   const projection = between('function visibleMessages(', 'function inlineMarkdown(')
   assert.ok(projection.includes('const eventTime='), 'eventTime must be declared inside visibleMessages')
@@ -657,6 +667,26 @@ test('A17 a total that contradicts both declared cache buckets shows no pill', (
   const html = assistantHtml({ inputTokens: 100, outputTokens: 20, totalTokens: 500, cacheReadTokens: 300, cacheWriteTokens: 0 })
   assert.equal(pillText(html), null, 'exactPrompt 480 must not pass as knownPrompt 400')
   assert.ok(clockText(html), 'hiding a contradictory pill must not cost the message its clock')
+})
+
+// ------------------------------------------------- A20/A21 clock-while-running guard
+// The footer clock must not be stamped while the session is still running, or the
+// phone shows "finish time" on a message the user has not finished reading yet.
+// `renderMessageTail` reads the closure `agentRunning` (set by `updateRunning`).
+test('A20 no clock is stamped while the assistant is still running', () => {
+  const sandbox = messageSandbox('zh')
+  sandbox.setAgentRunning(true)
+  const html = assistantHtml({ time: LOCAL(26, 3, 12, 9, 5) })
+  // a clock would normally be present; the running guard must suppress it
+  assert.equal(clockText(html), null, 'no clock while agentRunning')
+  sandbox.setAgentRunning(false)
+})
+
+test('A21 the clock returns once the session is idle', () => {
+  const sandbox = messageSandbox('zh')
+  sandbox.setAgentRunning(false)
+  const html = assistantHtml({ time: LOCAL(26, 3, 12, 9, 5) })
+  assert.ok(clockText(html), 'the clock must be back when idle')
 })
 
 // ===== 变异实证 =====

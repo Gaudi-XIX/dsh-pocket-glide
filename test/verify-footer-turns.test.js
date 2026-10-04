@@ -97,6 +97,7 @@ function messageSandbox(locale) {
     `const esc=v=>String(v==null?'':v)`,
     `const markdown=text=>String(text||'')`,
     `const renderTurnProcess=()=>'<details class="turn-process"></details>'`,
+    `let agentRunning=false`,
     source.slice(blockStart, blockEnd),
     between('function renderMessage(', 'function syncPromptUi(', source),
   ].join('\n')

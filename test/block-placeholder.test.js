@@ -33,6 +33,7 @@ function renderSandbox(locale) {
   const body = [
     `const esc=v=>String(v==null?'':v)`,
     `const markdown=text=>String(text||'')`,
+    `let agentRunning=false`,
     js.slice(start, end),
     js.slice(messageStart, messageEnd),
   ].join('\n')
