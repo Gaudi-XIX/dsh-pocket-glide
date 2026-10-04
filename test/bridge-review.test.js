@@ -1074,3 +1074,35 @@ test('B2: a thrown handler after the SSE headers went out does not fake a 500', 
     await t.stop()
   }
 })
+
+// ---------------------------------------------------------------------------
+// C-1 (change 2026-10-04-fix-pocket-r1-audit-batch): an unexpected tunnel death
+// is a park, not a sign-out. The carrier dying must not take the phone's LAN
+// session with it — the same disposition as /desktop/disconnect, minus the
+// pairing rotation (rotating is the deliberate-teardown semantic, design D2).
+// ---------------------------------------------------------------------------
+
+test('C-1: an unexpected tunnel death parks the session and the phone reconnects with its cookie', async () => {
+  const t = await startBridge()
+  try {
+    const cookie = await t.pairMobile('PocketTunnelDeath/1.0')
+    const token = cookie.split('=')[1]
+    assert.equal(t.bridge.sessions.size, 1)
+
+    // Drive the real handler directly: no cloudflared needed, the handler only
+    // reads provider/url off the instance for its log line.
+    t.bridge.handleUnexpectedTunnelClose({ provider: 'test', url: 'https://example.trycloudflare.com' })
+
+    assert.equal(t.bridge.sessions.size, 0, 'the live session map is still cleared')
+    assert.equal(t.bridge.resumableSessions.has(token), true, 'the device is parked for revival (it used to be signed out flat)')
+    assert.equal(t.bridge.suspendedSessions.has(token), true, 'both parks hold it, same as /desktop/disconnect')
+
+    // The phone still holds its cookie: /reconnect must hand the session back.
+    const revived = await httpFetch(`${t.base}/reconnect`, { headers: { cookie } })
+    assert.equal(revived.status, 302, 'the parked device is redirected back into the app')
+    assert.equal(revived.headers.get('location'), '/')
+    assert.equal(t.bridge.sessions.has(token), true, 'and its session is live again')
+  } finally {
+    await t.stop()
+  }
+})

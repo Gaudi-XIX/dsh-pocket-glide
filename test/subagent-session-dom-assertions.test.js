@@ -310,6 +310,26 @@ test('R1.3 mutation: unprojected rows ghost, leak and steal focus — the projec
   assert.equal(focused.projections.values.title, 'CHILD-SECRET', 'and the pinned row is the leaking one');
 });
 
+// --------------------------------- R1-audit item 4 (change 2026-10-04-fix-pocket-r1-audit-batch)
+//
+// A session created on this phone used to be invisible: createSessionIn pushes a
+// blank:true summary (the :748 shape re-fed below) and renderWorkspaces filtered
+// EVERY blank row, so the new chat stayed a ghost until the server projected a
+// non-blank summary. The exemption is the missingSummary discriminant: the
+// synthesized placeholder carries missingSummary:true (the R1.2 guard above keeps
+// pinning that), a real blank row does not.
+
+test('R1-audit a locally created blank session is a visible row, not a ghost', () => {
+  const sandbox = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['new1'] }],
+    summaries: [{ sessionId: 'new1', updatedAt: Date.now(), running: false, blank: true, awaitingQuestion: false }],
+  });
+  sandbox.renderWorkspaces();
+
+  assert.deepEqual(sandbox.rowIds(), ['new1'], 'the new session is a clickable row');
+  assert.ok(sandbox.markup.includes('ws-count">1'), 'and the workspace count includes it');
+});
+
 // ------------------------------------------------- R1.4 default-entry drift guard
 
 test('R1.4 the default entry cannot pick up the DOM script — one-level glob, resolved by node:fs', () => {

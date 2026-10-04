@@ -753,3 +753,130 @@ test('the page reads errorCode at all (the audit claimed zero consumers)', () =>
   assert.ok(js.includes('body?.errorCode'), 'rpcFailure reads the field')
   assert.ok(!js.includes("throw new Error(j.error||L.failed)"), 'the old collapse is gone')
 })
+
+// ------------------------------------- R1-audit P0 (change 2026-10-04-fix-pocket-r1-audit-batch)
+//
+// The token listener shipped referencing an undeclared `frame`, and the whole SSE
+// suite above only ever COMPARED its text — the gap that let the P0 reach the
+// baseline. These tests execute the real openSessionStream body (buildStaleSandbox
+// house shape): the constructor's `new EventSource(...)` is injected as a fake that
+// captures the registered listeners and replays frames synchronously, so a throw
+// inside a listener escapes dispatch() and fails the test instead of hiding.
+
+function buildStreamSandbox() {
+  const containers = fakeContainers()
+  const world = { sources: [], calls: { render: 0, sync: 0, loadHistory: 0 } }
+  class FakeEventSource {
+    constructor(url) {
+      this.url = url
+      this.handlers = Object.create(null)
+      world.sources.push(this)
+    }
+    addEventListener(type, fn) {
+      ;(this.handlers[type] ??= []).push(fn)
+    }
+    dispatch(type, data) {
+      for (const fn of this.handlers[type] ?? []) fn({ data })
+    }
+    close() {}
+  }
+  const open = between('function openSessionStream(sessionId)', 'async function showSessionList()')
+  const make = new Function(
+    'EventSource',
+    'world',
+    `
+    let activeSession='s1',sessionStream=null,tokenStream=null,streamConnected=false
+    let streamEvents=[],streamProjections=null,streamRevision=0,lastStreamFrameAt=0
+    let pendingQuestion=null
+    const STREAM_EVENTS_CAP=400
+    function armStreamSnapshot(){}
+    function streamWatermark(){return -1}
+    function noteStreamRecovery(){}
+    function applyLiveStatus(){}
+    function mergeEntries(list){return list.slice()}
+    function applyHistory(){}
+    function markStreamSnapshot(){}
+    function showSessionModel(){}
+    function queueStreamRender(){world.calls.render+=1}
+    function schedulePendingSync(){world.calls.sync+=1}
+    function loadHistory(){world.calls.loadHistory+=1}
+    function showError(){}
+    function streamFailureCopy(){return 'stream failed'}
+    function notifyStreamDown(){}
+    function schedulePoll(){}
+    function armStreamStaleWatch(){}
+    ${extractFunction(js, 'tokenChunkText')}
+    ${open}
+    return {
+      openSessionStream,
+      get tokenStream(){return tokenStream},
+      get streamEvents(){return streamEvents},
+      get lastStreamFrameAt(){return lastStreamFrameAt},
+      set activeSession(value){activeSession=value},
+    }
+  `,
+  )
+  const sandbox = make(FakeEventSource, world)
+  sandbox.world = world
+  sandbox.containers = containers
+  return sandbox
+}
+
+test('R1-audit P0 the token listener really runs: start builds the bubble, chunk appends, end clears', () => {
+  const sandbox = buildStreamSandbox()
+  sandbox.openSessionStream('s1')
+  const source = sandbox.world.sources.at(-1)
+  assert.ok(source, 'the stream source was constructed')
+  assert.match(source.url, /sessionId=s1/, 'the stream targets the opened session')
+
+  source.dispatch('token', JSON.stringify({ type: 'start', revision: 1 }))
+  assert.ok(sandbox.tokenStream, 'start builds the token bubble')
+  assert.equal(sandbox.tokenStream.revision, 1)
+
+  source.dispatch('token', JSON.stringify({ type: 'chunk', revision: 1, index: 0, chunk: '你' }))
+  assert.equal(sandbox.tokenStream.text, '你', 'the chunk lands in the bubble text')
+  assert.equal(sandbox.world.calls.render, 1, 'a render is queued for the new text')
+
+  source.dispatch('token', JSON.stringify({ type: 'chunk', revision: 1, index: 0, chunk: '你' }))
+  assert.equal(sandbox.tokenStream.text, '你', 'a replayed index is deduped, not appended twice')
+
+  source.dispatch('token', JSON.stringify({ type: 'end', outcome: { kind: 'done' } }))
+  assert.equal(sandbox.tokenStream, null, 'end clears the bubble')
+  assert.equal(sandbox.world.calls.loadHistory, 0, 'a finished turn needs no history reload')
+  assert.ok(sandbox.lastStreamFrameAt > 0, 'and every frame fed the staleness clock')
+})
+
+test('R1-audit P0 an abandoned turn drops the bubble and reloads the durable history', () => {
+  const sandbox = buildStreamSandbox()
+  sandbox.openSessionStream('s1')
+  const source = sandbox.world.sources.at(-1)
+  source.dispatch('token', JSON.stringify({ type: 'chunk', revision: 2, index: 0, chunk: '半截' }))
+  source.dispatch('token', JSON.stringify({ type: 'end', outcome: { kind: 'abandoned' } }))
+  assert.equal(sandbox.tokenStream, null, 'the half answer goes')
+  assert.equal(sandbox.world.calls.loadHistory, 1, 'the durable record is pulled back')
+})
+
+test('R1-audit P0 frames for another session are ignored before any state changes', () => {
+  const sandbox = buildStreamSandbox()
+  sandbox.openSessionStream('s1')
+  const source = sandbox.world.sources.at(-1)
+  sandbox.activeSession = 's2'
+  source.dispatch('token', JSON.stringify({ type: 'start', revision: 1 }))
+  assert.equal(sandbox.tokenStream, null, 'the gating return runs first')
+})
+
+test('R1-audit P0 a corrupt snapshot or event frame is dropped, not fatal (item 5)', () => {
+  const sandbox = buildStreamSandbox()
+  sandbox.openSessionStream('s1')
+  const source = sandbox.world.sources.at(-1)
+
+  assert.doesNotThrow(() => source.dispatch('snapshot', 'not-json'), 'a corrupt snapshot frame must not throw')
+  assert.equal(sandbox.streamEvents.length, 0, 'the frame is dropped whole')
+
+  assert.doesNotThrow(() => source.dispatch('event', '{"event":'), 'a corrupt event frame must not throw')
+  assert.equal(sandbox.streamEvents.length, 0, 'and the buffer is untouched')
+
+  // A well-formed frame still gets through afterwards, so the drop is per-frame.
+  assert.doesNotThrow(() => source.dispatch('event', JSON.stringify({ event: { type: 'model/selection' } })))
+  assert.equal(sandbox.streamEvents.length, 1, 'the next good frame still lands')
+})
