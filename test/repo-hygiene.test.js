@@ -256,3 +256,36 @@ test('⑨ CHANGELOG.md 在场、最新一节跟着 version 走，且 README 不�
   assert.match(readme, /CHANGELOG\.md/, 'README 必须指向 CHANGELOG.md')
   assert.doesNotMatch(readme, /不维护\s*CHANGELOG/i, 'README 不得再声称本仓不维护 CHANGELOG —— 它现在维护')
 })
+
+// ⑩（2026-10-05-fix-pocket-r2-batch，项 1）
+// 钉的是哪句语义：本仓的文本资产必须**字节级干净**——每个 git 追踪的 `.md` 严格 UTF-8 解码
+// 且零杂散控制字节。事故形状（change 2026-10-04-feat-pocket-message-time-and-token-usage
+// verify 轮实录）：latin1 拼接为保 CRLF 把 CHANGELOG.md 的 CJK 码点截断到低字节，随 d4f2960
+// 发布并跨三个 commit 存活，唯一探测器是一条偶然的 grep「line is not valid UTF-8」；一次补救
+// 还把真 CJK 再过一遍 latin1 让损伤翻倍。配套编辑纪律：UTF-8 文本**不做 latin1 往返**来保
+// 行尾——要动字节就用 Buffer 切拼（本仓 lib/tools/test 现无任何 latin1/binary 编辑路径，grep
+// 实证；谁引入谁同时改这条的钉注释）。白名单只放 \t(09) \n(0A) \r(0D)：markdown 正文里
+// 合法的控制字节仅此三个；误伤更宽的字节（如 \f）时按红名放宽，放宽须本注释与断言成对改。
+// 枚举走 `git ls-files`：tracked 面才是会随 commit 发布的面，工作区杂散文件不读进来。
+test('⑩ 追踪的每个 .md 都严格 UTF-8 且零杂散控制字节', () => {
+  const ls = spawnSync('git', ['ls-files', '--', '*.md'], { cwd: root, encoding: 'utf8' })
+  assert.equal(ls.status, 0, `git ls-files 失败：${ls.stderr?.trim()}`)
+  const files = (ls.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean)
+  assert(files.length >= 2, `追踪 .md 至少应有 README 与 CHANGELOG 两件，实际 ${files.length}`)
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  for (const rel of files) {
+    const buf = readFileSync(join(root, rel))
+    let text
+    try {
+      text = decoder.decode(buf)
+    } catch (e) {
+      assert.fail(`${rel} 不是合法 UTF-8：${e.message}（latin1 拼接截断的典型形状，见 ⑩ 钉注释）`)
+    }
+    for (let i = 0; i < buf.length; i++) {
+      const b = buf[i]
+      if (b === 0x09 || b === 0x0a || b === 0x0d) continue
+      assert(!(b < 0x20 || b === 0x7f), `${rel} 含杂散控制字节 0x${b.toString(16).padStart(2, '0')}（偏移 ${i}）`)
+    }
+    assert(typeof text === 'string', `${rel} 解码结果异常`)
+  }
+})
