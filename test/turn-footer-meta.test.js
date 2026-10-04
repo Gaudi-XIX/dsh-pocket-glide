@@ -547,10 +547,10 @@ test('A15 the projection keeps eventTime and normalizeUsage nested, not top leve
 // --------------------------------------------------------- A16 one pill per turn (F-1)
 // F-1: eventSeq returns -1 for a seq-less record, so two assistant records in one
 // turn that both lack `seq` used to share _seq -1 and both satisfied the
-// `item.seq === turn.lastTextSeq` sentinel — printing the same total twice. The
-// winner is now decided by node identity (the last entry of textItems), which is
-// immune to a missing seq. mergeEntries explicitly supports seq-less entries, so
-// this input is anticipated rather than pathological.
+// `item.seq === turn.lastTextSeq` sentinel — printing the same total twice.
+// mergeEntries explicitly supports seq-less entries, so this input is anticipated
+// rather than pathological. The winner is now decided by the position of the text
+// item inside `textItems` (see A19), which is immune to a missing seq.
 test('A16 a turn whose records carry no seq still shows exactly one usage pill', () => {
   const bare = (step, text, total) => ({
     event: {
@@ -571,6 +571,80 @@ test('A16 a turn whose records carry no seq still shows exactly one usage pill',
   const html = renderAll(project(events)).join('')
   const pills = html.match(/<span class="usage-pill"/g) || []
   assert.equal(pills.length, 1, `only the turn's last text message carries the pill, saw ${pills.length}`)
+})
+
+// ---------------------------------------------- A18 one pill per message, not per block
+// The verify re-check found the F-1 fix only half-done. The winner was picked by
+// NODE identity, but `textItems` holds one entry per TEXT BLOCK and contentBlocks()
+// flatMaps the content array — so a single assistant/message carrying two text
+// blocks put both entries on one node, both compared equal, and both printed the
+// same total. contentBlocks' flatMap and MessageBase.content being a block array
+// make this shape ordinary, not exotic: the phone draws one bubble per text block,
+// so the user saw the same number twice on one turn.
+test('A18 one assistant message with several text blocks shows exactly one usage pill', () => {
+  const many = (blocks) => ({
+    event: {
+      type: 'assistant/message',
+      seq: 2,
+      data: {
+        turn: 't1',
+        step: 1,
+        message: { content: blocks.map((text) => ({ type: 'text', text })) },
+        usage: { inputTokens: 100, outputTokens: 20, totalTokens: 420, cacheReadTokens: 300 },
+      },
+      time: DEFAULT_TIME,
+    },
+  })
+  for (const count of [2, 3, 5]) {
+    const events = [
+      userEvent(1, 'q', DEFAULT_TIME),
+      many(Array.from({ length: count }, (_, i) => `part ${i + 1}`)),
+    ]
+    const html = renderAll(project(events)).join('')
+    const pills = html.match(/<span class="usage-pill"/g) || []
+    assert.equal(pills.length, 1, `${count} text blocks in one message must still print one pill, saw ${pills.length}`)
+    // count assistant bubbles + the one user bubble, all of which keep a clock.
+    const clocks = html.match(/<span class="msg-clock">/g) || []
+    assert.equal(clocks.length, count + 1, `each of the ${count} blocks is its own bubble and keeps its clock`)
+  }
+})
+
+test('A18 the pill rides the LAST text block when an earlier step had text too', () => {
+  const USAGE = { inputTokens: 100, outputTokens: 20, totalTokens: 420, cacheReadTokens: 300 }
+  const events = [
+    userEvent(1, 'q', DEFAULT_TIME),
+    assistantEvent(2, { turn: 't1', step: 1, text: 'first', usage: USAGE, time: DEFAULT_TIME }),
+    {
+      event: {
+        type: 'assistant/message',
+        seq: 3,
+        data: {
+          turn: 't1',
+          step: 2,
+          message: { content: [{ type: 'text', text: 'x' }, { type: 'text', text: 'y' }] },
+          usage: USAGE,
+        },
+        time: DEFAULT_TIME,
+      },
+    },
+  ]
+  const projected = project(events)
+  const billed = projected.filter((message) => message.usage !== undefined)
+  assert.equal(billed.length, 1, 'exactly one bubble in the whole turn may carry the pill')
+  assert.equal(billed[0].blocks[0].text, 'y', 'and it must be the final text block of the final message')
+})
+
+// The mechanism, pinned so the node-identity shape cannot come back. Both the old
+// F-1 sentinel and the half-fix are named here: a regression to either would make
+// the projections above print one pill per block again.
+test('A19 the pill winner is the last text item index, not a node or a seq comparison', () => {
+  const projection = between('function visibleMessages(events)', 'function inlineMarkdown(')
+  assert.ok(projection.includes('const lastTextIdx=textItems.length-1'),
+    'the winner must be derived from the text item count')
+  assert.ok(projection.includes('usage:textIdx===lastTextIdx?normalizeUsage(turn.usage):undefined'),
+    'the pill predicate must compare the item index')
+  assert.ok(!projection.includes('lastTextSeq'), 'the _seq sentinel must stay gone')
+  assert.ok(!projection.includes('item.node==='), 'the half-fixed node comparison must stay gone')
 })
 
 // --------------------------------------------------------- A17 exact prompt parity
