@@ -345,7 +345,8 @@ test('the status dot gained a readable copy slot beside it', () => {
 
 test('the aria-label logic stayed where it was and the copy is written beside it', () => {
   const checking = 'async ' + extractFunction(js, 'checkConnection')
-  assert.equal((checking.match(/status\.setAttribute\('aria-label',/g) || []).length, 3, 'three branches still set the label')
+  // Four states since the three-status-light batch: green / degraded / red / red-catch.
+  assert.equal((checking.match(/status\.setAttribute\('aria-label',/g) || []).length, 4, 'every branch still sets the label')
   assert.ok(between('function applyLiveStatus(body)', '(async()=>{').includes('setStatusCopy(L.statusConnected)'), 'the live status frame writes the copy too')
 })
 

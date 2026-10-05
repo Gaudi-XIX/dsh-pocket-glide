@@ -68,8 +68,8 @@ test('all three session.list loads go through the one projection', () => {
 test('a locally created session is not listed when the host says it is a subagent', () => {
   const body = extractFunction(js, 'createSessionIn');
   assert.ok(
-    body.includes("if(created.origin!=='subagent')sessionSummaries.push("),
-    'the local push is origin-guarded like the loads are',
+    body.includes("if(created.origin!=='subagent'){const summary="),
+    'the local summary is origin-guarded like the loads are (optimistic creation)',
   );
 });
 

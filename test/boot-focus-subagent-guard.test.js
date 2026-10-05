@@ -312,8 +312,8 @@ test('AC-11 the list projection and its four landing points are untouched', () =
     assert.ok(extractFunction(js, name).includes(needle), `${name} must still project its answer`)
   }
   assert.ok(
-    extractFunction(js, 'createSessionIn').includes("if(created.origin!=='subagent')sessionSummaries.push("),
-    'the local push is still origin-guarded',
+    extractFunction(js, 'createSessionIn').includes("if(created.origin!=='subagent'){const summary="),
+    'the local summary is still origin-guarded (optimistic creation converts or drops the provisional row)',
   )
   assert.ok(
     !/sessionSummaries\s*=\s*(?:value|sessions|sessInput)\.items/.test(js),
