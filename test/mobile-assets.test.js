@@ -52,6 +52,17 @@ test('without assets the document stays self-contained, as before', () => {
   assert.doesNotMatch(inline, /app\.js\?/)
 })
 
+test('the head carries the PWA manifest link next to the touch icon, inline and split alike', () => {
+  const link = '<link rel="manifest" href="/manifest.json">'
+  for (const document of [inline, split]) {
+    const touch = document.indexOf('<link rel="apple-touch-icon"')
+    const manifest = document.indexOf(link)
+    assert.notEqual(manifest, -1, 'the manifest link must be in the head')
+    assert.ok(manifest > touch, 'the manifest link sits after the apple-touch-icon link')
+    assert.ok(manifest < document.indexOf('</head>'), 'and stays inside <head>')
+  }
+})
+
 test('the bridge serves the shell assets with a long private lifetime', async () => {
   const t = await startBridge()
   try {
@@ -547,9 +558,10 @@ test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
 // as inherited — so its red state is self-proven by temporarily setting
 // ASSET_BUDGET_BYTES below the measured weight and watching it go red (2026-10-04,
 // recorded in the change's progress log). Measure with Buffer.byteLength over
-// mobilePageAssets({locale}); 2026-10-04 that read zh css 30,438 B + js 136,451 B
-// = 166,889 B. Raise the constant deliberately if the shell must grow: the diff
-// of this test is the receipt.
+// mobilePageAssets({locale}); the historical measurement used to be baked into
+// this comment and has since been removed — the assertion message below carries
+// the live values on every run. Raise the constant deliberately if the shell
+// must grow: the diff of this test is the receipt.
 // ---------------------------------------------------------------------------
 
 const ASSET_BUDGET_BYTES = 200_000

@@ -128,6 +128,20 @@ export async function startBridge(opts = {}) {
     return (boot.headers.get('set-cookie') ?? '').split(';')[0]
   }
 
+  /** Desktop-side verdict on one pending pairing (design #4a approve flow). */
+  async function approvePendingPairing(confirmId, desktopCookie, approve = true) {
+    return httpFetch(`${base}/desktop/pair/confirm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Cookie: desktopCookie },
+      body: JSON.stringify({ id: confirmId, approve }),
+    })
+  }
+
+  /** The phone's poll for its pairing verdict. */
+  async function pollPendingPairing(confirmId, headers = {}) {
+    return httpFetch(`${base}/pair/pending?confirmId=${encodeURIComponent(confirmId)}`, { headers })
+  }
+
   async function stop() {
     await bridge.stop()
     if (harness) await harness.stop()
@@ -140,7 +154,7 @@ export async function startBridge(opts = {}) {
       .map(({ level, message }) => `[${level}] ${message}`)
   }
 
-  return { bridge, snap, base, harness, pairMobile, pairDesktop, stop, logs, transportFailures }
+  return { bridge, snap, base, harness, pairMobile, pairDesktop, approvePendingPairing, pollPendingPairing, stop, logs, transportFailures }
 }
 
 // ---------------------------------------------------------------------------

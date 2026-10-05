@@ -8,14 +8,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { execFileSync, spawnSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { Readable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import {
-  resolveCloudflared,
-  ensureCloudflared,
-  extractTryCloudflareUrl,
-} from '../lib/tunnel.js'
+import { startCloudflareNamedTunnel, resolveCloudflared, ensureCloudflared, extractTryCloudflareUrl } from '../lib/tunnel.js'
+import { createSettingsStore } from '../lib/settings-store.js'
 import { LanMobileBridge } from '../lib/bridge.js'
 import { createMuxMonitor } from '../lib/mux-client.js'
 import { startBridge, httpFetch } from './helpers.js'
@@ -1291,4 +1289,171 @@ test('Bug 2: the cloudflared archive extraction spawns with windowsHide', () => 
   assert.ok(options.length < 200, 'that slice must be the options object, not the rest of the file')
   assert.match(options, /windowsHide:\s*true/, 'the extraction child must be hidden on Windows')
   assert.match(options, /timeout:\s*60000/, 'and it must keep its 60s extraction timeout')
+})
+
+// ---------------------------------------------------------------------------
+// Design #3b — the named tunnel (fixed hostname, dashboard token). Same
+// injection discipline as tunnel-output.test.js: a stubbed resolver and an
+// injected spawner, so nothing here reaches the network or the machine cache
+// chain. Assertion MESSAGES never carry the configured token — the args
+// themselves are the one place it may appear in this file.
+// ---------------------------------------------------------------------------
+
+
+/** Minimal child double: readable pipes, kill recorder, close/error emitter. */
+function fakeNamedChild() {
+  const child = new EventEmitter()
+  child.stdout = new Readable({ read() {} })
+  child.stderr = new Readable({ read() {} })
+  child.exitCode = null
+  child.signalCode = null
+  child.killed = []
+  child.kill = (signal) => {
+    child.killed.push(signal ?? 'SIGTERM')
+    child.exitCode = 1
+    return true
+  }
+  return child
+}
+
+const NAMED_STUB_ENSURE = async () => 'stubbed-cloudflared'
+
+test('named tunnel: spawns run --token and resolves after the grace period', async () => {
+  const child = fakeNamedChild()
+  const spawned = []
+  const pending = startCloudflareNamedTunnel({
+    port: 43127,
+    token: 'ey-named-token-value',
+    hostname: 'phone.example.com',
+    ensureImpl: NAMED_STUB_ENSURE,
+    spawnImpl: (bin, args) => {
+      spawned.push({ bin, args })
+      return child
+    },
+    graceMs: 20,
+  })
+  const instance = await pending
+  assert.equal(instance.provider, 'cloudflare-named')
+  assert.equal(instance.url, 'https://phone.example.com')
+  assert.equal(spawned.length, 1, 'the injected spawner was used — nothing was really launched')
+  assert.equal(spawned[0].bin, 'stubbed-cloudflared')
+  assert.deepEqual(
+    spawned[0].args,
+    ['tunnel', '--no-autoupdate', 'run', '--token', 'ey-named-token-value']
+  )
+  // The pipes stay attached and draining for the life of the tunnel.
+  assert.equal(child.stdout.destroyed, false)
+  assert.equal(child.stderr.destroyed, false)
+  await instance.stop()
+  assert.deepEqual(child.killed, ['SIGTERM'], 'stop terminates the carrier')
+})
+
+test('named tunnel: an early exit rejects with the output tail and never the token', async () => {
+  const child = fakeNamedChild()
+  const pending = startCloudflareNamedTunnel({
+    port: 43127,
+    token: 'ey-named-token-value',
+    hostname: 'phone.example.com',
+    ensureImpl: NAMED_STUB_ENSURE,
+    spawnImpl: () => child,
+    graceMs: 60_000,
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  child.stderr.push(Buffer.from('ERROR: register failed: bad credentials from dashboard', 'utf8'))
+  child.emit('close', 1, null)
+  await assert.rejects(pending, (error) => {
+    assert.match(error.message, /exited early/)
+    assert.match(error.message, /bad credentials from dashboard/, 'the tail explains the exit')
+    assert.equal(
+      error.message.includes('ey-named-token-value'),
+      false,
+      'the spawn args never ride the error message'
+    )
+    return true
+  })
+})
+
+test('named tunnel: a spawn error rejects with the binary hint, not the args', async () => {
+  const child = fakeNamedChild()
+  const pending = startCloudflareNamedTunnel({
+    port: 43127,
+    token: 'ey-named-token-value',
+    hostname: 'phone.example.com',
+    ensureImpl: NAMED_STUB_ENSURE,
+    spawnImpl: () => child,
+    graceMs: 60_000,
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  const spawnError = new Error('spawn stubbed-cloudflared ENOENT')
+  spawnError.code = 'ENOENT'
+  child.emit('error', spawnError)
+  await assert.rejects(pending, (error) => {
+    assert.match(error.message, /DSH_POCKET_CLOUDFLARED/)
+    assert.equal(error.message.includes('ey-named-token-value'), false)
+    return true
+  })
+})
+
+test('desktop tunnel config: masked readback, hostname validation, desktop gate', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pocket-tunnelcfg-'))
+  const t = await startBridge({ bridgeOptions: { settingsStore: createSettingsStore(dir) } })
+  try {
+    // No desktop session → 403, on read and write both.
+    assert.equal((await httpFetch(`${t.base}/desktop/tunnel/config`)).status, 403)
+    assert.equal(
+      (
+        await httpFetch(`${t.base}/desktop/tunnel/config`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token: 'T0KEN-value-123456', hostname: 'phone.example.com' }),
+        })
+      ).status,
+      403
+    )
+    const desktop = await t.pairDesktop()
+    const fresh = await httpFetch(`${t.base}/desktop/tunnel/config`, { headers: { Cookie: desktop } })
+    assert.deepEqual(await fresh.json(), { ok: true, tokenMasked: '', hostname: '' })
+    // Save token + hostname; the readback masks the token and keeps the hostname.
+    const save = await httpFetch(`${t.base}/desktop/tunnel/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Cookie: desktop },
+      body: JSON.stringify({ token: 'T0KEN-value-123456', hostname: 'phone.example.com' }),
+    })
+    assert.equal(save.status, 200)
+    const saved = await save.json()
+    assert.equal(saved.hostname, 'phone.example.com')
+    assert.match(saved.tokenMasked, /…/)
+    assert.equal(saved.tokenMasked.includes('T0KEN-value-123456'), false)
+    // A malformed hostname is refused, and the store keeps its previous shape.
+    assert.equal(
+      (
+        await httpFetch(`${t.base}/desktop/tunnel/config`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', Cookie: desktop },
+          body: JSON.stringify({ hostname: 'not a hostname' }),
+        })
+      ).status,
+      400
+    )
+    // A partial save (hostname only) must not wipe the stored token.
+    const partial = await httpFetch(`${t.base}/desktop/tunnel/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Cookie: desktop },
+      body: JSON.stringify({ hostname: 'other.example.com' }),
+    })
+    assert.equal(partial.status, 200)
+    assert.equal((await partial.json()).hostname, 'other.example.com')
+    const readback = await httpFetch(`${t.base}/desktop/tunnel/config`, { headers: { Cookie: desktop } })
+    const readbackBody = await readback.json()
+    assert.notEqual(readbackBody.tokenMasked, '', 'the partial save kept the stored token')
+    assert.equal(JSON.stringify(readbackBody).includes('T0KEN-value-123456'), false)
+    // The quick/named selection reads the same store: token+hostname configured
+    // here is exactly what startCloudflareInstance consults on the next toggle.
+    const stored = createSettingsStore(dir).load()
+    assert.equal(stored.tunnel.hostname, 'other.example.com')
+    assert.equal(stored.tunnel.token, 'T0KEN-value-123456')
+  } finally {
+    await t.stop()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })

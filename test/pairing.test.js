@@ -96,23 +96,42 @@ function cookieOf(res) {
   return (res.headers.get('set-cookie') ?? '').split(';')[0]
 }
 
+/**
+ * Take one PIN-verified pairing through the full desktop-confirmation flow
+ * (design #4a): verify → pending → desktop approve → poll. Returns the verify
+ * payload and the final poll response (whose Set-Cookie is the pairing cookie).
+ */
+async function completePairing(t, pin, verifyHeaders = {}, desktopCookie) {
+  const verified = await verifyPin(t, pin, verifyHeaders)
+  assert.equal(verified.status, 200)
+  const verifiedBody = await verified.json()
+  assert.equal(verifiedBody.ok, true)
+  assert.equal(verifiedBody.pending, true)
+  assert.equal(verified.headers.get('set-cookie'), null, 'verify itself must not issue a cookie')
+  const approved = await t.approvePendingPairing(verifiedBody.confirmId, desktopCookie)
+  assert.equal(approved.status, 200)
+  const poll = await t.pollPendingPairing(verifiedBody.confirmId, verifyHeaders)
+  assert.equal(poll.status, 200)
+  return { verifiedBody, poll }
+}
+
 test('re-pairing with the live cookie keeps one device instead of two', async () => {
   const t = await tunnelPinBridge()
   try {
-    const first = await verifyPin(t, '123456')
-    assert.equal(first.status, 200)
+    const desktop = await t.pairDesktop()
+    const first = await completePairing(t, '123456', {}, desktop)
+    assert.equal((await first.poll.json()).approved, true)
+    const cookie = cookieOf(first.poll)
+    assert.match(cookie, /^dsh_mobile=/)
     assert.equal(t.bridge.sessions.size, 1)
     const liveToken = [...t.bridge.sessions.keys()][0]
-    const cookie = cookieOf(first)
-    assert.match(cookie, /^dsh_mobile=/)
-    // The second submit carries the cookie the first response issued (same origin,
+    // The second submit carries the cookie the first flow issued (same origin,
     // so SameSite=Strict still sends it). It is the same handset pairing again —
     // a re-submitted PIN, a second tab, a reloaded link — not a second device.
-    const second = await verifyPin(t, '123456', { cookie })
-    assert.equal(second.status, 200)
+    const second = await completePairing(t, '123456', { cookie }, desktop)
     assert.equal(t.bridge.sessions.size, 1, 'one handset must never occupy two entries')
     assert.ok(t.bridge.sessions.has(liveToken), 'the phone keeps the token it already holds')
-    assert.equal(cookieOf(second), cookie)
+    assert.equal(cookieOf(second.poll), cookie)
   } finally {
     await t.stop()
   }
@@ -159,19 +178,17 @@ test('LAN re-pairing without a cookie still replaces that handset entry', async 
 test('tunnel re-pairing without a cookie does not evict by address and UA', async () => {
   const t = await tunnelPinBridge()
   try {
+    const desktop = await t.pairDesktop()
     const ua = { 'user-agent': 'Mozilla/5.0 (Linux; Android 12; NOH-AN00)' }
-    const first = await verifyPin(t, '123456', ua)
-    assert.equal(first.status, 200)
+    await completePairing(t, '123456', ua, desktop)
     assert.equal(t.bridge.sessions.size, 1)
     // Same carrier egress, same stock UA, no cookie: this is not proof of being
     // the same phone, so the first entry survives instead of being retired.
-    const second = await verifyPin(t, '123456', ua)
-    assert.equal(second.status, 200)
+    const second = await completePairing(t, '123456', ua, desktop)
     assert.equal(t.bridge.sessions.size, 2, 'an address behind the carrier is not a device')
     // The token path is the one that recognises the handset, and it still reuses.
-    const again = await verifyPin(t, '123456', { ...ua, cookie: cookieOf(second) })
-    assert.equal(again.status, 200)
-    assert.equal(cookieOf(again), cookieOf(second))
+    const again = await completePairing(t, '123456', { ...ua, cookie: cookieOf(second.poll) }, desktop)
+    assert.equal(cookieOf(again.poll), cookieOf(second.poll))
   } finally {
     await t.stop()
   }
@@ -180,10 +197,9 @@ test('tunnel re-pairing without a cookie does not evict by address and UA', asyn
 test('a different handset still gets its own device entry', async () => {
   const t = await tunnelPinBridge()
   try {
-    const first = await verifyPin(t, '123456', { 'user-agent': 'Mozilla/5.0 (Linux; Android 12; NOH-AN00)' })
-    assert.equal(first.status, 200)
-    const second = await verifyPin(t, '123456', { 'user-agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7)' })
-    assert.equal(second.status, 200)
+    const desktop = await t.pairDesktop()
+    await completePairing(t, '123456', { 'user-agent': 'Mozilla/5.0 (Linux; Android 12; NOH-AN00)' }, desktop)
+    await completePairing(t, '123456', { 'user-agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7)' }, desktop)
     assert.equal(t.bridge.sessions.size, 2, 'eviction must not merge two distinct phones')
   } finally {
     await t.stop()
@@ -247,13 +263,119 @@ test('tunnel mode: correct PIN pairs and cookie carries Secure', async () => {
   try {
     t.bridge.ephemeralPin = '123456'
     t.bridge.ephemeralPinExpiresAt = Date.now() + 5 * 60_000
-    const res = await verifyPin(t, '123456')
-    assert.equal(res.status, 200)
-    assert.deepEqual(await res.json(), { ok: true })
+    const desktop = await t.pairDesktop()
+    const { poll } = await completePairing(t, '123456', {}, desktop)
+    const setCookie = poll.headers.get('set-cookie') ?? ''
+    assert.match(setCookie, /^dsh_mobile=/)
+    // Tunnel pairing: the issued cookie carries Secure (the /pair/pending
+    // handler issues in tunnel mode, whatever the transport of the poll).
+    assert.match(setCookie, /Secure/)
     assert.equal(t.bridge.sessions.size, 1)
-    // Tunnel pairing: the cookie must be Secure (verified via the real Set-Cookie
-    // path on GET /pair is tunnel-rendered, so assert the session exists; the
-    // Secure attribute is covered by issueSessionCookie code path indirectly).
+  } finally {
+    await t.stop()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Design #4a — the pairing desktop-confirmation state machine (I-3 key check).
+// Arms: ① verify pends without a cookie ② desktop sees the request ③ approve
+// issues + consumes ④ deny ⑤ TTL ⑥ confirm needs the desktop ⑦ the LAN token
+// path (helpers.pairMobile) is untouched — pinned by the LAN pairing tests
+// above and in bridge-review.
+// ---------------------------------------------------------------------------
+
+test('pairing state machine: verify pends, desktop sees it, approve issues once', async () => {
+  const t = await tunnelPinBridge()
+  try {
+    // ① verify → pending, never a cookie.
+    const verified = await verifyPin(t, '123456')
+    assert.equal(verified.status, 200)
+    const body = await verified.json()
+    assert.equal(body.pending, true)
+    assert.equal(typeof body.confirmId, 'string')
+    assert.equal(body.checkAfterMs, 2000)
+    assert.equal(verified.headers.get('set-cookie'), null)
+    assert.equal(t.bridge.sessions.size, 0, 'no session before the desktop approves')
+    // ② the desktop status surface lists the request.
+    const desktop = await t.pairDesktop()
+    const status = await httpFetch(`${t.base}/desktop/status`, { headers: { Cookie: desktop } })
+    const pending = (await status.json()).pendingPairings
+    assert.equal(pending.length, 1)
+    assert.equal(pending[0].id, body.confirmId)
+    assert.equal(pending[0].remoteAddress, '203.0.113.7')
+    assert.ok(typeof pending[0].label === 'string' && pending[0].label.length > 0)
+    assert.equal(typeof pending[0].expiresAt, 'number')
+    // ③ approve → the next poll issues the cookie and consumes the verdict.
+    assert.equal((await t.approvePendingPairing(body.confirmId, desktop)).status, 200)
+    const poll = await t.pollPendingPairing(body.confirmId)
+    assert.equal((await poll.json()).approved, true)
+    assert.match(poll.headers.get('set-cookie') ?? '', /^dsh_mobile=/)
+    assert.equal(t.bridge.sessions.size, 1)
+    // One-shot: a second poll on the consumed id is expired, not pending.
+    const again = await t.pollPendingPairing(body.confirmId)
+    assert.deepEqual(await again.json(), { ok: false, reason: 'expired' })
+    assert.equal(again.headers.get('set-cookie'), null)
+  } finally {
+    await t.stop()
+  }
+})
+
+test('pairing state machine: deny answers denied and issues nothing', async () => {
+  const t = await tunnelPinBridge()
+  try {
+    const verified = await verifyPin(t, '123456')
+    const { confirmId } = await verified.json()
+    const desktop = await t.pairDesktop()
+    assert.equal((await t.approvePendingPairing(confirmId, desktop, false)).status, 200)
+    const poll = await t.pollPendingPairing(confirmId)
+    assert.equal(poll.status, 200)
+    assert.deepEqual(await poll.json(), { ok: false, reason: 'denied' })
+    assert.equal(poll.headers.get('set-cookie'), null)
+    assert.equal(t.bridge.sessions.size, 0)
+    // The verdict was consumed by the poll that reported it.
+    const again = await t.pollPendingPairing(confirmId)
+    assert.deepEqual(await again.json(), { ok: false, reason: 'expired' })
+  } finally {
+    await t.stop()
+  }
+})
+
+test('pairing state machine: an unanswered request expires with its TTL', async () => {
+  const t = await tunnelPinBridge()
+  try {
+    const verified = await verifyPin(t, '123456')
+    const { confirmId } = await verified.json()
+    const desktop = await t.pairDesktop()
+    // Advance the bridge clock past the 60s confirm window.
+    t.bridge.now = () => Date.now() + 61_000
+    const poll = await t.pollPendingPairing(confirmId)
+    assert.deepEqual(await poll.json(), { ok: false, reason: 'expired' })
+    assert.equal(poll.headers.get('set-cookie'), null)
+    // The swept entry is gone from the desktop surface too.
+    const status = await httpFetch(`${t.base}/desktop/status`, { headers: { Cookie: desktop } })
+    assert.equal((await status.json()).pendingPairings.length, 0)
+  } finally {
+    await t.stop()
+  }
+})
+
+test('pairing state machine: confirm demands the desktop session', async () => {
+  const t = await tunnelPinBridge()
+  try {
+    const verified = await verifyPin(t, '123456')
+    const { confirmId } = await verified.json()
+    const refused = await httpFetch(`${t.base}/desktop/pair/confirm`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: confirmId, approve: true }),
+    })
+    assert.equal(refused.status, 403)
+    // The request is still pending for the real desktop.
+    const desktop = await t.pairDesktop()
+    assert.equal((await t.approvePendingPairing(confirmId, desktop)).status, 200)
+    // Unknown ids answer 404, consumed ones too.
+    const unknown = await t.approvePendingPairing('no-such-id', desktop)
+    assert.equal(unknown.status, 404)
   } finally {
     await t.stop()
   }

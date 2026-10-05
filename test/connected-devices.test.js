@@ -63,6 +63,59 @@ test('HTML inside a connected device label is escaped in the desktop pairing pag
   assert.ok(!html.includes(malicious), 'raw executable HTML must not appear')
 })
 
+// ---------------------------------------------------------------------------
+// WP-1 #3a (change 2026-10-05-feat-pocket-mobile-ux-batch): every listed device
+// carries a revoke handle. The armed two-step interaction itself is DOM
+// behaviour and lives in I-3; here the rendered shape is pinned.
+// ---------------------------------------------------------------------------
+
+test('each connected device renders a revoke handle carrying its derived id', () => {
+  const html = renderDesktopPairingPage({
+    locale: 'zh',
+    connectedDevices: [
+      { id: 'dev-abc123', label: 'Pocket/1.0 · dev-abc123', remoteAddress: '127.0.0.1', issuedAt: Date.now(), expiresAt: Date.now() + 1000 },
+    ],
+    pairingUrl: 'http://127.0.0.1/pair?token=x',
+    qrSvg: '',
+  })
+  assert.match(html, /data-action="revoke-device" data-id="dev-abc123"/)
+  assert.match(html, /吊销/)
+  assert.match(html, /确认吊销/, 'the armed copy ships with the page')
+  assert.match(html, /吊销后该手机需重新配对/, 'the confirm warning ships as the button title')
+  assert.match(html, /revokeDevice\(/, 'the armed handler is in the page script')
+  assert.match(html, /desktop\/revoke/, 'the handler POSTs the revoke endpoint')
+})
+
+test('a hostile device id is escaped in the revoke handle and the initial row', () => {
+  const hostileId = 'x" onmouseover="alert(1)'
+  const html = renderDesktopPairingPage({
+    locale: 'en',
+    connectedDevices: [
+      { id: hostileId, label: 'evil<label>', remoteAddress: '1.2.3.4', issuedAt: Date.now(), expiresAt: Date.now() + 1000 },
+    ],
+    pairingUrl: 'http://127.0.0.1/pair?token=x',
+    qrSvg: '',
+  })
+  assert.ok(!html.includes('onmouseover="alert(1)"'), 'the id must not survive unescaped')
+  assert.match(html, /data-id="x&quot; onmouseover=&quot;alert\(1\)"/)
+  assert.ok(!html.includes('<label>'), 'the label must be escaped too')
+})
+
+test('a device without an id (old payload) renders without a revoke handle', () => {
+  const html = renderDesktopPairingPage({
+    locale: 'zh',
+    connectedDevices: [
+      { label: 'Pocket/1.0', remoteAddress: '127.0.0.1', issuedAt: Date.now(), expiresAt: Date.now() + 1000 },
+    ],
+    pairingUrl: 'http://127.0.0.1/pair?token=x',
+    qrSvg: '',
+  })
+  // The handler source lives in the page script regardless; only the rendered
+  // markup before the script must stay handle-free.
+  const markup = html.slice(0, html.indexOf('<script'))
+  assert.ok(!markup.includes('data-action="revoke-device"'), 'no handle without a namable id')
+})
+
 test('desktop /desktop/status is forbidden without a desktop session', async () => {
   const t = await startBridge()
   try {
