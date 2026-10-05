@@ -418,7 +418,7 @@ test('AC-D1 a cached visit keeps both older windows as well', () => {
 function buildCloseSandbox() {
   const body = ['streamWatermark', 'closeSessionStream'].map((name) => extractFunction(js, name)).join('\n')
   const make = new Function(`
-    let activeSession=null,sessionStream=null,streamRenderFrame=null,pendingSyncTimer=null
+    let activeSession=null,sessionStream=null,streamRenderFrame=null,pendingSyncTimer=null,projectionsSyncTimer=null
     let streamConnected=true,streamEvents=[],olderEvents=[],olderHasMore=true,olderBusy=true
     let olderExhausted=true,streamProjections={values:{}},streamRevision=7,tokenStream=null
     let embeddedFocus=null,fillBusy=false,olderRunBusy=false
@@ -441,7 +441,7 @@ function buildCloseSandbox() {
       setBusyFlags(fill,olderRun){fillBusy=fill;olderRunBusy=olderRun},
       setBuffers(stream,older){streamEvents=stream;olderEvents=older},
       watermarkOf(session){return streamWatermark(session)},
-      read(){return {sessionStream,streamRenderFrame,pendingSyncTimer,streamConnected,streamEvents,
+      read(){return {sessionStream,streamRenderFrame,pendingSyncTimer,projectionsSyncTimer,streamConnected,streamEvents,
         olderEvents,olderHasMore,olderBusy,olderExhausted,streamProjections,streamRevision,
         tokenStream,embeddedFocus,fillBusy,olderRunBusy}},
       closeSessionStream,
@@ -480,6 +480,7 @@ test('AC-D7 the reset list, asserted at its present value', () => {
   assert.equal(after.streamProjections, null)
   assert.equal(after.streamRevision, 0)
   assert.equal(after.pendingSyncTimer, null)
+  assert.equal(after.projectionsSyncTimer, null, 'the projections refresh timer dies with the stream too')
   assert.equal(after.streamRenderFrame, null)
   assert.deepEqual(sandbox.calls, ['source', 'raf', 'timeout', 'skeleton', 'stale'], 'every handle and timer it owns')
   // PRESENT VALUE, not a promise: the two fill loops still reset themselves inside their

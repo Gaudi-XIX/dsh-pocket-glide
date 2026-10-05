@@ -356,7 +356,7 @@ test('B-8 closing a session empties the per-session state the next visit would i
   const body = extractFunction(js, 'closeSessionStream')
   assertSpliceable(body, 'closeSessionStream')
   const make = new Function(`
-    let sessionStream=null,streamRenderFrame=null,pendingSyncTimer=null
+    let sessionStream=null,streamRenderFrame=null,pendingSyncTimer=null,projectionsSyncTimer=null
     let tokenStream=null,streamConnected=false,streamEvents=[],olderEvents=[]
     let olderHasMore=false,olderBusy=false,olderExhausted=false
     let streamProjections=null,streamNeedsFullPaint=false,streamRevision=0
