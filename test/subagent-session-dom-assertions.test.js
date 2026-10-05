@@ -26,7 +26,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, statSync, globSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { mobilePageAssets } from '../lib/pages.js';
+import { mobilePageAssets, blankRowVisible, BLANK_ROW_VISIBLE_MS } from '../lib/pages.js';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const TEST_DIR = path.join(REPO_ROOT, 'test');
@@ -187,9 +187,11 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = [] } =
     'container',
     `
     const L=${JSON.stringify(L)}
+    const BLANK_ROW_VISIBLE_MS=${BLANK_ROW_VISIBLE_MS}
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'visibleSessions')}
+    ${extractFunction(js, 'blankRowVisible')}
     ${extractFunction(js, 'taskState')}
     ${extractFunction(js, 'taskGlyph')}
     ${extractFunction(js, 'relativeTime')}
@@ -318,6 +320,12 @@ test('R1.3 mutation: unprojected rows ghost, leak and steal focus — the projec
 // non-blank summary. The exemption is the missingSummary discriminant: the
 // synthesized placeholder carries missingSummary:true (the R1.2 guard above keeps
 // pinning that), a real blank row does not.
+//
+// Follow-up (2026-10-05, live report): the same exemption surfaced the desktop's
+// abandoned new-chat shells — days-old blank:true summaries, one unnamed row per
+// workspace. The two cases are separated by freshness now (blankRowVisible): a
+// blank row is a row only inside BLANK_ROW_VISIBLE_MS, and non-blank rows never
+// meet the rule, so a shell reappears the moment it has content.
 
 test('R1-audit a locally created blank session is a visible row, not a ghost', () => {
   const sandbox = buildRenderSandbox({
@@ -328,6 +336,30 @@ test('R1-audit a locally created blank session is a visible row, not a ghost', (
 
   assert.deepEqual(sandbox.rowIds(), ['new1'], 'the new session is a clickable row');
   assert.ok(sandbox.markup.includes('ws-count">1'), 'and the workspace count includes it');
+});
+
+test('R1-audit follow-up a days-old blank shell is not a row again', () => {
+  const sandbox = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['old1'] }],
+    summaries: [{ sessionId: 'old1', updatedAt: Date.now() - 3 * BLANK_ROW_VISIBLE_MS, running: false, blank: true, awaitingQuestion: false }],
+  });
+  sandbox.renderWorkspaces();
+
+  assert.deepEqual(sandbox.rowIds(), [], 'a stale empty shell is not a clickable row');
+  assert.ok(sandbox.markup.includes('ws-count">0'), 'the count reads zero, not one');
+  assert.ok(sandbox.markup.includes('class="ws-empty"'), 'the empty hint is what the user sees');
+});
+
+test('R1-audit follow-up blankRowVisible owns the freshness boundary', () => {
+  // The organ decides, so pin it directly: one millisecond either side of the
+  // window flips visibility, an unparsable stamp is never fresh, and a running
+  // session is never hidden by its age. The rendered copy behaving identically is
+  // what the two sandbox tests above pin.
+  const now = 1_800_000_000_000;
+  assert.equal(blankRowVisible({ updatedAt: now - BLANK_ROW_VISIBLE_MS + 1 }, now, BLANK_ROW_VISIBLE_MS), true, 'just inside the window');
+  assert.equal(blankRowVisible({ updatedAt: now - BLANK_ROW_VISIBLE_MS - 1 }, now, BLANK_ROW_VISIBLE_MS), false, 'just outside the window');
+  assert.equal(blankRowVisible({ updatedAt: 'not-a-date' }, now, BLANK_ROW_VISIBLE_MS), false, 'an unparsable stamp is not fresh');
+  assert.equal(blankRowVisible({ updatedAt: now - 99 * BLANK_ROW_VISIBLE_MS, running: true }, now, BLANK_ROW_VISIBLE_MS), true, 'running beats stale');
 });
 
 // ------------------------------------------------- R1.4 default-entry drift guard
