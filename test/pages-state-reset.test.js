@@ -318,13 +318,13 @@ test('B-5 a failed send restores the text only into the session it belonged to',
 
 test('B-6 the cancel button cannot reject unhandled', () => {
   const handler = between(js, "$('cancel').onclick=async()=>{", "$('questionComposer').onclick=")
-  assert.ok(handler.includes('if(!activeSession)return;'), 'a stale tap has nothing to stop')
+  assert.ok(handler.includes('if(!activeSession||stopPending)return;'), 'a stale tap has nothing to stop, and a pending stop cannot double-fire')
   assert.ok(handler.includes('clearAwaitingTurn()'), 'the stop button takes the turn indicator down immediately')
   assert.ok(handler.includes("await rpc('session.cancel',{sessionId:activeSession})"), 'and still asks the Host')
   assert.match(
     handler,
-    /try\{[\s\S]*?\}catch\(e\)\{showError\('chatError',e\)\}finally\{lastHistoryKey='';await loadHistory\(false\)\}/,
-    'the RPC has to settle into a catch and a finally, or a failure leaves an unhandled rejection',
+    /try\{[\s\S]*?\}catch\(e\)\{stopPending=false;syncPromptUi\(\);syncTurnStatus\(\);showError\('chatError',e\)\}finally\{lastHistoryKey='';await loadHistory\(false\)\}/,
+    'the RPC has to settle into a catch (reverting the optimistic spinner) and a finally, or a failure leaves an unhandled rejection and a stuck button',
   )
 })
 

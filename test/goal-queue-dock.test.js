@@ -305,7 +305,7 @@ test('the docks are wired where the page already consumes projections', () => {
     'applyHistory feeds the docks alongside todos');
   assert.match(js, /updateTodos\(projections\);updateGoal\(projections\);updateQueue\(projections\)/,
     'paintInstantHistory feeds the docks too');
-  assert.match(js, /renderTodoDock\(\);currentGoal=null;queuedTurn=\[\];queueBusy=false;queueEditing=null;queueEditText='';renderGoalBar\(\);renderQueueDock\(\)/,
+  assert.match(js, /renderTodoDock\(\);currentGoal=null;queuedTurn=\[\];queueBusy=false;queueEditing=null;queueEditText='';stopPending=false;renderGoalBar\(\);renderQueueDock\(\)/,
     'a session switch clears the docks with the todos');
 
   // Live updates: the stream events that fold into these projections schedule
