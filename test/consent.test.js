@@ -168,3 +168,32 @@ test('named-tunnel hostname shape and consent next share one validator set', () 
     assert.equal(isValidTunnelHostname(bad), false, 'malformed hostnames are refused')
   }
 })
+
+// The accept POST is the one no-payoff form on the surface, and a live Huawei
+// browser answered the plain form submit with a Fetch-Metadata site stricter
+// than same-origin — a bare JSON 403 between pairing and the app. Arms: a
+// same-site (and header-less) form goes through, an explicit cross-site form
+ // stays refused, and the relaxation does NOT leak to the pay-off routes.
+test('consent accept tolerates same-site form posts; cross-site stays out; strict routes do not budge', async () => {
+  const t = await startBridge()
+  try {
+    const form = (site) => httpFetch(`${t.base}/consent/accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', 'sec-fetch-site': site, ...tunnelHeaders },
+      body: 'next=%2F',
+    })
+    assert.equal((await form('same-site')).status, 303, 'same-site form submission is accepted')
+    assert.equal((await form('same-origin')).status, 303)
+    const cross = await form('cross-site')
+    assert.equal(cross.status, 403)
+    assert.equal((await cross.json()).error, 'Cross-site request rejected.')
+    // The relaxation is scoped to the accept endpoint: the strict check itself
+    // does not budge. same-site rides Strict cookies on the pay-off routes, so
+    // it stays refused there — asserted at the unit seam, an HTTP probe would
+    // first have to clear the gate and the 401 to reach the origin check.
+    assert.equal(t.bridge.verifyTrustedOrigin({ headers: { 'sec-fetch-site': 'same-site' } }), false)
+    assert.equal(t.bridge.verifyTrustedOrigin({ headers: { 'sec-fetch-site': 'same-origin' } }), true)
+  } finally {
+    await t.stop()
+  }
+})
