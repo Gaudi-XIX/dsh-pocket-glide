@@ -30,7 +30,13 @@ function extractFunction(source, name) {
     if (char === '{') depth += 1;
     else if (char === '}') {
       depth -= 1;
-      if (depth === 0) return source.slice(start, i + 1);
+      if (depth === 0) {
+        const slice = source.slice(start, i + 1);
+        // The anchor also matches `async function name(` — splice the keyword
+        // back or every `await` in the body becomes a SyntaxError.
+        const before = source.slice(Math.max(0, start - 6), start);
+        return before.endsWith('async ') ? 'async ' + slice : slice;
+      }
     }
   }
   throw new Error(`unbalanced braces after ${name}`);
@@ -71,16 +77,20 @@ test('queuedRowsOf renders inbox next-turn rows and drops malformed items', () =
   ] } } });
 
   assert.deepEqual(rows, [
-    { id: 'm1', text: '先跑测试\n再修', images: 0, files: 0 },
-    { id: 'm2', text: '', images: 1, files: 1 },
-    { id: 'm3', text: '带附件', images: 1, files: 0 },
+    { id: 'm1', managed: true, text: '先跑测试\n再修', images: 0, files: 0 },
+    { id: 'm2', managed: true, text: '', images: 1, files: 1 },
+    { id: 'm3', managed: true, text: '带附件', images: 1, files: 0 },
   ], 'text blocks join, media count, contentless and unrenderable items drop');
   assert.equal(rows[0].id, 'm1');
 });
 
-test('queuedRowsOf keeps its own id fallback for items the Host sent bare', () => {
-  const rows = queuedRowsOf({ values: { inbox: { 'next-turn': [{ content: [{ type: 'text', text: 'x' }] }] } } });
-  assert.equal(rows[0].id, 'q0', 'a missing id never renders as undefined');
+test('queuedRowsOf marks which rows carry the Host MessageId', () => {
+  const rows = queuedRowsOf({ values: { inbox: { 'next-turn': [
+    { id: 'real', content: [{ type: 'text', text: 'a' }] },
+    { content: [{ type: 'text', text: 'b' }] },
+  ] } } });
+  assert.equal(rows[0].managed, true, 'a real id is manageable');
+  assert.equal(rows[1].managed, false, 'a synthesized fallback id is display-only');
 });
 
 // -------------------------------------------------------------- dock render
@@ -95,7 +105,7 @@ function buildDockSandbox() {
       goalPhaseActive:'进行中',goalPhasePaused:'已暂停',goalPhaseBlocked:'受阻',goalPhaseComplete:'已完成',
       goalRoundUnit:' 轮',queueCount:'排队消息 {n} 条',queueImage:'图片',queueFile:'文件',queueUnrenderable:'[图片/文件]'
     }
-    let currentGoal=null,queuedTurn=[]
+    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText=''
     const $=(id)=>containers[id]
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'goalOf')}
@@ -159,6 +169,133 @@ test('the queue dock paints the count and per-row previews, and hides when empty
   assert.equal(box.queueDock.hidden, true, 'a registry without inbox hides too');
 });
 
+// --------------------------------------------------- queue row management
+
+function buildQueueActionSandbox(rpc) {
+  const fake = () => ({ innerHTML: '', hidden: true, querySelector: () => null });
+  const containers = { goalBar: fake(), queueDock: fake() };
+  const toasts = [];
+  const make = new Function(
+    'containers',
+    'rpc',
+    'showToast',
+    'toasts',
+    `
+    const L={queueEditFailed:'编辑失败',queueRemoveFailed:'撤回失败',queueSteerFailed:'发送失败',queueCount:'排队消息 {n} 条',queueImage:'图片',queueFile:'文件',queueUnrenderable:'[图片/文件]',queueEdit:'编辑',queueSave:'保存',queueCancel:'取消',queueRemove:'撤回',queueSteer:'立刻发送'}
+    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',activeSession='s1'
+    const $=(id)=>containers[id]
+    function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+    ${extractFunction(js, 'goalOf')}
+    ${extractFunction(js, 'queuedRowsOf')}
+    ${extractFunction(js, 'updateGoal')}
+    ${extractFunction(js, 'updateQueue')}
+    ${extractFunction(js, 'renderGoalBar')}
+    ${extractFunction(js, 'renderQueueDock')}
+    ${extractFunction(js, 'fetchProjectionsNow')}
+    ${extractFunction(js, 'scheduleProjectionsSync')}
+    ${extractFunction(js, 'queueAction')}
+    ${extractFunction(js, 'startQueueEdit')}
+    ${extractFunction(js, 'cancelQueueEdit')}
+    ${extractFunction(js, 'saveQueueEdit')}
+    return {
+      queueDock: containers.queueDock,
+      toasts,
+      queueAction,
+      startQueueEdit,
+      cancelQueueEdit,
+      saveQueueEdit,
+      setQueue(v){updateQueue(v)},
+      setEditText(v){queueEditText=v},
+      get busy(){return queueBusy},
+      get editing(){return queueEditing},
+      get html(){return containers.queueDock.innerHTML},
+    }
+  `,
+  );
+  const box = make(containers, rpc, (msg) => toasts.push(msg), toasts);
+  return box;
+}
+
+const REAL_QUEUE = { values: { inbox: { 'next-turn': [
+  { id: 'm1', content: [{ type: 'text', text: '先跑测试' }] },
+  { id: 'm2', content: [{ type: 'text', text: '' }, { type: 'image' }] },
+] } } };
+
+test('recall sends remove and refreshes the registry with the answer', async () => {
+  const calls = [];
+  const after = { values: { inbox: { 'next-turn': [
+    { id: 'm2', content: [{ type: 'text', text: '' }, { type: 'image' }] },
+  ] } } };
+  const box = buildQueueActionSandbox(async (method, payload) => {
+    calls.push([method, payload]);
+    if (method === 'session.updateQueue') {
+      assert.deepEqual(payload, { sessionId: 's1', itemId: 'm1', action: { kind: 'remove' } },
+        'the recall rides the request shape the host declares');
+      return { accepted: true };
+    }
+    assert.equal(method, 'session.projections');
+    return after;
+  });
+  box.setQueue(REAL_QUEUE);
+  await box.queueAction('m1', { kind: 'remove' }, '撤回失败');
+
+  assert.deepEqual(calls.map(([method]) => method), ['session.updateQueue', 'session.projections'],
+    'the action is followed by a registry refresh, not a local guess');
+  assert.equal(box.busy, false, 'the in-flight flag always clears');
+  assert.match(box.html, /m2|m1/, 'the dock re-rendered from the refreshed registry');
+  assert.deepEqual(box.toasts, [], 'no error on the happy path');
+});
+
+test('a refused action toasts the failure and clears the busy flag', async () => {
+  const box = buildQueueActionSandbox(async (method) => {
+    if (method === 'session.updateQueue') throw new Error('queued item is no longer pending');
+    return REAL_QUEUE;
+  });
+  box.setQueue(REAL_QUEUE);
+  await box.queueAction('m1', { kind: 'remove' }, '撤回失败');
+
+  assert.deepEqual(box.toasts, ['撤回失败 · queued item is no longer pending'],
+    'the host error text rides the toast');
+  assert.equal(box.busy, false);
+});
+
+test('edit opens inline, save sends the trimmed text, empty save is a no-op', async () => {
+  const calls = [];
+  const box = buildQueueActionSandbox(async (method, payload) => {
+    calls.push([method, payload]);
+    return method === 'session.updateQueue' ? { accepted: true } : REAL_QUEUE;
+  });
+  box.setQueue(REAL_QUEUE);
+
+  box.startQueueEdit('m1');
+  assert.equal(box.editing, 'm1', 'the row is in edit state');
+  assert.match(box.html, /data-queue-edit-text/, 'the dock renders the edit box');
+  assert.match(box.html, /先跑测试/, 'pre-filled with the row text');
+
+  box.setEditText('   ');
+  box.saveQueueEdit();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(calls, [], 'whitespace-only text never reaches the host');
+
+  box.setEditText('  新文本  ');
+  box.saveQueueEdit();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const update = calls.find(([method]) => method === 'session.updateQueue');
+  assert.deepEqual(update && update[1], { sessionId: 's1', itemId: 'm1', action: { kind: 'edit', content: [{ type: 'text', text: '新文本' }] } },
+    'the save sends the host edit shape, trimmed');
+  assert.equal(box.editing, null, 'a successful save leaves edit state');
+});
+
+test('cancel leaves the row untouched', () => {
+  const box = buildQueueActionSandbox(async () => ({ accepted: true }));
+  box.setQueue(REAL_QUEUE);
+  box.startQueueEdit('m1');
+  box.cancelQueueEdit();
+  assert.equal(box.editing, null);
+  assert.match(box.html, /data-queue-action="edit"/, 'the row is back to its buttons');
+  assert.doesNotMatch(box.html, /data-queue-edit-text/, 'no edit box left behind');
+});
+
 // ------------------------------------------------------- wiring source pins
 
 test('the docks are wired where the page already consumes projections', () => {
@@ -168,7 +305,7 @@ test('the docks are wired where the page already consumes projections', () => {
     'applyHistory feeds the docks alongside todos');
   assert.match(js, /updateTodos\(projections\);updateGoal\(projections\);updateQueue\(projections\)/,
     'paintInstantHistory feeds the docks too');
-  assert.match(js, /renderTodoDock\(\);currentGoal=null;queuedTurn=\[\];renderGoalBar\(\);renderQueueDock\(\)/,
+  assert.match(js, /renderTodoDock\(\);currentGoal=null;queuedTurn=\[\];queueBusy=false;queueEditing=null;queueEditText='';renderGoalBar\(\);renderQueueDock\(\)/,
     'a session switch clears the docks with the todos');
 
   // Live updates: the stream events that fold into these projections schedule
@@ -184,6 +321,15 @@ test('the docks are wired where the page already consumes projections', () => {
   assert.match(document, /id="queueDock"/, 'queue dock slot');
   assert.match(css, /\.goal-bar\{/, 'goal bar styled');
   assert.match(css, /\.queue-dock\{/, 'queue dock styled');
+
+  // Row management wiring: the dock's buttons and edit box have live handlers.
+  assert.match(js, /rpc\('session\.updateQueue',\{sessionId:owner,itemId,action\}\)/,
+    'row actions go through the updateQueue endpoint');
+  assert.match(js, /\$\('queueDock'\)\.onclick=/, 'the dock has a click handler');
+  assert.match(js, /\$\('queueDock'\)\.oninput=/, 'the edit box has an input handler');
+  assert.match(js, /function queueAction\(itemId,action,failLabel\)/, 'one action runner');
+  assert.match(js, /function startQueueEdit\(/, 'inline edit opener');
+  assert.match(js, /queueBusy=false;queueEditing=null;queueEditText='';/, 'a session switch clears the edit state');
 });
 
 test('the projections RPC is allowlisted with a flat sessionId wire param', () => {
@@ -192,4 +338,13 @@ test('the projections RPC is allowlisted with a flat sessionId wire param', () =
     'the host declares { sessionId } flat, not a request wrap');
   assert.equal(entry.endpoint, 'session/projections');
   assert.ok(RPC_ALLOWLIST.has('session.projections'), 'paired phones may call it');
+});
+
+test('the updateQueue RPC is allowlisted with the request wrap the host declares', () => {
+  const entry = HARNESS_ENDPOINTS['session.updateQueue'];
+  assert.equal(entry.endpoint, 'session/updateQueue');
+  const payload = { sessionId: 's1', itemId: 'm1', action: { kind: 'edit', content: [{ type: 'text', text: 'x' }] } };
+  assert.deepEqual(entry.args(payload), { request: payload },
+    'the whole call rides a single json param named request');
+  assert.ok(RPC_ALLOWLIST.has('session.updateQueue'), 'paired phones may call it');
 });

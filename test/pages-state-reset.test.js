@@ -229,8 +229,8 @@ test('B-5 send() re-checks the session it started for', () => {
   // A whole-file lookup would be false-green: loadHistory() opens with the same line.
   assert.equal(
     (js.match(/const owner=activeSession/g) || []).length,
-    2,
-    'the trick here is that this line is not unique in the file, hence the slice above',
+    3,
+    'the trick here is that this line is not unique in the file, hence the slice above — loadHistory and queueAction own the other two captures',
   )
 })
 
