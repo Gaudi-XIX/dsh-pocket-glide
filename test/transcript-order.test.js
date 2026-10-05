@@ -332,7 +332,7 @@ test('one back action always leaves the chat view', () => {
     js.includes('await openSession(nextFocus.sessionId,titleFor(nextFocus),false,false)'),
     'the boot reconcile jump does not push history',
   )
-  assert.ok(js.includes('await openSession(created.sessionId)'), 'creating a session stays user-initiated, so it still pushes history')
+  assert.ok(js.includes("openSession(created.sessionId).catch((e)=>showError('listError',e))"), 'creating a session stays user-initiated, so it still pushes history (and a failed open shows the error)')
   assert.ok(js.includes('void openSession(btn.dataset.id)'), 'opening a session row stays user-initiated, so it still pushes history')
 })
 
