@@ -332,10 +332,12 @@ test('the docks are wired where the page already consumes projections', () => {
   assert.match(js, /queueBusy=false;queueEditing=null;queueEditText='';/, 'a session switch clears the edit state');
 });
 
-test('the projections RPC is allowlisted with a flat sessionId wire param', () => {
+test('the projections RPC is allowlisted and wraps sessionId in the request param', () => {
   const entry = HARNESS_ENDPOINTS['session.projections'];
-  assert.deepEqual(entry.args({ sessionId: 's1' }), { sessionId: 's1' },
-    'the host declares { sessionId } flat, not a request wrap');
+  // Live-probed against the running host 2026-10-05: a flat `{ sessionId }`
+  // 400s with gateway/arguments-invalid `missing "request"` — the descriptor
+  // wraps the call like every other session/* endpoint.
+  assert.deepEqual(entry.args({ sessionId: 's1' }), { request: { sessionId: 's1' } });
   assert.equal(entry.endpoint, 'session/projections');
   assert.ok(RPC_ALLOWLIST.has('session.projections'), 'paired phones may call it');
 });
