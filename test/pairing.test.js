@@ -561,3 +561,50 @@ test('M9: the failure map itself is bounded', () => {
   for (let i = 0; i < 1200; i++) bridge.recordPinFailure(`key-${i}`)
   assert.ok(bridge.pinFailuresByIp.size <= 600, `bounded map, saw ${bridge.pinFailuresByIp.size}`)
 })
+
+// ---------------------------------------------------------------------------
+// Design #3c × #4a — the pairing funnel never answers the consent gate, so the
+// first /api/rpc after pairing is 303 /consent. The phone walks the browser
+// through /consent once and comes back; these pin the server half of that
+// sequence (the gate must sit in front of the API, and one accept must clear
+// it for the paired phone).
+// ---------------------------------------------------------------------------
+
+test('after pairing, the consent gate fronts /api/rpc until the disclaimer is accepted', async () => {
+  const t = await tunnelPinBridge()
+  try {
+    const desktop = await t.pairDesktop()
+    const { poll } = await completePairing(t, '123456', {}, desktop)
+    const mobile = cookieOf(poll)
+    assert.match(mobile, /^dsh_mobile=/)
+    // The gate sits before the authorized() pipeline: a paired phone without
+    // the consent cookie gets the 303, not the RPC answer.
+    const gated = await httpFetch(`${t.base}/api/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Cookie: mobile, ...tunnelHeaders },
+      body: JSON.stringify({ method: 'workspace.list', payload: {} }),
+    })
+    assert.equal(gated.status, 303)
+    assert.equal(gated.headers.get('location'), '/consent?next=%2Fapi%2Frpc')
+    // Accept once — the same POST the disclaimer page issues — and the same
+    // call gets through the gate. It then fails at the RPC layer (no Host
+    // baseline in the test rig), which is the point: the gate is behind us.
+    const accepted = await httpFetch(`${t.base}/consent/accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Cookie: mobile, ...tunnelHeaders },
+      body: JSON.stringify({ next: '/' }),
+    })
+    assert.equal(accepted.status, 303)
+    const consent = cookieOf(accepted)
+    assert.match(consent, /^dsh_consent=1/)
+    const through = await httpFetch(`${t.base}/api/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Cookie: `${mobile}; ${consent}`, ...tunnelHeaders },
+      body: JSON.stringify({ method: 'workspace.list', payload: {} }),
+    })
+    assert.equal(through.status, 400)
+    assert.equal((await through.json()).error, 'Harness workspaces are not loaded yet.')
+  } finally {
+    await t.stop()
+  }
+})
