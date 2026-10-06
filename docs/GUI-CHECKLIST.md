@@ -40,6 +40,7 @@
 | 4 | 编辑态焦点保持 | SSE 事件（POST /emit→goal/change）触发重绘后编辑框仍在、activeElement 保持、光标位置保持 | 父卡验收项 4（修复②） |
 | 5 | **默认隐藏元素现身** | turn 运行中+有排队时隐藏元素（排队坞/状态条）真实现身可见——非仅 DOM 存在（gate-lesson 核心场景：字符层断言验不出「该现身时现身」） | memory pocket-review-gate-lesson |
 | 6 | question-open 共存态 | 提问 composer 现身、输入框隐藏、body.question-open 在位 | 父卡验收项 5 ⊘→**待构造项：依赖姊妹卡桩态能力**（tools/render-stub.mjs 的 CONFIG.pendingQuestion；姊妹卡已交付〔2026-10-06 apply 落地〕，本项可桩验，尚无首例实践记录） |
+| 7 | 回合恰一枚钟 | 每轮消息结束后整轮只在最后一条 AI 气泡结尾一枚钟（用户气泡自持一枚；回合中段与流式中气泡零钟）；判据锚 A18（clocks===2）/A16（clocks===1）/verify-footer-turns T1 | clock 卡 reflux 新卡点（30d2080） |
 
 场景 5 是 gate-lesson 的直接对应物，任何 UI 增量不得跳过；场景 1-4 首例实证见父卡
 `archive/2026-10-06-2026-10-06-fix-pocket-review-findings/lead-render-verification.md`（4 ✅ 1 ⊘）。
