@@ -3,6 +3,7 @@
 // and importable under Node without a DOM: renderers return strings.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { startBridge, httpFetch } from './helpers.js'
 import { renderDesktopPairingPage } from '../lib/pages.js'
 
@@ -279,4 +280,69 @@ test('M2: revoking the last device frees the connection mode switch', async () =
   } finally {
     await t.stop()
   }
+})
+
+// ---------------------------------------------------------------------------
+// R1 reflux (change 2026-10-07-fix-pocket-r1-reflux-batch, item 1): the armed
+// two-step revoke must survive the 800ms status poll. renderConnectedDevices
+// used to repaint the device list unconditionally, and that repaint wiped the
+// armed handle — an implicit disarm the user never asked for. Extraction
+// recipe = the house pattern: pull the real function text out of the pages.js
+// module source and run it against stub document / connectedDeviceHtml organs.
+// ---------------------------------------------------------------------------
+
+const PAGES_SOURCE = readFileSync(new URL('../lib/pages.js', import.meta.url), 'utf8')
+
+function extractPageFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`)
+  assert.notEqual(start, -1, `${name} must exist in the pages.js source`)
+  let depth = 0
+  for (let i = start; i < source.length; i++) {
+    const char = source[i]
+    if (char === '{') depth++
+    else if (char === '}') {
+      depth--
+      if (depth === 0) return source.slice(start, i + 1)
+    }
+  }
+  throw new Error(`unbalanced braces after ${name}`)
+}
+
+function buildArmedDevicesSandbox(armed) {
+  const armedRow =
+    '<div class="url"><button class="device-revoke armed" data-id="d1">确认吊销</button><span data-revoke-note="1">吊销后该手机需重新配对</span></div>'
+  const host = {
+    innerHTML: armedRow,
+    hidden: false,
+    querySelector: (selector) => (armed && selector === '.device-revoke.armed' ? { className: 'device-revoke armed' } : null),
+  }
+  const stubDocument = { getElementById: (id) => (id === 'connectedDevices' ? host : null) }
+  const stubRow = (device) => `<div class="url" data-id="${device.id}">${device.label}</div>`
+  const make = new Function(
+    'document',
+    'connectedDeviceHtml',
+    `${extractPageFunction(PAGES_SOURCE, 'renderConnectedDevices')};return renderConnectedDevices`,
+  )
+  return { render: make(stubDocument, stubRow), host, armedRow, stubRow }
+}
+
+test('AC1.1 an armed revoke survives the 800ms status poll repaint', () => {
+  const box = buildArmedDevicesSandbox(true)
+  box.render([{ id: 'd1', label: 'Pocket/1.0' }])
+  assert.equal(
+    box.host.innerHTML,
+    box.armedRow,
+    'the armed handle and its note marker must survive the poll paint verbatim',
+  )
+})
+
+test('AC1.2 a disarmed list repaints fresh on the next poll', () => {
+  const box = buildArmedDevicesSandbox(false)
+  box.render([{ id: 'd1', label: 'Pocket/1.0' }])
+  assert.equal(
+    box.host.innerHTML,
+    box.stubRow({ id: 'd1', label: 'Pocket/1.0' }),
+    'without an armed handle the repaint runs exactly as before',
+  )
+  assert.equal(box.host.hidden, false, 'a non-empty list stays visible')
 })

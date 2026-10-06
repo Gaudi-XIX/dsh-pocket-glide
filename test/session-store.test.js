@@ -5,7 +5,7 @@
 // valid cookie.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startBridge, httpFetch } from './helpers.js'
@@ -110,6 +110,84 @@ test('the sanitizer drops malformed entries and caps each map at DEVICE_MAP_CAP'
     const doc = store.load(0)
     assert.equal(doc.sessions.length, 16, 'capped at DEVICE_MAP_CAP')
     assert.ok(doc.sessions.every(([token, record]) => typeof token === 'string' && typeof record === 'object'))
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// R1 reflux (change 2026-10-07-fix-pocket-r1-reflux-batch, item 3): a read
+// failure must never escalate into an empty-slate overwrite. A transient lock
+// (AV scanner, indexer) used to load as empty maps indistinguishable from a
+// genuinely absent file, and the next save wiped every pairing token. The
+// store now flags "occupant exists but unreadable" and refuses an empty first
+// save; ENOENT stays a genuine empty store (first-install path).
+// ---------------------------------------------------------------------------
+
+const emptyState = (savedAt = 0) => ({ sessions: new Map(), suspendedSessions: new Map(), resumableSessions: new Map(), savedAt })
+
+test('AC3.1 an unreadable store refuses to overwrite a healthy document with an empty slate', () => {
+  const dataDir = tempDataDir()
+  try {
+    const now = Date.now()
+    const healthy = JSON.stringify({
+      version: 1,
+      savedAt: now,
+      sessions: [
+        ['kept-token', { token: 'kept-token', remoteAddress: '192.168.1.9', label: 'phone', issuedAt: now, expiresAt: now + MOBILE_COOKIE_TTL_MS }],
+      ],
+      suspended: [],
+      resumable: [],
+    })
+    writeFileSync(sessionsStorePath(dataDir), healthy)
+
+    const ebusy = () => {
+      const error = new Error('boom')
+      error.code = 'EBUSY'
+      throw error
+    }
+    const store = createSessionStore(dataDir, { readFile: ebusy })
+    const doc = store.load(now)
+    assert.equal(doc.sessions.length, 0, 'a failed read still loads as empty maps (never a throw)')
+
+    assert.equal(store.save(emptyState(now)), false, 'an empty first save after a failed read is refused')
+    assert.equal(readFileSync(sessionsStorePath(dataDir), 'utf8'), healthy, 'the healthy document is untouched, byte for byte')
+
+    const fresh = {
+      sessions: new Map([['new-token', { token: 'new-token', remoteAddress: '192.168.1.9', label: 'phone', issuedAt: now, expiresAt: now + MOBILE_COOKIE_TTL_MS }]]),
+      suspendedSessions: new Map(),
+      resumableSessions: new Map(),
+      savedAt: now,
+    }
+    assert.equal(store.save(fresh), true, 'real state may persist — the unreadable file is already stale (documented sacrifice)')
+    assert.ok(readFileSync(sessionsStorePath(dataDir), 'utf8').includes('new-token'), 'and the new pairing is on disk')
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('AC3.2 a directory squatting on the store path loads empty and keeps its first empty save refused', () => {
+  const dataDir = tempDataDir()
+  try {
+    mkdirSync(sessionsStorePath(dataDir))
+    const store = createSessionStore(dataDir)
+    const doc = store.load(0)
+    assert.equal(doc.sessions.length, 0, 'EISDIR reads as an empty slate, never a throw')
+    assert.equal(store.save(emptyState()), false, 'the unverified empty state must not fight the occupant')
+    assert.equal(statSync(sessionsStorePath(dataDir)).isDirectory(), true, 'the occupant is still exactly where it was')
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('AC3.3 a missing file is a genuine empty store: the first empty save still writes', () => {
+  const dataDir = tempDataDir()
+  try {
+    const store = createSessionStore(dataDir)
+    const doc = store.load(0)
+    assert.equal(doc.sessions.length, 0, 'absent file reads as empty')
+    assert.equal(store.save(emptyState()), true, 'ENOENT is not a read failure — first-install saves are not blocked')
+    assert.ok(existsSync(sessionsStorePath(dataDir)), 'the empty document landed on disk')
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }

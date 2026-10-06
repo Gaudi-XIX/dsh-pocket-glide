@@ -881,3 +881,15 @@ test('R1-audit P0 a corrupt snapshot or event frame is dropped, not fatal (item 
   assert.doesNotThrow(() => source.dispatch('event', JSON.stringify({ event: { type: 'model/selection' } })))
   assert.equal(sandbox.streamEvents.length, 1, 'the next good frame still lands')
 })
+
+// R1 reflux (change 2026-10-07-fix-pocket-r1-reflux-batch, item 2): the :empty
+// collapse rule is what keeps an idle chat free of a phantom banner block —
+// #chatError is position:fixed, so an uncollapsed empty element still occupies
+// its slot above the composer. Structural lock for cd23147.
+test('the empty #chatError banner is display:none by structural rule (cd23147 lock)', () => {
+  const { css } = mobilePageAssets({ locale: 'zh' })
+  assert.ok(
+    css.includes('#chatError:empty{display:none}'),
+    'an empty #chatError must collapse via the :empty rule — losing it resurrects the phantom banner block',
+  )
+})
