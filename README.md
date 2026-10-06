@@ -308,6 +308,7 @@ node test-real-webserver.mjs                      # 官方 dsh-host-webserver �
 node tools/smoke-bridge.mjs                       # 自起桥实例：桌面 bootstrap/门禁/未配对拒绝/状态形状
 node tools/smoke-pairing.mjs                      # 配对 → dsh_mobile cookie → 设备可见性闭环
 node tools/gen-qr-fixtures.mjs                    # 重生成 test/fixtures/qr-matrices.json（dev-only，需 qrcode 包）
+node tools/render-stub.mjs                       # 渲染桩：真实页面资产+桩数据起本地服务（默认 127.0.0.1:4399），浏览器手机视口目验
 ```
 
 - 两个 smoke 脚本各自起独立桥实例并从 `start()` 快照取端口寻址；它们启停的是本地 HTTP 监听，不出网。
@@ -327,6 +328,13 @@ node tools/gen-qr-fixtures.mjs                    # 重生成 test/fixtures/qr-m
   实证）。任何用于变异测试或并行验证的**镜像副本必须放在交付仓树内**（或显式给镜像一个可解析
   的模块根）——镜像放在仓外（如工作区 `tmp/`）时 `require` 解析不到仓内依赖，报的是**假失败**，
   会被误读成产品回归（R2 前身卡 verify 轮为此烧掉一整轮诊断）。
+- **渲染桩与线上探针（tools/render-stub.mjs / probe-updatequeue.mjs / red-check.mjs）**：render-stub
+  服务 `lib/pages.js` 真实渲染资产+罐头 RPC/SSE 桩数据，起服务后浏览器（手机视口 390×844）目验，免宿主
+  重启；桩数据/端口/pendingQuestion 桩态在文件头 CONFIG 对象，换场景改那里。probe-updatequeue 打 live 桥
+  实测（产品默认端口 43127；token 从 mobile-sessions.json 读、只进 Cookie 不打印）。**桥无会话 delete 通道：
+  每次探针在 defws 工作区残留一条不可删除的会话**——探针会话标题统一带 `[pocket-probe]` 前缀（实机核验：宿主派生标题剥掉方括号），清理由用户
+  在 DSH 主界面按标记词 `pocket-probe` 筛选后手动删除（探针前先向用户披露残留）。red-check 是断言强化的红形态验证器
+  （extractFunction 抽真函数+沙盒+回归模拟），可作同类验证的模板。
 
 ## 打包与许可
 
