@@ -790,5 +790,7 @@ test('A21 the clock returns once the session is idle', () => {
 // 还原：不经 git，逐字还原后 sha256 =
 //   67f71cb7a2d67c6fbe81ce812a577a0c7860ce1a418a15a43ee31376e4ea80ae
 //   （本卡改动后的新基线，与变异前逐字节一致）。已还原。
+
+// ── 轮次分隔：以上至「已还原。」为 M6 条目终点（2026-10-06 clock 卡变异实证）；以下两行是 2026-10-04 复跑轮（M1-M5）的轮尾注，hash/脚本均非 M6 真值。
 // 还原后：源码 sha256 回到基线 9283ffe72e0ca278，档内 pass 35 / fail 0。
 // 变异脚本 `F:\defws\tmp\mutate-footer.mjs`，全程不经 git（工作树带着未提交改动）。
