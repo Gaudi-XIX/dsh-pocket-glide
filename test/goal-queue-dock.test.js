@@ -96,10 +96,19 @@ test('queuedRowsOf marks which rows carry the Host MessageId', () => {
 // -------------------------------------------------------------- dock render
 
 function buildDockSandbox() {
-  const fake = () => ({ innerHTML: '', hidden: true });
+  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120 });
   const containers = { goalBar: fake(), queueDock: fake() };
+  const classState = {};
+  const cssVars = {};
+  const document = {
+    body: {
+      classList: { toggle(name, on) { classState[name] = on; } },
+      style: { setProperty(key, value) { cssVars[key] = value; } },
+    },
+  };
   const make = new Function(
     'containers',
+    'document',
     `
     const L={
       goalPhaseActive:'进行中',goalPhasePaused:'已暂停',goalPhaseBlocked:'受阻',goalPhaseComplete:'已完成',
@@ -114,6 +123,7 @@ function buildDockSandbox() {
     ${extractFunction(js, 'updateQueue')}
     ${extractFunction(js, 'renderGoalBar')}
     ${extractFunction(js, 'renderQueueDock')}
+    ${extractFunction(js, 'syncQueueHeight')}
     return {
       goalBar: containers.goalBar,
       queueDock: containers.queueDock,
@@ -124,7 +134,7 @@ function buildDockSandbox() {
     }
   `,
   );
-  return make(containers);
+  return make(containers, document);
 }
 
 test('the goal bar paints objective, phase and rounds, and hides when goalless', () => {
@@ -148,6 +158,14 @@ test('the goal bar paints objective, phase and rounds, and hides when goalless',
   assert.equal(box.goalBar.hidden, true, 'a registry without the key hides too');
 });
 
+test('a goal without roundsStarted reads ? instead of the string null', () => {
+  const box = buildDockSandbox();
+
+  box.setGoal({ values: { goal: { ...GOAL, roundsStarted: null } } });
+  assert.ok(box.goalHtml.includes('? / 256 轮'), 'the missing counter renders as ?');
+  assert.doesNotMatch(box.goalHtml, /null/, 'no JavaScript null leaks into the page');
+});
+
 test('the queue dock paints the count and per-row previews, and hides when empty', () => {
   const box = buildDockSandbox();
 
@@ -169,14 +187,38 @@ test('the queue dock paints the count and per-row previews, and hides when empty
   assert.equal(box.queueDock.hidden, true, 'a registry without inbox hides too');
 });
 
+test('the queue dock drives the queue-open class and --queue-h like the todo dock', () => {
+  const box = buildQueueActionSandbox(async () => REAL_QUEUE);
+
+  box.setQueue(REAL_QUEUE);
+  assert.equal(box.classes['queue-open'], true, 'rows on screen — the dock is open');
+  assert.equal(box.cssVars['--queue-h'], '130px',
+    'the transcript reserves the dock height plus the +10px buffer (todo precedent)');
+
+  box.setQueue({ values: {} });
+  assert.equal(box.classes['queue-open'], false, 'an emptied queue closes the dock');
+  assert.equal(box.cssVars['--queue-h'], '0px', 'a hidden dock reserves nothing');
+});
+
 // --------------------------------------------------- queue row management
 
 function buildQueueActionSandbox(rpc) {
-  const fake = () => ({ innerHTML: '', hidden: true, querySelector: () => null });
+  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120, querySelector: () => null });
   const containers = { goalBar: fake(), queueDock: fake() };
   const toasts = [];
+  const classState = {};
+  const cssVars = {};
+  const document = {
+    body: {
+      classList: { toggle(name, on) { classState[name] = on; } },
+      style: { setProperty(key, value) { cssVars[key] = value; } },
+    },
+  };
   const make = new Function(
     'containers',
+    'document',
+    'classState',
+    'cssVars',
     'rpc',
     'showToast',
     'toasts',
@@ -191,6 +233,7 @@ function buildQueueActionSandbox(rpc) {
     ${extractFunction(js, 'updateQueue')}
     ${extractFunction(js, 'renderGoalBar')}
     ${extractFunction(js, 'renderQueueDock')}
+    ${extractFunction(js, 'syncQueueHeight')}
     ${extractFunction(js, 'fetchProjectionsNow')}
     ${extractFunction(js, 'scheduleProjectionsSync')}
     ${extractFunction(js, 'queueAction')}
@@ -204,15 +247,18 @@ function buildQueueActionSandbox(rpc) {
       startQueueEdit,
       cancelQueueEdit,
       saveQueueEdit,
+      repaint(){renderQueueDock()},
       setQueue(v){updateQueue(v)},
       setEditText(v){queueEditText=v},
       get busy(){return queueBusy},
       get editing(){return queueEditing},
       get html(){return containers.queueDock.innerHTML},
+      get classes(){return classState},
+      get cssVars(){return cssVars},
     }
   `,
   );
-  const box = make(containers, rpc, (msg) => toasts.push(msg), toasts);
+  const box = make(containers, document, classState, cssVars, rpc, (msg) => toasts.push(msg), toasts);
   return box;
 }
 
@@ -242,7 +288,9 @@ test('recall sends remove and refreshes the registry with the answer', async () 
   assert.deepEqual(calls.map(([method]) => method), ['session.updateQueue', 'session.projections'],
     'the action is followed by a registry refresh, not a local guess');
   assert.equal(box.busy, false, 'the in-flight flag always clears');
-  assert.match(box.html, /m2|m1/, 'the dock re-rendered from the refreshed registry');
+  assert.match(box.html, /data-id="m2"/, 'the dock re-rendered from the refreshed registry');
+  assert.doesNotMatch(box.html, /data-id="m1"/,
+    'the recalled row is gone — a stale pre-action paint would still carry its buttons');
   assert.deepEqual(box.toasts, [], 'no error on the happy path');
 });
 
@@ -296,6 +344,41 @@ test('cancel leaves the row untouched', () => {
   assert.doesNotMatch(box.html, /data-queue-edit-text/, 'no edit box left behind');
 });
 
+test('a projection poll while editing updates the data but never the edit box', () => {
+  const box = buildQueueActionSandbox(async () => REAL_QUEUE);
+  box.setQueue(REAL_QUEUE);
+  box.startQueueEdit('m1');
+
+  // The host consumed m1 and the 250ms poll returns the new truth mid-typing:
+  // the data layer moves, the repaint is deferred so focus/IME survive.
+  box.setQueue({ values: { inbox: { 'next-turn': [
+    { id: 'm2', content: [{ type: 'text', text: '新排队' }] },
+  ] } } });
+  assert.equal(box.editing, 'm1', 'still editing after the poll');
+  assert.match(box.html, /data-queue-edit-text/, 'the edit box survived the poll');
+  assert.ok(box.html.includes('先跑测试'), 'the row text the user is editing is still there');
+  assert.doesNotMatch(box.html, /新排队/, 'no mid-edit repaint snuck the new row in');
+
+  box.cancelQueueEdit();
+  assert.equal(box.editing, null, 'leaving edit state');
+  assert.match(box.html, /新排队/, 'the deferred repaint lands with the fresh registry');
+});
+
+test('a leading newline in the queued text survives the edit textarea', () => {
+  const box = buildQueueActionSandbox(async () => REAL_QUEUE);
+  box.setQueue(REAL_QUEUE);
+  box.startQueueEdit('m1');
+  box.setEditText('\n行首换行的排队文本');
+  box.repaint();
+
+  const match = box.html.match(/<textarea class="queue-edit-box" data-queue-edit-text>([\s\S]*?)<\/textarea>/);
+  assert.ok(match, 'the edit box rendered');
+  // HTML parsing strips exactly one newline right after a <textarea> open tag,
+  // so the renderer spends one to protect the user's own leading newline.
+  assert.match(match[1], /^\n/, 'a sacrificial newline sits between > and the content');
+  assert.match(match[1], /\n行首换行的排队文本$/, 'and the original leading newline rides behind it');
+});
+
 // ------------------------------------------------------- wiring source pins
 
 test('the docks are wired where the page already consumes projections', () => {
@@ -330,6 +413,27 @@ test('the docks are wired where the page already consumes projections', () => {
   assert.match(js, /function queueAction\(itemId,action,failLabel\)/, 'one action runner');
   assert.match(js, /function startQueueEdit\(/, 'inline edit opener');
   assert.match(js, /queueBusy=false;queueEditing=null;queueEditText='';/, 'a session switch clears the edit state');
+});
+
+test('the queue dock slots into the composer with the todo-dock height protocol', () => {
+  // P1-A: the dock used to live in the chatView flex flow, where the fixed
+  // composer covered it — invisible and untappable. It now sits inside the
+  // composer after the todo dock (permanent organ first, transient one near
+  // the input), and the transcript reserves its height through --queue-h.
+  assert.match(document, /<div id="composer"[\s\S]{0,800}id="queueDock"/,
+    'queueDock lives inside #composer — the composer opens before it');
+  assert.doesNotMatch(document, /id="queueDock"[\s\S]{0,400}id="composer"/,
+    'and never precedes the composer again (the flex-flow slot is gone)');
+
+  assert.match(css, /--queue-h:0px/, 'the height variable has a root default beside --todo-h');
+  assert.match(css, /\.queue-dock\{[^}]*pointer-events:auto/,
+    'the dock is clickable inside the pointer-events:none composer');
+  assert.match(css, /\.queue-list\{[^}]*max-height:180px/,
+    'the list is capped so --queue-h stays bounded');
+  assert.match(css, /\.chat-open .messages\{[^}]*var\(--todo-h\) \+ var\(--queue-h\)/,
+    'the transcript baseline reserves both docks');
+  assert.match(js, /function syncQueueHeight\(/, 'the height sync organ ships');
+  assert.match(js, /toggle\('queue-open'/, 'the body class rides the render, todo-style');
 });
 
 test('the projections RPC is allowlisted and wraps sessionId in the request param', () => {

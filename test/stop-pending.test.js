@@ -182,3 +182,85 @@ test('stopPending reconciles where the turn actually ends', () => {
   assert.match(js, /queueEditText='';stopPending=false;renderGoalBar\(\)/,
     'a session switch drops a stale stop request');
 });
+
+// ------------------------------------------------- turn-boundary reconcile
+//
+// The optimistic stop belongs to the turn that was running when the button was
+// pressed. The watchdogs that retire a dead turn used to leave the flag set,
+// so the composer stayed on the spinner even though nothing was running any
+// more; and a turn/start after a cancelled turn inherited the stale request.
+
+function buildBoundarySandbox() {
+  const noop = () => {};
+  const make = new Function(
+    'eventSeq',
+    'clearTurnRunningWatch',
+    'syncPromptUi',
+    'syncTurnStatus',
+    'schedulePoll',
+    `
+    let awaitingTurnTimer=null,awaitingTurnSeq=null,turnRunningTimer=null
+    let turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1
+    let agentRunning=true,stopPending=true,lastHistoryKey='',pendingQuestion=null,activeSession='s1'
+    const AWAITING_TURN_MAX_MS=1000,TURN_RUNNING_IDLE_MAX_MS=1000
+    ${extractFunction(js, 'expireAwaitingTurn')}
+    ${extractFunction(js, 'expireTurnRunning')}
+    ${extractFunction(js, 'noteTurnBoundary')}
+    return {
+      setStop(v){stopPending=v},
+      expireAwaiting(){expireAwaitingTurn()},
+      expireRunning(){expireTurnRunning()},
+      note(entry){noteTurnBoundary(entry)},
+      get stop(){return stopPending},
+      get running(){return turnRunningOpen},
+    }
+  `,
+  );
+  return make(
+    (entry) => {
+      const e = entry && (entry.event || entry);
+      const s = e && e.seq;
+      return typeof s === 'number' ? s : -1;
+    },
+    noop, noop, noop, noop,
+  );
+}
+
+test('the watchdogs that retire a dead turn also retire its stop request', () => {
+  const box = buildBoundarySandbox();
+
+  box.setStop(true);
+  box.expireAwaiting();
+  assert.equal(box.stop, false, 'expireAwaitingTurn clears a stale stop');
+  assert.equal(box.running, false, 'and closes the running state as before');
+
+  box.note({ seq: 5, event: { type: 'turn/start' } });
+  assert.equal(box.running, true, 'a fresh turn opens the running state');
+  box.setStop(true);
+  box.expireRunning();
+  assert.equal(box.stop, false, 'expireTurnRunning clears a stale stop');
+  assert.equal(box.running, false, 'and closes the running state as before');
+});
+
+test('a new turn/start retires the previous stop; a bare turn/end does not', () => {
+  const box = buildBoundarySandbox();
+
+  box.setStop(true);
+  box.note({ seq: 5, event: { type: 'turn/start' } });
+  assert.equal(box.stop, false, 'the stop belonged to the turn that was running when it was pressed');
+  assert.equal(box.running, true, 'and the new turn still opens');
+
+  box.setStop(true);
+  box.note({ seq: 6, event: { type: 'turn/end' } });
+  assert.equal(box.stop, true, 'turn/end alone leaves the flag to updateRunning');
+  assert.equal(box.running, false, 'the turn closes as before');
+});
+
+test('the boundary clear points ship in the page source', () => {
+  assert.match(js, /turnRunningOpen=false;agentRunning=false;stopPending=false;/,
+    'expireAwaitingTurn retires the stale stop');
+  assert.match(js, /if\(!turnRunningOpen\)return;turnRunningOpen=false;stopPending=false;/,
+    'expireTurnRunning retires the stale stop');
+  assert.match(js, /if\(turnRunningOpen\)\{clearTurnRunningWatch\(\);turnRunningSeenSeq=turnRunningSeq;stopPending=false\}/,
+    'noteTurnBoundary retires the stop when a new turn starts');
+});
