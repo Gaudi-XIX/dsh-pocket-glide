@@ -50,12 +50,15 @@ node --input-type=module -e "import('./lib/index.js').then(m=>console.log(JSON.s
 
 | 面 | 路由 |
 |---|---|
-| 手机页 | `GET /`（App 页）、`GET /pair`、`GET /reconnect`、`GET /disconnected`、`POST /pair/verify`、`POST /pair/retry` |
+| 手机页 | `GET /`（App 页）、`GET /pair`、`GET /reconnect`、`GET /disconnected`、`POST /pair/verify`、`POST /pair/retry`、`GET /pair/pending`、`GET /consent`、`POST /consent/accept` |
 | 手机数据 | `GET /api/status`、`GET /api/boot`、`POST /api/rpc`、`GET /api/session/stream`（SSE）、`GET /api/session-attachment`、`GET|HEAD /api/session-export` |
-| 静态件 | `GET /app.css`、`GET /app.js`（URL 带内容哈希）、`GET /sw.js`、`GET /brand-logo/{,dark}`、`GET /app-icon` |
-| 桌面配对面 | `GET /desktop`（含一次性 `?k=` bootstrap）、`GET /desktop/status`、`GET /desktop/tunnel/status`、`POST /desktop/pairing/rotate`、`POST /desktop/pin/{consent,reset}`、`POST /desktop/tunnel/toggle`、`POST /desktop/disconnect`、`POST /desktop/revoke` |
+| 静态件 | `GET /app.css`、`GET /app.js`（URL 带内容哈希）、`GET /sw.js`、`GET /brand-logo/{,dark}`、`GET /app-icon`、`GET /manifest.json` |
+| 桌面配对面 | `GET /desktop`（含一次性 `?k=` bootstrap）、`GET /desktop/status`、`GET /desktop/tunnel/status`、`POST /desktop/pairing/rotate`、`POST /desktop/pin/{consent,reset}`、`POST /desktop/tunnel/toggle`、`POST /desktop/disconnect`、`POST /desktop/revoke`、`GET|POST /desktop/notify`、`POST /desktop/notify/test`、`GET|POST /desktop/tunnel/config`、`POST /desktop/pair/confirm` |
 
 > 旧的 `/phone*` 路由族已退役，不再是本插件的接口面。
+> 表录全量接口面；穷举判据是 `bridge.handle()` 的 `url.pathname` 判定（34 处 `pathname ===` +
+  1 处 `startsWith('/brand-logo/')`）。修后本表 4 行录 33 条方法条目、覆盖 35 个路径实例
+  （`/brand-logo/{,dark}` 与 `/desktop/pin/{consent,reset}` 各一条目覆盖两径、`GET|POST` 两条目各覆盖双方法）。
 
 ## RPC 方法面
 
@@ -64,15 +67,16 @@ node --input-type=module -e "import('./lib/index.js').then(m=>console.log(JSON.s
 
 - 会话/模型/设置类（转发宿主 Typert 端点）：`session.list`、`session.history`、`session.create`、
   `session.prompt`、`session.cancel`、`session.models`（→ `session/modelCatalog`）、`session.selectModel`、
-  `workspace.list`、`settings.describe`、`agentPreset.list`、`agentPreset.select`、`permissionPresets.catalog`
+  `workspace.list`、`settings.describe`、`agentPreset.list`、`agentPreset.select`、`permissionPresets.catalog`、`session.projections`（投影增量）
 - 命令/附件类：`command.execute`（→ `commands/execute`，桥补 `{agentId, line, submittedAttachments}`）、
-  `file.upload`（→ `fileUploads/upload`，回 `{receiptId, file}`）、`skills.list`、`commands.list`（斜杠面板目录）
+  `file.upload`（→ `fileUploads/upload`，回 `{receiptId, file}`）、`skills.list`、`commands.list`（斜杠面板目录）、`session.updateQueue`（排队管理）
 - 桥本地方法（在白名单判定**之前**就地处理，不落宿主）：`interaction.pending`、`interaction.answer`、
   `interaction.cancel`（宿主 `user-questions/request` 的应答回路）
 - 不在面上的方法一律 **403** `RPC method is not available on mobile.`；`session.prompt` 的 `requestId`
   由桥生成并**置于参数末尾**，客户端 payload 无法钉住或覆写它。
 
-**body 上限分级**：普通方法 64KB（`MAX_BODY_BYTES`）；`file.upload`、`session.prompt` 用大档
+**body 上限分级**：普通方法 64KB（`MAX_BODY_BYTES`）；`file.upload`、`session.prompt`、`command.execute`、
+`session.updateQueue` 用大档
 `LARGE_BODY_BYTES = ceil(25MB × 1.4)`（计入 base64 4/3 膨胀）；method 键必须在最前 `RPC_METHOD_PROBE_BYTES`
 （2KB）内出现，否则无法提前定档。超限 413 `Request body is too large.`。
 
@@ -142,7 +146,8 @@ WiFi/LAN 模式下手机与桥之间是**明文 HTTP**：同一网络内的其�
 ### `GET /api/status` 与 SSE 的 `status` 帧是同一个 builder
 
 负载由 `LanMobileBridge.buildStatusPayload()` 一处产出（`/api/status` 的响应体 = 每
-`SSE_STATUS_MS`（30s）推下会话流的那帧，字节级同源），字段与语义：
+`SSE_STATUS_MS`（30s）推下会话流的那帧，字节级同源），核心字段与语义（**非穷举**：表外还有
+`tunnelProvider`/`tunnelExpiresAt`/`issuedAt`/`expiresAt`/`settings`，页面已消费其中两枚）：
 
 | 字段 | 取值 | 含义 |
 |---|---|---|
@@ -158,9 +163,10 @@ WiFi/LAN 模式下手机与桥之间是**明文 HTTP**：同一网络内的其�
   而 `hostProbeAgeMs`/`hostProbeCode` 仍带着上一次的值）。把 `null` 读成「宿主死了」就是再造一个假红。
 - 「绿点 + 内容冻结」那对症状的两条腿现在分别叫 `hostReachable === false` 与 `connected === true`
   （桥活着、宿主没答）。
-- ⚠️ **页面侧尚未消费这些字段**（`lib/pages.js` / `client/client.js` 里对 `hostReachable`/`muxConnected`/
-  `devicesConnected` 零命中——只有测试在读它们）。这一笔在 UI/CLIENT 棒：**帧已经在发了，页面不读就等于「绿点+冻结」没修完**。
-  本节只承诺「负载里有这些字段」，不承诺「手机上的状态点已经改对了」。
+- **消费现值**：`hostReachable === false` 已被页面双臂消费——`/api/status` 轮询臂与 SSE 状态帧臂都把它
+  翻译成连接灯的 degraded 态（aria-label「宿主未响应」）；`muxConnected` / `devicesConnected` 仍零命中
+  （只有测试在读）。本节承诺「负载里有这些字段」；连接灯把 degraded 那半句兑现了，「绿点+冻结」的
+  残留半句随这两个未读字段走。
 
 现取字段清单（只读符号，不起桥；带凭据的两态负载见 `test/bridge-review.test.js` 的 `B2 X4⑤` 两档）：
 
@@ -255,21 +261,26 @@ node --input-type=module -e "import{readFileSync}from'node:fs';const s=readFileS
 
 - 落点见「数据根」那张表：`<DSH_HOME 或 ~/.dsh>/pocket/logs/pocket.log`。行是 JSON（`t`/`level`/`message`），
   写入器 `lib/file-log.js` 的 `createFileLogger()`，**永不抛**（日志失败不许把插件带倒）。
-- 轮转是**单代**：超过 `MAX_BYTES`（512KB）就 `rename` 成 `pocket.log.1`，覆盖上一代，**不累积更多代数**。
+- 轮转是**级联 3 代**（`ROTATIONS = 3`）：超过 `MAX_BYTES`（512KB）就把 `pocket.log`→`.1`→`.2`→`.3`
+  逐代下压，最老一代丢弃。
 - 驱动轮转的字节数**每行从磁盘重读**（`bytesOnDisk()` 用 `statSync`），不是在 logger 里累加。原因是宿主可以
   同时跑两个进程共享同一个 `pocket.log`：各自累加时双方都以为文件只有自己写的那点大，文件于是越过一切上限
   而无视。
+- 每行先过**单行上限** `MAX_LINE_BYTES`（32KB）：超长行截断续写并计 `truncatedLines`，不整行丢弃。
 - `rename` 失败**不把计数归零**（记 `rotationFailures`），下一条继续尝试轮转；轮转永久失败时文件涨到
   `MAX_CEILING_BYTES`（= `MAX_BYTES × 4`，即 2MB）封顶，此后**丢行**并计 `droppedLines`——丢行比占满磁盘轻。
-- 可观测面：`logger.stats()` → `{bytes, rotationFailures, droppedLines}`（`bytes` 同样是磁盘现值）。
-- **残留限制（已登记为候选，尚未修）**：`droppedLines` 只有握着这个 logger 对象的人才看得见，`file-log`
-  不能自己往自己里写一行「已丢 N 行」，所以**没有宿主侧出口**——盘上看不出日志在被丢。要多代轮转、换上限，
-  或补那条出口，都改 `lib/file-log.js` 的 `MAX_BYTES`/`MAX_CEILING_BYTES` 一处（出口那一半属另开条目）。
+- 可观测面：`logger.stats()` → `{bytes, rotationFailures, rotated, droppedLines, truncatedLines,
+  writeFailures, lastWriteError}` 七字段（`bytes` 同样是磁盘现值；以 `lib/file-log.js` 的
+  `PocketFileLoggerStats` typedef 为准）。
+- `droppedLines` 的宿主侧出口**已有，粒度是 dispose 时汇总**：插件收尾时 `reportFileLogHealth()`
+  （`lib/index.js`）读 `stats()` 上告一行 `pocket file log degraded: …`（含 droppedLines/truncatedLines/
+  writeFailures），写失败另有 warn-once。不是逐条实时告警；要看实时，握着 logger 对象看 `stats()`。
+  要改上限/代数/单行截断，改 `lib/file-log.js` 的 `MAX_BYTES`/`MAX_CEILING_BYTES`/`MAX_LINE_BYTES`/`ROTATIONS`。
 
-现取那两个上限（模块私有常量，从符号取，不抄进正文）：
+现取那四个常量（模块私有常量，从符号取，不抄进正文）：
 
 ```
-node --input-type=module -e "import{readFileSync}from'node:fs';const s=readFileSync('./lib/file-log.js','utf8');console.log(s.match(/const MAX_(BYTES|CEILING_BYTES) = [^\n]+/g).join('\n'))"
+node --input-type=module -e "import{readFileSync}from'node:fs';const s=readFileSync('./lib/file-log.js','utf8');console.log(s.match(/const (MAX_BYTES|MAX_CEILING_BYTES|MAX_LINE_BYTES|ROTATIONS) = [^\n]+/g).join('\n'))"
 ```
 
 ## 云隧道（cloudflared quick tunnel）
@@ -286,6 +297,17 @@ node --input-type=module -e "import{readFileSync}from'node:fs';const s=readFileS
   `lib/tunnel.js` 里读，不自己另抄一份，下载后必校摘要、不符即删。先看契约不联网：`--print`。
   `vendor/` 已在 `.gitignore` 内。macOS 的发布件是 `.tgz`，与「裸可执行件」这一契约不符——那条路交给运行时懒下载。
 - quick tunnel URL 每次启动都可能变，隧道重建后手机要用新址。
+
+### Named tunnel（token 模式，固定主机名）
+
+- 桌面面板可配 Cloudflare tunnel token + hostname（`GET|POST /desktop/tunnel/config`，经
+  `lib/settings-store.js` 原子落盘 `0600`）。两者齐且 hostname 形状合法（`isValidTunnelHostname`）时走
+  `cloudflared tunnel run --token`，URL 固定为 `https://<hostname>`。
+- **token 模式下本地转发目标由 Zero Trust 面板的 ingress 决定，不是桥端口**：ingress 必须指向
+  `http://127.0.0.1:<桥端口>`（桥端口可能让位 43128 或被 `DSH_MOBILE_PORT` 覆盖，见「端口与绑定」）。
+  配置错了隧道照样显示在线、手机全部 502——online 日志里带这句提示（`lib/tunnel.js`）。
+- hostname 上限与 QR 容量的推导关系见 `lib/qr-svg.js` 容量常量注释与 `lib/settings-store.js`（配对 URL
+  要塞进一枚 QR），现值用可复跑命令取，不在本文硬编。
 
 ## 装到 profile（junction 桥接）
 
@@ -342,23 +364,28 @@ node tools/render-stub.mjs                       # 渲染桩：真实页面资�
   `LICENSE`、`CHANGELOG.md`。本机装机是 `link:` **junction**，白名单只对发布态（`npm pack`/publish）生效，不影响装机态；
   列全 `test`/`tools` 的意义是：发布件里 `npm test` 与 README 承诺的工具面真能跑。
 - 许可 Apache-2.0，正文见 `LICENSE`。
-- 版本策略：现值 `0.2.1`。逐版的**对外变化**（修复 / 契约变更 / 已知边界）见根 `CHANGELOG.md`；
+- 版本策略：现值 `0.3.0`。逐版的**对外变化**（修复 / 契约变更 / 已知边界）见根 `CHANGELOG.md`；
   更细的逐笔施工账在 `git log` 与 flow change 卡里。从 `0.2.0` 起本仓维护这份 CHANGELOG，
   README 承诺的是「它存在且跟着版本走」，不承诺它随每一笔提交更新。
 
 ## 已知边界
 
-- PWA：`<link rel="manifest">` 未挂（Service Worker 注册失败现已可见，但 manifest 属挂起项）。
+- PWA：manifest 已挂——`<link rel="manifest">` → `/manifest.json`（配对门禁后可取，`renderManifestJson()`）。
+  Service Worker 注册失败时本会话静默停用（sessionStorage 去重、下次访问重试），无用户可见提示。
 - 那个「假服务注册」已经删掉了：入口不再向宿主声明这枚 `pocket` 服务（它从来没被 `provide` 过，也没有任何
   消费方），启停改用双臂 `then(onFulfilled, onRejected)` ⇒ **`bridge failed to start` 现在只可能来自 `start()`
   真的被拒**，成功路径不再刷一堆假错误进日志。判据在 `test/index-service.test.js`。
   （这一节以前把它列为「已知边界」，那句话现在已经不成立，故从边界清单里移除。）
 - **未修的残留限制**（都在 change `2026-10-02-fix-pocket-audit-remediation` 登记为候选，别读成已解决）：
-  - 「绿点 + 冻结」只在**负载**上可诊断了，页面侧还没读那几个字段（见「状态与错误面」一节）。
-  - `logger.stats()` 的 `droppedLines` 没有宿主侧出口（见「日志」一节）。
+  - 「绿点 + 冻结」的 degraded 半句已上页面（连接灯三态，见「状态与错误面」一节）；`muxConnected` /
+    `devicesConnected` 两字段页面侧仍未读。
+  - `droppedLines` 的宿主侧出口已有（dispose 时 `reportFileLogHealth()` 汇总上告，见「日志」一节）；逐条实时告警仍没有。
   - 宿主被**硬杀**时 `process.on('exit')` 不跑 ⇒ cloudflared 子进程可能留孤儿；闭合它需要「本桥 pid sidecar +
     镜像名校验」，**不能按镜像名扫杀**（那会打到别人为别的端口跑的隧道）。
-  - 会话级载体 WS 复用没做（本卡选了「退避」那一支）；`_sessionCursors` 运行中既不淘汰也不按 seq 前进刷新
-    （只有 `stop()` 收尾）——这一条本卡另有包在推进，落地后本节须随动。
+  - 会话级载体 WS 复用没做（本卡选了「退避」那一支）。`_sessionCursors` 现按 `SESSION_CURSOR_MAX`（128）
+    LRU 淘汰、读时重插（`capSessionCursors()`）——原先「运行中既不淘汰也不刷新」的陈述已随实现翻转，此处存档。
 - **刻意代价（不是缺陷）：进入「一条都还没画出来」的会话会多发一次头页请求**。触发面＝每次进入一个缓冲为空的会话，含全新空会话：页面侧 `fetchOlderPage()` 遇到 `anchorSeq<0` 按「从头拉」处理，发一条**不带 `beforeSeq`** 的 `session.history`（`maxMessages: 30`）去铺第一页；`ensureTranscriptFilled()` 的空转录自举循环因此会先走这一条。**为什么可接受**：这一条请求本身就是空缓冲会话唯一的自举路径，去掉它「加载更多」就没有出口；它拿到的是最新一页，且两道门都不会让它空转——页面侧 `ensureTranscriptFilled()` 用 `count()<=before` 判「没多出消息就停」，桥侧 `LanMobileBridge.forwardRpc` 的 `session.history` 分支在不带 `beforeSeq` 时保留三级阶梯护栏（`pageRequests` 三种形状）。行为锁在 `test/stream-watermark.test.js` 的 `AC-A6 an empty buffer pulls the head page without beforeSeq` 与 `test/transcript-order.test.js` 的头页用例里。
 - 一切页面/桥侧改动的上线方式都是「改完 → 用户重启 DSH → 手机上目验」，中途不催重启。
+- 通知出站的 wxpusher 通道是 **shape-only 发送**：POST 体只带 `appToken`/`summary`/`content`，不带
+  `uid`/`tagIds`，而 WxPusher 的业务错误随 HTTP 200 返回——桥只判 `response.ok`，对面没收到也可能记
+  「已送达」（Server酱/Bark 走 URL 判 2xx，无此嫌疑）。真机通道实测待做；坐实另开修复卡。
