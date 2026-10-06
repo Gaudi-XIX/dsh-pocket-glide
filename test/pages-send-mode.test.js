@@ -147,7 +147,7 @@ test('plus rows carry a name field and root filtering matches against it', () =>
 // before committing anything; on failure no partial drafts remain.
 test('addImageDrafts validates the full batch before pushing drafts or starting readers', () => {
   const html = renderMobilePage({ locale: 'zh' })
-  const aggregateCheck = html.indexOf('aggregate+file.size>limits.maxMessageImageBytes')
+  const aggregateCheck = html.indexOf('aggregate+item.file.size>limits.maxMessageImageBytes')
   const commit = html.indexOf('for(const draft of accepted)composerDrafts.push(draft)')
   assert.ok(aggregateCheck >= 0, 'aggregate total validation must exist')
   assert.ok(commit > aggregateCheck, 'drafts must be pushed only after the aggregate check passes')
