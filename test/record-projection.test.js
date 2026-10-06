@@ -96,6 +96,36 @@ test('a durable event is passed through even at or below the watermark', () => {
   assert.deepEqual(stripRecordsThrough({ type: 'assistant/chunk', seq: 6, data: 'x' }, 5), { type: 'assistant/chunk', seq: 6, data: 'x' })
 })
 
+// F-2 (2026-10-07-fix-pocket-contract-minis): the other side of the :183-187
+// invariant — an entry WITHOUT a seq is treated as durable too. seqOf answers
+// Infinity (not -1) for a missing seq, so `> sinceSeq` always holds and the
+// entry survives every watermark. The old -1 answer let sinceSeq >= 0 silently
+// swallow exactly those entries.
+test('records arm: a mix of seq-bearing and seq-less entries keeps exactly the seq-less ones', () => {
+  const filtered = stripRecordsThrough(
+    {
+      type: 'snapshot',
+      records: [
+        { seq: 1 },
+        { seq: 2 },
+        { event: { type: 'turn/end', data: {} } },
+        { type: 'assistant/message' },
+      ],
+    },
+    5
+  )
+  assert.deepEqual(
+    filtered.records,
+    [{ event: { type: 'turn/end', data: {} } }, { type: 'assistant/message' }],
+    'the two seq-bearing entries are watermarked out, the two seq-less ones survive'
+  )
+})
+
+test('events arm: a seq-less event survives the watermark too', () => {
+  const filtered = stripRecordsThrough({ type: 'snapshot', events: [{ seq: 9 }, { foo: 'no-seq' }] }, 5)
+  assert.deepEqual(filtered.events, [{ seq: 9 }, { foo: 'no-seq' }])
+})
+
 test('no sinceSeq means the full page, as before', () => {
   const frame = { type: 'snapshot', records: [{ seq: 1 }, { seq: 2 }] }
 

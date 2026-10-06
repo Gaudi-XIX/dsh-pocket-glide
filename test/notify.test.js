@@ -180,6 +180,25 @@ test('notifySend: a hanging channel is cut off by the timeout, quietly', async (
   assert.equal(log[0].includes(REAL_KEY), false)
 })
 
+// L-1 (2026-10-07-fix-pocket-contract-minis): enabled:false is a documented
+// setting (defaultSettingsDocument ships it) — the gate lives here so a caller
+// that forgets its own check (or a future call site) still cannot push.
+test('notifySend: enabled=false answers false before any fetch is attempted', async () => {
+  const seen = []
+  const fetchImpl = async (url, init) => {
+    seen.push({ url: String(url), init })
+    return { ok: true, text: async () => '{}' }
+  }
+  assert.equal(
+    await notifySend({ channel: 'bark', key: REAL_KEY, enabled: false }, 't', 'b', { fetchImpl }),
+    false
+  )
+  assert.equal(seen.length, 0, 'the gate short-circuits before the channel is touched')
+  // 对照组：同一 config 仅 enabled 翻 true ⇒ 照发（enabled undefined 情形既有用例已覆盖）。
+  assert.equal(await notifySend({ channel: 'bark', key: REAL_KEY, enabled: true }, 't', 'b', { fetchImpl }), true)
+  assert.equal(seen.length, 1)
+})
+
 // ---------------------------------------------------------------------------
 // Bridge trigger + endpoints (WP2-2)
 // ---------------------------------------------------------------------------

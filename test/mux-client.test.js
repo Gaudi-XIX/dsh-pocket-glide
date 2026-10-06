@@ -148,11 +148,17 @@ const settle = () => new Promise((resolve) => setImmediate(resolve))
 function muxHarness(bases) {
   const invalidations = []
   const logs = []
+  const seen = {}
   let cursor = 0
   const monitor = createMuxMonitor({
     harnessUrl: () => (cursor < bases.length ? bases[cursor++] : undefined),
     innerAuth: {
-      ready: async () => 'dsh-auth-test=1',
+      // F-3 (2026-10-07-fix-pocket-contract-minis): record the signal that
+      // reaches innerAuth.ready so a test can assert it is forwarded verbatim.
+      ready: async (signal) => {
+        seen.readySignal = signal
+        return 'dsh-auth-test=1'
+      },
       invalidate: () => invalidations.push(1),
     },
     pendingQuestions: new Map(),
@@ -162,7 +168,7 @@ function muxHarness(bases) {
     setEventClientId: () => {},
     reportMuxState: () => {},
   })
-  return { monitor, invalidations, logs }
+  return { monitor, invalidations, logs, seen }
 }
 
 /** Drive `monitorMux` through `attempts` failures and return what it redeemed. */
@@ -275,6 +281,7 @@ test('the carrier keeps its two failure texts and never redeems on its own', asy
       harness.monitor.consumeMux('http://127.0.0.1:45001', signal),
       (error) => error instanceof Error && error.message === 'Harness mux WebSocket closed.'
     )
+    assert.equal(harness.seen.readySignal, signal, 'innerAuth.ready receives the exact signal consumeMux got (F-3)')
     assert.equal(harness.invalidations.length, 0, 'the monitor owns redemption, not the carrier')
   } finally {
     restore()

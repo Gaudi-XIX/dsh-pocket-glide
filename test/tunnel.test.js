@@ -13,7 +13,7 @@ import { Readable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { startCloudflareNamedTunnel, resolveCloudflared, ensureCloudflared, extractTryCloudflareUrl } from '../lib/tunnel.js'
-import { createSettingsStore } from '../lib/settings-store.js'
+import { createSettingsStore, SETTINGS_FILE_NAME } from '../lib/settings-store.js'
 import { LanMobileBridge } from '../lib/bridge.js'
 import { createMuxMonitor } from '../lib/mux-client.js'
 import { startBridge, httpFetch } from './helpers.js'
@@ -1392,6 +1392,70 @@ test('named tunnel: a spawn error rejects with the binary hint, not the args', a
     assert.equal(error.message.includes('ey-named-token-value'), false)
     return true
   })
+})
+
+// M-1 (2026-10-07-fix-pocket-contract-minis): the online line is the only trace
+// of the port handoff — under a dashboard token the local forward target is
+// whatever the Zero Trust ingress points at, not the bridge port.
+test('named tunnel: the online log names the dashboard ingress target', async () => {
+  const child = fakeNamedChild()
+  const logs = []
+  const pending = startCloudflareNamedTunnel({
+    port: 49152,
+    token: 'ey-named-token-value',
+    hostname: 'phone.example.com',
+    ensureImpl: NAMED_STUB_ENSURE,
+    spawnImpl: () => child,
+    graceMs: 20,
+    log: (message) => logs.push(message),
+  })
+  const instance = await pending
+  const online = logs.filter((line) => line.includes('Named tunnel online'))
+  assert.equal(online.length, 1, 'exactly one online line')
+  assert.ok(online[0].includes('Named tunnel online: https://phone.example.com'))
+  assert.ok(
+    online[0].includes('http://127.0.0.1:49152'),
+    'the online line carries the port the dashboard ingress must point at'
+  )
+  await instance.stop()
+})
+
+// L-2 (2026-10-07-fix-pocket-contract-minis): storage caps the tunnel hostname
+// at 150 — the QR pairing-URL budget (63-byte fixed prefix + 150 = 213 bytes =
+// BYTE_CAPACITY at MAX_VERSION). Read side (hand-edited files) and write side
+// (desktop panel save) enforce the same twin gate; the bridge's DNS-shape 253
+// check is a different concern and stays.
+test('settings store: a hostname past the 150 QR budget is dropped on read and on write', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pocket-hostname-cap-'))
+  try {
+    const hostname150 = 'a'.repeat(138) + '.example.com'
+    const hostname151 = 'b'.repeat(139) + '.example.com'
+    assert.equal(hostname150.length, 150)
+    assert.equal(hostname151.length, 151)
+    const store = createSettingsStore(dir)
+    // Read side: a hand-edited file keeps a 150-char hostname in full...
+    fs.writeFileSync(
+      path.join(dir, SETTINGS_FILE_NAME),
+      JSON.stringify({ notify: { channel: 'off', key: '', enabled: false }, tunnel: { token: '', hostname: hostname150 } }),
+      'utf8'
+    )
+    assert.equal(store.load().tunnel.hostname, hostname150)
+    // ...and an over-budget one falls back to the default on read.
+    fs.writeFileSync(
+      path.join(dir, SETTINGS_FILE_NAME),
+      JSON.stringify({ notify: { channel: 'off', key: '', enabled: false }, tunnel: { token: '', hostname: hostname151 } }),
+      'utf8'
+    )
+    assert.equal(store.load().tunnel.hostname, '', 'a 151-char hostname reads back as the default')
+    // Write side: 150 is kept verbatim...
+    assert.equal(store.save({ tunnel: { hostname: hostname150 } }), true)
+    assert.equal(store.load().tunnel.hostname, hostname150)
+    // ...and an over-budget patch field is discarded, the stored value untouched.
+    assert.equal(store.save({ tunnel: { hostname: hostname151 } }), true)
+    assert.equal(store.load().tunnel.hostname, hostname150, 'the 151-char patch was not applied')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('desktop tunnel config: masked readback, hostname validation, desktop gate', async () => {

@@ -289,3 +289,28 @@ test('⑩ 追踪的每个 .md 都严格 UTF-8 且零杂散控制字节', () => {
     assert(typeof text === 'string', `${rel} 解码结果异常`)
   }
 })
+
+// ⑪（2026-10-07-fix-pocket-contract-minis，F-1）
+// 钉的是哪句语义：pin-store「默认仓落在哪」的注释必须描述真实裁定——读走
+// `pairingPinReadPaths()`（机器自己的文件优先、unified 根兜底，:66-76 的函数 doc），
+// 写落 `pairingPinWritePath()`（机器自己的位置，:84-88 的函数 doc）。旧注释写
+// 「读走 unified 根、写落 unified 根」是被否决的「统一迁移」旧设计的残留指纹；
+// 照它修代码就是搬家事故（真机凭据在 legacy 原位，R12/Q8 红线）。两条指纹串全仓
+// 仅 pin-store.js 此一处（本卡 propose 期 grep 实证），钉死不让它们回潮。
+// 正锚钉在 doc 块内（`*/` 之前）：函数体 :253 本来就调用 pairingPinWritePath()，
+// 锚到块内才能区分「注释写了」与「只有函数体在调」。
+test('⑪ pin-store 默认仓注释与真实读写裁定一致，被否旧设计指纹零残留', () => {
+  const source = read('lib/pin-store.js')
+  assert(!source.includes('unified per-user data directory'), '旧设计指纹「unified per-user data directory」不得回潮（F-1）')
+  assert(!source.includes('write lands in the unified root'), '旧设计指纹「write lands in the unified root」不得回潮（F-1）')
+  const docStart = source.indexOf('Create the default store')
+  assert(docStart !== -1, 'createDefaultPairingPinStore 的 doc 块开场句必须在场')
+  const docEnd = source.indexOf('*/', docStart)
+  assert(docEnd !== -1, 'doc 块必须闭合')
+  const fnAt = source.indexOf('export function createDefaultPairingPinStore', docEnd)
+  assert(fnAt !== -1, 'doc 块之后必须紧跟 createDefaultPairingPinStore 声明')
+  assert(
+    source.slice(docStart, docEnd).includes('`pairingPinWritePath()`'),
+    'doc 块内必须引用 `pairingPinWritePath()`（写=readPaths[0] 裁定的正锚，F-1）'
+  )
+})
