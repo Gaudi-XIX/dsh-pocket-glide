@@ -267,6 +267,11 @@ function buildSendSandbox() {
     async function refreshActiveSessionSummary(){}
     async function rpc(method,payload){rpcCalls.push({method,payload});await new Promise((resolve,reject)=>{flight={resolve,reject}})}
     const L={draftUploading:'uploading',draftFailed:'failed',attachNotAccepted:'no {command}'}
+    // 2026-10-07-fix-pocket-r3-audit-batch: send()'s catch now maps too-large
+    // failures through the page's single helper — splice the real one in so the
+    // sandbox keeps running the page's own words (L.attachTooLarge/failed are not
+    // pinned by B-5, the rejection path stays behaviour-identical).
+    ${extractFunction(js, 'attachFailureCopy')}
     ${body}
     return {
       run:send,

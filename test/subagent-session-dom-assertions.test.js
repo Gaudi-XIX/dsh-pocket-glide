@@ -413,10 +413,14 @@ test('R1.4 the default entry cannot pick up the DOM script — one-level glob, r
   assert.ok(entry.length > 30, `the default entry is the whole suite (${entry.length} files), not a stub`);
   assert.ok(entry.includes(path.resolve(selfPath)), 'and this very file IS in the default entry');
 
+  // 2026-10-07-fix-pocket-r3-audit-batch: test/dom/ now holds a second gated
+  // browser script (pages-geometry.mjs, the T1-T3 geometry载具). The lock's
+  // purpose is unchanged — enumerate what the .mjs pattern really resolves — so
+  // the expected list grows with it instead of shrinking the walk.
   assert.deepEqual(
     domModules,
-    ['subagent-session-dom.mjs'],
-    'node:fs descends into test/dom/ — the .mjs pattern resolves the script there, which is what keeps the next line from being vacuous',
+    ['pages-geometry.mjs', 'subagent-session-dom.mjs'],
+    'node:fs descends into test/dom/ — the .mjs pattern resolves the gated scripts there, which is what keeps the next line from being vacuous',
   );
   assert.deepEqual(
     domEntry,
