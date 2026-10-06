@@ -187,9 +187,13 @@ test('T1 a two-turn transcript gives each turn its own pill on its own last text
   assert.ok(!htmls[4].includes('9K'), 'turn 2 must not show turn 1 total')
 })
 
-test('T1 a two-turn transcript gives every message its own clock', () => {
+test('T1 a two-turn transcript stamps one clock per turn on its final text message', () => {
   const htmls = project(TWO_TURNS).map((message) => renderOne(message))
-  for (const html of htmls) assert.ok(clockText(html), 'every message must carry a clock')
+  // htmls[1] is turn 1's mid-turn step: the clock rides the same last-item gate
+  // as the pill, so a mid-turn step carries neither — no footer at all.
+  assert.equal(clockText(htmls[1]), null, 'a mid-turn step must not carry a clock')
+  assert.ok(!htmls[1].includes('msg-tail'), 'a mid-turn step must not render a footer at all')
+  for (const idx of [0, 2, 3, 4]) assert.ok(clockText(htmls[idx]), `message ${idx} must still carry its clock`)
   // Same stamp -> same rendering; different turn -> different rendering.
   assert.equal(clockText(htmls[0]), clockText(htmls[2]), 'the question and its answer share one stamp')
   assert.equal(clockText(htmls[3]), clockText(htmls[4]), 'the question and its answer share one stamp')

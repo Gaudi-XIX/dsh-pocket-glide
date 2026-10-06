@@ -565,6 +565,9 @@ test('A16 a turn whose records carry no seq still shows exactly one usage pill',
   const bare = (step, text, total) => ({
     event: {
       type: 'assistant/message',
+      // stamped like the host stamps durable records, so the clock gate is
+      // observable here too; the user event below deliberately stays unstamped
+      time: DEFAULT_TIME,
       data: {
         turn: 't1',
         step,
@@ -581,6 +584,10 @@ test('A16 a turn whose records carry no seq still shows exactly one usage pill',
   const html = renderAll(project(events)).join('')
   const pills = html.match(/<span class="usage-pill"/g) || []
   assert.equal(pills.length, 1, `only the turn's last text message carries the pill, saw ${pills.length}`)
+  // one clock exactly: only the turn-final text item rides the last-item gate,
+  // and the unstamped user event grows no clock.
+  const clocks = html.match(/<span class="msg-clock">/g) || []
+  assert.equal(clocks.length, 1, `exactly one clock on the turn-final text item, saw ${clocks.length}`)
 })
 
 // ---------------------------------------------- A18 one pill per message, not per block
@@ -613,9 +620,11 @@ test('A18 one assistant message with several text blocks shows exactly one usage
     const html = renderAll(project(events)).join('')
     const pills = html.match(/<span class="usage-pill"/g) || []
     assert.equal(pills.length, 1, `${count} text blocks in one message must still print one pill, saw ${pills.length}`)
-    // count assistant bubbles + the one user bubble, all of which keep a clock.
+    // one clock on the single user bubble + one on the turn-final assistant
+    // bubble; the per-block clocks are retired — the clock rides the same
+    // last-item gate as the pill.
     const clocks = html.match(/<span class="msg-clock">/g) || []
-    assert.equal(clocks.length, count + 1, `each of the ${count} blocks is its own bubble and keeps its clock`)
+    assert.equal(clocks.length, 2, '用户气泡 1 枚 + 回合末 assistant 气泡 1 枚，每块一钟已废（时钟与药丸同门）')
   }
 })
 
@@ -653,6 +662,8 @@ test('A19 the pill winner is the last text item index, not a node or a seq compa
     'the winner must be derived from the text item count')
   assert.ok(projection.includes('usage:textIdx===lastTextIdx?normalizeUsage(turn.usage):undefined'),
     'the pill predicate must compare the item index')
+  assert.ok(projection.includes('messageTime:textIdx===lastTextIdx?item.messageTime:undefined'),
+    'the clock must ride the same last-item gate as the pill')
   assert.ok(!projection.includes('lastTextSeq'), 'the _seq sentinel must stay gone')
   assert.ok(!projection.includes('item.node==='), 'the half-fixed node comparison must stay gone')
 })
@@ -767,5 +778,17 @@ test('A21 the clock returns once the session is idle', () => {
 //   → 只红 1 例：A14 页脚借用本页自己的颜色变量。
 // M5 把 `eventTime` 改成只认 `record.event`（不解包已解包的记录）
 //   → 红 4 例：A6、A8 老会话也要时钟、A13 ×2（含「裸记录与包着的事件都能取到时刻」）。
+
+// M6 把摊平段挂载门退回裸挂载 `messageTime:item.messageTime,`，即时钟不再与药丸
+//   同受 `textIdx===lastTextIdx` 门约束（变更卡 2026-10-06-fix-pocket-clock-once-per-round
+//   的 apply 期变异实证；编号顺延本块仓内复跑轮已占用的 M1-M5，design 原记「M4」勘误为 M6）。
+//   → 红 4 例，恰为预期红名单、药丸档零误伤：
+//     A16 a turn whose records carry no seq still shows exactly one usage pill（钟恰一枚档）
+//     A18 one assistant message with several text blocks shows exactly one usage pill（钟计数 2 档）
+//     A19 the pill winner is the last text item index, not a node or a seq comparison（形态钉档）
+//     T1 a two-turn transcript stamps one clock per turn on its final text message（中间 step 无钟无 msg-tail 档）
+// 还原：不经 git，逐字还原后 sha256 =
+//   67f71cb7a2d67c6fbe81ce812a577a0c7860ce1a418a15a43ee31376e4ea80ae
+//   （本卡改动后的新基线，与变异前逐字节一致）。已还原。
 // 还原后：源码 sha256 回到基线 9283ffe72e0ca278，档内 pass 35 / fail 0。
 // 变异脚本 `F:\defws\tmp\mutate-footer.mjs`，全程不经 git（工作树带着未提交改动）。
