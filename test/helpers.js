@@ -121,6 +121,48 @@ export async function startBridge(opts = {}) {
     return setCookie.split(';')[0]
   }
 
+  /**
+   * Complete the full tunnel pairing funnel over the cf-connecting-ip + cf-ray
+   * header seam: seed the ephemeral PIN, verify, take the desktop approval
+   * when the device is new, and poll. Returns the raw `dsh_mobile=...` cookie —
+   * from the poll when the desktop confirmed, from the verify response itself
+   * when the device registry restored a known device (pending: false).
+   */
+  async function pairMobileTunnel(userAgent = 'PocketTest/1.0', pin = '123456') {
+    const tunnelHeaders = {
+      'user-agent': userAgent,
+      'cf-connecting-ip': '203.0.113.7',
+      'cf-ray': '8c1a-pair-tunnel-SJC',
+      origin: base,
+    }
+    bridge.ephemeralPin = pin
+    bridge.ephemeralPinExpiresAt = Date.now() + 5 * 60_000
+    const verify = await httpFetch(`${base}/pair/verify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...tunnelHeaders },
+      body: JSON.stringify({ pin }),
+    })
+    assert.equal(verify.status, 200)
+    const verified = await verify.json()
+    assert.equal(verified.ok, true)
+    let cookie
+    if (verified.pending === true) {
+      const desktop = await pairDesktop()
+      const approved = await approvePendingPairing(verified.confirmId, desktop)
+      assert.equal(approved.status, 200)
+      const poll = await pollPendingPairing(verified.confirmId, tunnelHeaders)
+      assert.equal(poll.status, 200)
+      assert.equal((await poll.json()).approved, true)
+      cookie = (poll.headers.get('set-cookie') ?? '').split(';')[0]
+    } else {
+      // Restored from the device registry: the verify response carried the
+      // fresh cookie itself (no desktop round trip by design).
+      cookie = (verify.headers.get('set-cookie') ?? '').split(';')[0]
+    }
+    assert.match(cookie, /^dsh_mobile=/)
+    return cookie
+  }
+
   /** Real loopback one-time desktop bootstrap; returns `dsh_desktop=...`. */
   async function pairDesktop() {
     const boot = await httpFetch(bridge.createDesktopUrl())
@@ -154,7 +196,7 @@ export async function startBridge(opts = {}) {
       .map(({ level, message }) => `[${level}] ${message}`)
   }
 
-  return { bridge, snap, base, harness, pairMobile, pairDesktop, approvePendingPairing, pollPendingPairing, stop, logs, transportFailures }
+  return { bridge, snap, base, harness, pairMobile, pairMobileTunnel, pairDesktop, approvePendingPairing, pollPendingPairing, stop, logs, transportFailures }
 }
 
 // ---------------------------------------------------------------------------

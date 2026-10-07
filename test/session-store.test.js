@@ -192,3 +192,117 @@ test('AC3.3 a missing file is a genuine empty store: the first empty save still 
     rmSync(dataDir, { recursive: true, force: true })
   }
 })
+
+// ---------------------------------------------------------------------------
+// Device registry (change 2026-10-07-feat-pocket-device-registry): profiles
+// ride the SAME document as an additive `devices` map. Version stays 1 — an
+// older build must keep reading a newer file, and this build reads an older
+// file as "no devices" (the bridge migrates from the session records).
+// ---------------------------------------------------------------------------
+
+const emptyDevicesState = (savedAt = 0) => ({ ...emptyState(savedAt), devices: new Map() })
+
+test('devices: a profile round-trips through save and load', () => {
+  const dataDir = tempDataDir()
+  try {
+    const store = createSessionStore(dataDir)
+    const now = Date.now()
+    const devices = new Map([['fp-abc123', {
+      fingerprint: 'fp-abc123',
+      label: 'Huawei',
+      firstPairedAt: now,
+      expiresAt: now + MOBILE_COOKIE_TTL_MS,
+      lastSeenAt: now,
+      permission: 'lan+wan',
+      publicConsentedAt: now,
+    }]])
+    assert.equal(store.save({ ...emptyState(now), devices }), true)
+    const doc = store.load(now)
+    assert.equal(doc.devices.length, 1)
+    assert.equal(doc.devices[0][0], 'fp-abc123')
+    assert.equal(doc.devices[0][1].permission, 'lan+wan')
+    assert.equal(doc.devices[0][1].label, 'Huawei')
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('devices: an expired profile is dropped at load, against the caller clock', () => {
+  const dataDir = tempDataDir()
+  try {
+    const now = 5_000_000_000_000
+    writeFileSync(sessionsStorePath(dataDir), JSON.stringify({
+      version: 1,
+      savedAt: now,
+      sessions: [],
+      suspended: [],
+      resumable: [],
+      devices: [
+        ['fp-live', { fingerprint: 'fp-live', expiresAt: now + 1000, permission: 'lan' }],
+        ['fp-dead', { fingerprint: 'fp-dead', expiresAt: now - 1000, permission: 'lan' }],
+      ],
+    }))
+    const doc = createSessionStore(dataDir).load(now)
+    assert.deepEqual(doc.devices.map(([key]) => key), ['fp-live'], 'only the live profile comes back')
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('devices: malformed entries drop individually and the map caps at DEVICE_MAP_CAP', () => {
+  const dataDir = tempDataDir()
+  try {
+    const entries = []
+    for (let i = 0; i < 25; i++) entries.push([`fp-${i}`, { fingerprint: `fp-${i}`, expiresAt: 9e15, permission: 'lan' }])
+    entries.push(['bad', 'not-an-object'], [['deeply', 'nested'], {}], ['', {}])
+    writeFileSync(sessionsStorePath(dataDir), JSON.stringify({
+      version: 1, savedAt: 0, sessions: [], suspended: [], resumable: [], devices: entries,
+    }))
+    const doc = createSessionStore(dataDir).load(0)
+    assert.equal(doc.devices.length, 16, 'capped at DEVICE_MAP_CAP')
+    assert.ok(doc.devices.every(([key, record]) => typeof key === 'string' && typeof record === 'object'))
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('devices: a pre-registry document reads with an empty devices list (no version bump)', () => {
+  const dataDir = tempDataDir()
+  try {
+    writeFileSync(sessionsStorePath(dataDir), JSON.stringify({
+      version: 1, savedAt: 0,
+      sessions: [['kept', { token: 'kept', expiresAt: 9e15 }]],
+      suspended: [], resumable: [],
+    }))
+    const doc = createSessionStore(dataDir).load(0)
+    assert.deepEqual(doc.devices, [], 'an older file is an empty registry, never a throw')
+    assert.equal(doc.sessions.length, 1, 'the session half reads exactly as before')
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('devices: a save carrying only profiles is real state — the unreadable-file guard lets it through', () => {
+  const dataDir = tempDataDir()
+  try {
+    const now = Date.now()
+    writeFileSync(sessionsStorePath(dataDir), JSON.stringify({
+      version: 1, savedAt: now, sessions: [], suspended: [], resumable: [],
+      devices: [['fp-old', { fingerprint: 'fp-old', expiresAt: now + MOBILE_COOKIE_TTL_MS, permission: 'lan' }]],
+    }))
+    const ebusy = () => {
+      const error = new Error('boom')
+      error.code = 'EBUSY'
+      throw error
+    }
+    const store = createSessionStore(dataDir, { readFile: ebusy })
+    store.load(now)
+    // The maps are an unverified empty state, but the registry holds a fresh
+    // profile: that is something to say, so the save must proceed.
+    const devices = new Map([['fp-new', { fingerprint: 'fp-new', expiresAt: now + MOBILE_COOKIE_TTL_MS, permission: 'lan+wan' }]])
+    assert.equal(store.save({ ...emptyState(now), devices }), true)
+    assert.ok(readFileSync(sessionsStorePath(dataDir), 'utf8').includes('fp-new'))
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+})

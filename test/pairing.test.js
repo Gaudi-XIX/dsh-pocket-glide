@@ -115,6 +115,13 @@ async function completePairing(t, pin, verifyHeaders = {}, desktopCookie) {
   return { verifiedBody, poll }
 }
 
+// ---------------------------------------------------------------------------
+// 改版(2026-10-07-feat-pocket-device-registry):第二次配对同 UA 的手机已是
+// 注册表里的已知设备,/pair/verify 直接换发凭证(pending:false),不再等桌面
+// 确认。原断言「仍走 pending→approve→poll」随桌面确认跳过而反转;「一台手机
+// 只占一个条目」的性质保留,由注册表匹配 + presented-cookie 复用共同保证。
+// ---------------------------------------------------------------------------
+
 test('re-pairing with the live cookie keeps one device instead of two', async () => {
   const t = await tunnelPinBridge()
   try {
@@ -126,12 +133,18 @@ test('re-pairing with the live cookie keeps one device instead of two', async ()
     assert.equal(t.bridge.sessions.size, 1)
     const liveToken = [...t.bridge.sessions.keys()][0]
     // The second submit carries the cookie the first flow issued (same origin,
-    // so SameSite=Strict still sends it). It is the same handset pairing again —
-    // a re-submitted PIN, a second tab, a reloaded link — not a second device.
-    const second = await completePairing(t, '123456', { cookie }, desktop)
+    // so SameSite=Strict still sends it). The registry knows the fingerprint,
+    // so the verify answers restored — and the presented cookie is the token
+    // that gets re-issued, not a second entry.
+    const verified = await verifyPin(t, '123456', { cookie })
+    assert.equal(verified.status, 200)
+    const body = await verified.json()
+    assert.equal(body.ok, true)
+    assert.equal(body.pending, false, 'a known device is restored on the verify itself')
+    assert.equal(cookieOf(verified), cookie, 'the phone keeps the token it already holds')
     assert.equal(t.bridge.sessions.size, 1, 'one handset must never occupy two entries')
-    assert.ok(t.bridge.sessions.has(liveToken), 'the phone keeps the token it already holds')
-    assert.equal(cookieOf(second.poll), cookie)
+    assert.ok(t.bridge.sessions.has(liveToken))
+    assert.equal(t.bridge.pendingPairings.size, 0, 'no confirmation card either')
   } finally {
     await t.stop()
   }
@@ -175,20 +188,49 @@ test('LAN re-pairing without a cookie still replaces that handset entry', async 
   }
 })
 
-test('tunnel re-pairing without a cookie does not evict by address and UA', async () => {
+// ---------------------------------------------------------------------------
+// 改版(2026-10-07-feat-pocket-device-registry)。原断言:同 addr + 同 UA、不带
+// cookie 的隧道重配对「不退休原条目」(M4,sessions.size === 2)。新断言:该
+// 情形按注册表指纹命中已知设备,PIN 即恢复并退休同指纹旧条目(sessions.size
+// === 1)。M4 的安全内核原样保留并在下方单钉:地址 + UA 单独永远进不来——
+// 恢复仍然必须先答对 PIN,答不对什么都不发生。
+// ---------------------------------------------------------------------------
+
+test('tunnel re-pairing without a cookie restores the known device and retires its old entry', async () => {
   const t = await tunnelPinBridge()
   try {
     const desktop = await t.pairDesktop()
     const ua = { 'user-agent': 'Mozilla/5.0 (Linux; Android 12; NOH-AN00)' }
     await completePairing(t, '123456', ua, desktop)
     assert.equal(t.bridge.sessions.size, 1)
-    // Same carrier egress, same stock UA, no cookie: this is not proof of being
-    // the same phone, so the first entry survives instead of being retired.
-    const second = await completePairing(t, '123456', ua, desktop)
-    assert.equal(t.bridge.sessions.size, 2, 'an address behind the carrier is not a device')
-    // The token path is the one that recognises the handset, and it still reuses.
-    const again = await completePairing(t, '123456', { ...ua, cookie: cookieOf(second.poll) }, desktop)
-    assert.equal(cookieOf(again.poll), cookieOf(second.poll))
+    const oldToken = [...t.bridge.sessions.keys()][0]
+    // Same carrier egress, same stock UA, no cookie — but the PIN, which is
+    // the operator's presence proof. The registry match retires the stale
+    // entry instead of stacking a phantom per restart.
+    const verified = await verifyPin(t, '123456', ua)
+    assert.equal(verified.status, 200)
+    assert.equal((await verified.json()).pending, false)
+    assert.match(cookieOf(verified), /^dsh_mobile=/)
+    assert.equal(t.bridge.sessions.size, 1, 'one fingerprint, one device, one entry')
+    assert.equal(t.bridge.sessions.has(oldToken), false, 'the stale entry is retired')
+    assert.notEqual(cookieOf(verified).split('=')[1], oldToken, 'the phone carries the fresh token')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('M4 kernel: without the PIN, a shared egress address and a stock UA are still nothing', async () => {
+  const t = await tunnelPinBridge()
+  try {
+    const desktop = await t.pairDesktop()
+    const ua = { 'user-agent': 'Mozilla/5.0 (Linux; Android 12; NOH-AN00)' }
+    await completePairing(t, '123456', ua, desktop)
+    assert.equal(t.bridge.sessions.size, 1)
+    // No cookie, no PIN knowledge: the wrong answer restores nothing.
+    const wrong = await verifyPin(t, '000000', ua)
+    assert.equal(wrong.status, 401)
+    assert.equal(t.bridge.sessions.size, 1)
+    assert.equal(t.bridge.pendingPairings.size, 0, 'a failed guess registers no confirmation card either')
   } finally {
     await t.stop()
   }

@@ -72,7 +72,10 @@ test('consent gate: after accepting, the app is reached directly', async () => {
       body: JSON.stringify({ next: '/' }),
     })
     const consent = (accepted.headers.get('set-cookie') ?? '').split(';')[0]
-    const mobile = await t.pairMobile('PocketConsent/1.0')
+    // 改版(2026-10-07-feat-pocket-device-registry):配对走隧道——局域网配出的
+    // 设备档案权限是「仅本地」,拿它过隧道请求现在会被权限强制点 403(专测见
+    // device-registry.test.js);consent 门的本测需要的是一台公网设备。
+    const mobile = await t.pairMobileTunnel('PocketConsent/1.0')
     const res = await httpFetch(`${t.base}/`, {
       headers: { ...tunnelHeaders, cookie: `${mobile}; ${consent}` },
     })
@@ -136,14 +139,15 @@ test('manifest route: authed+consent double gate over the tunnel, 401 on LAN', a
     const gated = await httpFetch(`${t.base}/manifest.json`, { headers: tunnelHeaders })
     assert.equal(gated.status, 303)
     assert.equal(gated.headers.get('location'), '/consent?next=%2Fmanifest.json')
-    // Authed + consented over the tunnel → the manifest.
+    // Authed + consented over the tunnel → the manifest. 改版注意:配对走隧道
+    // (LAN 配出的设备过隧道被权限点 403,见 device-registry.test.js)。
     const accepted = await httpFetch(`${t.base}/consent/accept`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...tunnelHeaders },
       body: JSON.stringify({ next: '/' }),
     })
     const consent = (accepted.headers.get('set-cookie') ?? '').split(';')[0]
-    const mobile = await t.pairMobile('PocketManifest/1.0')
+    const mobile = await t.pairMobileTunnel('PocketManifest/1.0')
     const res = await httpFetch(`${t.base}/manifest.json`, {
       headers: { ...tunnelHeaders, cookie: `${mobile}; ${consent}` },
     })
