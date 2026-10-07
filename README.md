@@ -56,7 +56,7 @@ node --input-type=module -e "import('./lib/index.js').then(m=>console.log(JSON.s
 | 桌面配对面 | `GET /desktop`（含一次性 `?k=` bootstrap）、`GET /desktop/status`、`GET /desktop/tunnel/status`、`POST /desktop/pairing/rotate`、`POST /desktop/pin/{consent,reset}`、`POST /desktop/tunnel/toggle`、`POST /desktop/disconnect`、`POST /desktop/revoke`、`GET|POST /desktop/notify`、`POST /desktop/notify/test`、`GET|POST /desktop/tunnel/config`、`POST /desktop/pair/confirm` |
 
 > 旧的 `/phone*` 路由族已退役，不再是本插件的接口面。
-> 表录全量接口面；穷举判据是 `bridge.handle()` 的 `url.pathname` 判定（34 处 `pathname ===` +
+> 表录全量接口面；穷举判据是 `bridge.handle()` 的 `url.pathname` 判定（35 处路由判定 `pathname ===` +
   1 处 `startsWith('/brand-logo/')`）。修后本表 4 行录 33 条方法条目、覆盖 35 个路径实例
   （`/brand-logo/{,dark}` 与 `/desktop/pin/{consent,reset}` 各一条目覆盖两径、`GET|POST` 两条目各覆盖双方法）。
 
@@ -208,7 +208,7 @@ node --input-type=module -e "import{readFileSync}from'node:fs';const s=readFileS
 | `DSH_POCKET_CLOUDFLARED` | `resolveCloudflared()` | 本插件自己的 cloudflared 覆盖（绝对路径） |
 | `DSH_PHONE_NATIVE_CLOUDFLARED` | 同上 | 上一代插件留下的兼容别名，仅作回落读取 |
 | `CLOUDFLARED_BIN` | 同上 | 通用变量名，优先级低于 `DSH_POCKET_CLOUDFLARED` |
-| `CLOUDFLARED_VERSION` | `tools/fetch-cloudflared.mjs` | **只对预置工具有效**，运行时不读它；非 pinned 值需再加 `--allow-unpinned` |
+| `CLOUDFLARED_VERSION` | `tools/fetch-cloudflared.mjs` | **只对预置工具有效**，运行时不读它；非 pinned 值需再加 `--allow-unverified` |
 | `DSH_HOME` | `lib/constants.js` 的 `defaultDshHome()`/`dshHomeOverridden()`（`lib/file-log.js` re-export 同一个） | 统一数据根。**设了它 = 隔离到底**（日志 + 长效密码 + 隧道缓存全部只认它，见「数据根」节）；**没设 = 只有日志落到 `~/.dsh/pocket/`**，密码与缓存留在机器原位 |
 | `LOCALAPPDATA` / `XDG_CACHE_HOME` | `pin-store.js` 的 `legacyDataDir()`、`tunnel.js` 的 `preUnificationCacheDir()` | **仅在未设 `DSH_HOME` 时**是长效密码与 cloudflared 缓存的写根；设了 `DSH_HOME` 就整体不参与 |
 
@@ -386,6 +386,6 @@ node tools/render-stub.mjs                       # 渲染桩：真实页面资�
     LRU 淘汰、读时重插（`capSessionCursors()`）——原先「运行中既不淘汰也不刷新」的陈述已随实现翻转，此处存档。
 - **刻意代价（不是缺陷）：进入「一条都还没画出来」的会话会多发一次头页请求**。触发面＝每次进入一个缓冲为空的会话，含全新空会话：页面侧 `fetchOlderPage()` 遇到 `anchorSeq<0` 按「从头拉」处理，发一条**不带 `beforeSeq`** 的 `session.history`（`maxMessages: 30`）去铺第一页；`ensureTranscriptFilled()` 的空转录自举循环因此会先走这一条。**为什么可接受**：这一条请求本身就是空缓冲会话唯一的自举路径，去掉它「加载更多」就没有出口；它拿到的是最新一页，且两道门都不会让它空转——页面侧 `ensureTranscriptFilled()` 用 `count()<=before` 判「没多出消息就停」，桥侧 `LanMobileBridge.forwardRpc` 的 `session.history` 分支在不带 `beforeSeq` 时保留三级阶梯护栏（`pageRequests` 三种形状）。行为锁在 `test/stream-watermark.test.js` 的 `AC-A6 an empty buffer pulls the head page without beforeSeq` 与 `test/transcript-order.test.js` 的头页用例里。
 - 一切页面/桥侧改动的上线方式都是「改完 → 用户重启 DSH → 手机上目验」，中途不催重启。
-- 通知出站的 wxpusher 通道是 **shape-only 发送**：POST 体只带 `appToken`/`summary`/`content`，不带
+- 通知出站的 wxpusher 通道是 **shape-only 发送**：POST 体只带 `appToken`/`summary`/`content`/`contentType`（=1 文本），不带
   `uid`/`tagIds`，而 WxPusher 的业务错误随 HTTP 200 返回——桥只判 `response.ok`，对面没收到也可能记
   「已送达」（Server酱/Bark 走 URL 判 2xx，无此嫌疑）。真机通道实测待做；坐实另开修复卡。
