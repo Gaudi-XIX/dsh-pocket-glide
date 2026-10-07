@@ -4,6 +4,47 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.4.0 — 2026-10-08
+
+本版为「九卡特性批」：九张 change（两轨并行）+ 独立审查（渲染层 P1 修复 + 桥安全 PASS-with-notes 两条 P3 顺手修）。
+逐卡账在 `F:\defws\.agents\flow\changes\2026-10-07-*`（各卡 planning-context + HANDOFF）。
+
+### 新增（用户可见）
+
+- **隧道模式流式降级**（feat-pocket-tunnel-stream-fallback）：quick tunnel 下 Cloudflare 吞 SSE 实时帧
+  （10-07 真机实证），手机页现按桥端透出的连接模式自动分流——公网走 `/api/session/events` 增量轮询
+  （1.5s 起自适应，回前台即拉），局域网保持 SSE 实时流；AI 回复在手机上从「冻住→蹦一段」变匀速吐字。
+- **过程呈现改版**（feat-pocket-process-render-overhaul）：工具卡从「英文工具名+原始 JSON」改为宿主官方
+  中文动词三态叙事（正在编辑文件…→修改了文件），同类操作聚合（「已读取 5 个文件」），edit/write 显示
+  行级红绿 diff（截断防巨页），原始参数降为「查看技术详情」二层折叠。
+- **图片/文件闭环**（feat-pocket-image-file-capability）：图片灯箱（全屏/两档缩放/保存）、文本类附件
+  行内预览（200 行截断+查看全部+复制）、AI `present` 呈现的图片/文件直接渲染成卡（带描述）、消息里
+  `![](<本机路径>)` 图改写可显示——新端点 `/api/session-file` 只服务「本会话事件流中出现过的路径」，
+  集合外一律 404（防任意文件读）。
+- **设备档案与恢复**（feat-pocket-device-registry）：换域名/重启后手机**只输 PIN 即恢复**（凭证+公网同意
+  一并换发，不再重复点同意——同意书从浏览器迁到设备档案）；桌面面板新增「已配对设备」页（名称/配对
+  时间/到期/最后上线/通道权限，逐台撤销[踢线]/延长/改权限）；新设备权限按首连通道自动定（局域网=仅
+  本地，公网=本地+公网）；存量配对平滑迁移不重新配对。
+- **智能滚动**（feat-pocket-smart-scroll-anchors）：流式自动贴底、上滑即停、双锚点「↓ 最新/↑ 提问」
+  （↑ 一键回到本轮你发的那条消息）；历史消息 `content-visibility` 原生虚拟化，长会话不卡。
+- **会话未读红点**+**PWA 离线回退页**（同卡）：列表显示哪个会话有新动静；断网时手机页显示 offline
+  页而非白屏，恢复后一键重载。
+- **完成通知判准升级+审批到达即推送**（feat-pocket-notify-judge-upgrade）：静默 90s/宽限 10s/连忙 20s
+  即时/30min 兜底，治「任务完成」误报漏报；AI 提问等待审批时立即推送（零配置时静默跳过）。
+
+### 修复（用户可见）
+
+- **wxpusher 假成功**（fix-pocket-wxpusher-simple-push）：换 simple-push 语义+读业务码 `code===1000`，
+  「HTTP 200 但没送到」不再记成功；对面错误消息脱敏截断后透出给「测试」按钮。
+- **隧道 token 出命令行**（fix-pocket-tunnel-token-env）：命名隧道 token 改走 `TUNNEL_TOKEN` 环境变量，
+  不再出现在进程列表（同机进程可读 argv）。
+- **断线原因说人话**（fix-pocket-disconnect-copy）：「连接断开」细分为会话过期/桌面断开/工作区关闭/
+  连接超时，重连中与错误横幅视觉分离。
+- 独立审查 P1：含 AI 发图记录的会话在手机上打开即崩溃（presented 记录缺 turn 字段击穿渲染循环）——
+  已修并补全程行为测试。
+
+生效需要重启 DeepSeek Harness。测试基线 756→912（+156）。
+
 ## 0.3.1 — 2026-10-07
 
 ### 新增（用户可见）
