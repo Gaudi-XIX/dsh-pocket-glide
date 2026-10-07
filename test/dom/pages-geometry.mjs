@@ -32,6 +32,11 @@
 //   C  .queue-list does not scroll horizontally on long queued text: scrollWidth
 //      <= clientWidth, the × handle fully inside, ellipsis engaged, dock band
 //      regression (dock sits above the composer with its 8px gap).
+//   D  (2026-10-07-fix-pocket-r2-pages-batch, W2) todo dock vs the failure
+//      banner: with a real todos projection up (todo-open, --todo-h > 0) the
+//      banner must clear #todoDock by area 0, the dock header must self-hit at
+//      its center, the banner stays viewport-bound and clear of the composer;
+//      the todo-expanded state re-runs the same set.
 
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -68,7 +73,7 @@ function bootData() {
   };
 }
 
-function projections() {
+function projections(todos = null) {
   const now = Date.now();
   return {
     asOfSeq: 10,
@@ -78,13 +83,13 @@ function projections() {
         { id: 'q1', content: [{ type: 'text', text: LONG_TEXT }] },
         { id: 'q2', content: [{ type: 'image', mediaType: 'image/png' }, { type: 'file', name: 'a.zip' }] },
       ] },
-      todos: null,
+      todos,
       modelSelection: null,
     },
   };
 }
 
-function historyFor() {
+function historyFor(todos = null) {
   const record = (seq, text) => ({
     seq,
     event: { type: 'user/message', data: { message: { source: { kind: 'user' }, content: [{ type: 'text', text }] } } },
@@ -96,11 +101,11 @@ function historyFor() {
       { seq: 3, event: { type: 'turn/end', data: { turn: 't1', reason: { kind: 'completed' } } } },
     ],
     hasMore: false,
-    projections: projections(),
+    projections: projections(todos),
   };
 }
 
-function startHost({ pendingQuestion = null } = {}) {
+function startHost({ pendingQuestion = null, todos = null } = {}) {
   let streamRes = null;
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
@@ -122,7 +127,7 @@ function startHost({ pendingQuestion = null } = {}) {
     if (url.pathname === '/api/session/stream') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
       res.write(': open\n\n');
-      const frame = { records: historyFor().events, projections: projections(), hasMore: false };
+      const frame = { records: historyFor(todos).events, projections: projections(todos), hasMore: false };
       res.write(`event: snapshot\ndata: ${JSON.stringify(frame)}\n\n`);
       res.write(`event: status\ndata: ${JSON.stringify({ settings: null, agentRunning: true, at: Date.now() })}\n\n`);
       streamRes = res;
@@ -140,9 +145,9 @@ function startHost({ pendingQuestion = null } = {}) {
         try { parsed = JSON.parse(body || '{}'); } catch { /* page always sends json */ }
         const method = parsed.method;
         let value;
-        if (method === 'session.history') value = historyFor();
+        if (method === 'session.history') value = historyFor(todos);
         else if (method === 'interaction.pending') value = pendingQuestion;
-        else if (method === 'session.projections') value = projections();
+        else if (method === 'session.projections') value = projections(todos);
         else if (method === 'session.list') value = bootData().sess;
         else if (method === 'workspace.list') value = bootData().ws;
         else if (method === 'settings.describe') value = { namespaces: [] };
@@ -362,6 +367,71 @@ async function scenarioBannerQuestionOpen(host, port, failures) {
   });
 }
 
+// Scene D probe: geometry of the failure banner against a LIVE todo dock
+// (todo-open, and again with todo-expanded). overlap* are exact intersection
+// areas in px², so "0" is the whole claim — no eyeballed gaps.
+const todoBannerSnapshot = `(() => {
+  const banner = document.getElementById('chatError')
+  const dock = document.getElementById('todoDock')
+  const header = dock && dock.querySelector('.todo-header')
+  const ci = document.querySelector('.composer-inner')
+  if (!banner || !dock || !header || !ci) return { missing: true, todoRows: dock ? 0 : -1 }
+  const br = banner.getBoundingClientRect()
+  const dr = dock.getBoundingClientRect()
+  const cr = ci.getBoundingClientRect()
+  const overlapArea = (a, b) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top))
+  const hr = header.getBoundingClientRect()
+  const hit = document.elementFromPoint(hr.left + hr.width / 2, hr.top + hr.height / 2)
+  const w = window.innerWidth, h = window.innerHeight
+  return {
+    missing: false,
+    text: (banner.textContent || '').trim(),
+    todoOpen: document.body.classList.contains('todo-open'),
+    expanded: document.body.classList.contains('todo-expanded'),
+    todoH: (getComputedStyle(document.body).getPropertyValue('--todo-h') || '').trim(),
+    overlapDock: overlapArea(br, dr),
+    overlapComposer: overlapArea(br, cr),
+    headerSelfHit: !!hit && (hit === header || header.contains(hit)),
+    hitDesc: hit ? hit.tagName + (hit.className ? '.' + hit.className : '') : 'null',
+    inViewport: br.top >= 0 && br.left >= -1 && br.right <= w + 1 && br.bottom <= h + 1 && br.width > 0 && br.height > 0,
+  }
+})()`
+
+async function scenarioBannerTodo(host, port, failures) {
+  return withPage(port, host.origin, async (page) => {
+    await wait(900); // let the stream snapshot paint the chat, the queue dock and the todo dock
+    const up = await page.evaluate(`(() => { const d = document.getElementById('todoDock'); return !!d && !d.hidden && document.body.classList.contains('todo-open') })()`);
+    if (!up) {
+      failures.push('D(todo-open): todoDock never became visible — the todos projection was not consumed');
+      return null;
+    }
+    await page.evaluate(`fetch('/emit-failure',{method:'POST'})`);
+    await wait(500);
+    const snap = await page.evaluate(todoBannerSnapshot);
+    const no = (cond, msg) => { if (!cond) failures.push(`D(todo-open): ${msg} — ${JSON.stringify(snap)}`); };
+    no(!snap.missing, 'banner/todoDock/composer organs missing from the DOM');
+    if (snap.missing) return snap;
+    no(snap.text === FAILURE_COPY, `the failure copy must be painted by the product path, got ${JSON.stringify(snap.text)}`);
+    no(snap.todoOpen && snap.todoH !== '0px' && snap.todoH !== '', `todo dock must hold a real --todo-h, got ${JSON.stringify(snap.todoH)}`);
+    no(snap.overlapDock === 0, `banner intersects #todoDock (area ${snap.overlapDock}px²) — W2 --todo-h missing from the stack`);
+    no(snap.overlapComposer === 0, 'banner intersects .composer-inner');
+    no(snap.headerSelfHit, `todo header center is not self-hit (topmost=${snap.hitDesc})`);
+    no(snap.inViewport, 'banner outside the viewport');
+    // expanded tier: open the dock's own header and re-run the same geometry set
+    await page.evaluate(`document.querySelector('.todo-header').click()`);
+    await wait(300);
+    const open = await page.evaluate(todoBannerSnapshot);
+    const nx = (cond, msg) => { if (!cond) failures.push(`D(todo-expanded): ${msg} — ${JSON.stringify(open)}`); };
+    if (open.missing) { nx(false, 'organs vanished after expand'); return snap; }
+    nx(open.expanded, 'the todo-expanded body class never engaged after the header click');
+    nx(open.overlapDock === 0, `expanded: banner intersects #todoDock (area ${open.overlapDock}px²)`);
+    nx(open.overlapComposer === 0, 'expanded: banner intersects .composer-inner');
+    nx(open.headerSelfHit, `expanded: todo header center not self-hit (topmost=${open.hitDesc})`);
+    nx(open.inViewport, 'expanded: banner outside the viewport');
+    return { snap, open };
+  });
+}
+
 async function scenarioQueue(host, port, failures) {
   return withPage(port, host.origin, async (page) => {
     await wait(900);
@@ -445,6 +515,17 @@ async function main() {
     } finally {
       await plain.close();
     }
+    const todoHost = await startHost({
+      todos: [
+        { content: '几何目验任务一（进行中）', status: 'in_progress' },
+        { content: '几何目验任务二（待处理）', status: 'pending' },
+      ],
+    });
+    try {
+      report.scenarios.push(await scenarioBannerTodo(todoHost, CDP_PORT, failures));
+    } finally {
+      await todoHost.close();
+    }
     const questionHost = await startHost({
       pendingQuestion: { rpcId: 'rpc1', sessionId: SESSION_ID, questions: [{ id: 'qq1', question: '选一个', options: [{ label: '甲' }, { label: '乙' }] }] },
     });
@@ -469,7 +550,7 @@ async function main() {
     for (const line of failures) console.log(`  - ${line}`);
     return 1;
   }
-  console.log('GEOMETRY PASS: banner/edit-box/queue-list hold their geometry at 390x844');
+  console.log('GEOMETRY PASS: banner/edit-box/queue-list/todo-dock hold their geometry at 390x844');
   return 0;
 }
 

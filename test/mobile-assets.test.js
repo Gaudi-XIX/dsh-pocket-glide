@@ -272,11 +272,14 @@ test('AC-PERF an aborted RPC reports its own timeout and a reconnect never doubl
 
   const cleared = []
   const aborted = []
-  const makeRpc = (fetchImpl) =>
+  // `locationRef` backs the consent-gate walk (W1, r2 batch): undefined keeps the
+  // pre-existing arms untouched — they never reach the navigation statement.
+  const makeRpc = (fetchImpl, locationRef) =>
     new Function(
       'fetch',
       'setTimeout',
       'clearTimeout',
+      'location',
       `
       const L=${JSON.stringify(labels)};
       const RPC_TIMEOUT_MS=12000,RPC_SLOW_TIMEOUT_MS=180000;
@@ -292,6 +295,7 @@ test('AC-PERF an aborted RPC reports its own timeout and a reconnect never doubl
         cleared.push(timer)
         clearTimeout(timer)
       },
+      locationRef,
     )
 
   const rpc = makeRpc(
@@ -316,6 +320,33 @@ test('AC-PERF an aborted RPC reports its own timeout and a reconnect never doubl
   )
   assert.equal(aborted.length, 1, 'the controller aborted the fetch')
   assert.equal(cleared.length, 1, 'and the timeout was cleared in the same finally')
+
+  // W1 (r2 pages batch), behaviour level: a redirect that lands on the consent
+  // card is recognized (the real fetch follows the 303, so `r.url` names the
+  // card), the walk to the card fires, and the card is never parsed as JSON.
+  const navigated = []
+  const consentRpc = makeRpc(
+    async () => ({ ok: true, status: 200, url: 'http://127.0.0.1:1/consent?next=%2F', json: async () => ({ ok: false }) }),
+    { replace: (u) => { navigated.push(u) } },
+  )
+  await assert.rejects(
+    () => consentRpc('session.history', { sessionId: 's1' }),
+    (e) => {
+      assert.equal(e.consentGate, true, 'the gate error is flagged for the caller')
+      assert.equal(e.disconnected, undefined, 'the gate is not a disconnect')
+      assert.equal(navigated.length, 1, 'the rpc walks the browser to the card exactly once')
+      assert.equal(navigated[0], '/consent?next=/', 'the walk targets /consent?next=/')
+      return true
+    },
+  )
+  // the guard: a normal same-origin answer neither navigates nor flags
+  const plainNavigated = []
+  const plainRpc = makeRpc(
+    async () => ({ ok: true, status: 200, url: 'http://127.0.0.1:1/api/rpc', json: async () => ({ ok: true, value: 42 }) }),
+    { replace: (u) => { plainNavigated.push(u) } },
+  )
+  assert.equal(await plainRpc('session.history', { sessionId: 's1' }), 42, 'a normal rpc still returns its value')
+  assert.equal(plainNavigated.length, 0, 'and never walks to the card')
 
   // P-9 is de-scoped: no page-side session abort table ships, and leaving a
   // session must not abort an in-flight RPC.

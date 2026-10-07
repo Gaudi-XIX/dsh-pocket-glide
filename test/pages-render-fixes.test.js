@@ -77,11 +77,30 @@ test('T1 the chat error banner is a positioned card, not a bottom-of-flex orphan
   assert.match(rule, /position:fixed/, 'the banner must leave the flex flow')
   assert.match(rule, /z-index:/, 'the banner must declare its stacking level')
   // The composer lets the message area pass via this exact var stack; the banner
-  // reuses it as its bottom anchor so the two never share a band.
-  assert.match(rule, /calc\(84px \+ env\(safe-area-inset-bottom\) \+ var\(--queue-h\) \+ var\(--tunnel-warn-h\)\)/,
-    'the bottom anchor must reuse the composer clearance stack')
+  // reuses it as its bottom anchor so the two never share a band. --todo-h joined
+  // the stack in 2026-10-07-fix-pocket-r2-pages-batch (W2): the todo dock is a
+  // composer sibling, so the banner must clear it too — the formula text is
+  // re-anchored verbatim (de-pinned from the old todo-less calc).
+  assert.match(rule, /calc\(84px \+ env\(safe-area-inset-bottom\) \+ var\(--todo-h\) \+ var\(--queue-h\) \+ var\(--tunnel-warn-h\)\)/,
+    'the bottom anchor must reuse the composer clearance stack (todo dock included)')
   // Readable card, not bare danger text floating over content.
   assert.match(rule, /background:/, 'the banner must carry a readable backdrop')
+})
+
+test('T1 (r2-W2) the banner stack and the standalone base tier share one --todo-h formula', () => {
+  const chatError = cssRule(css, '#chatError')
+  const mediaAt = css.indexOf('@media(display-mode:standalone){')
+  assert.notEqual(mediaAt, -1, 'the standalone media block must exist')
+  const standaloneRule = cssRule(css.slice(mediaAt), '.chat-open .messages')
+  assert.ok(standaloneRule, 'the standalone base tier must exist')
+  const bottom = (chatError.match(/bottom:(calc\([^;]*\));/) || [])[1]
+  const padding = (standaloneRule.match(/padding-bottom:(calc\([^;]*\))/) || [])[1]
+  assert.ok(bottom && padding, 'both rules carry a calc() clearance anchor')
+  assert.equal(bottom, padding, 'the banner formula must stay identical to the standalone base tier it came from (anti-fork)')
+  assert.match(bottom, /var\(--todo-h\)/, 'both carry the todo dock clearance')
+  // negative guard: the todo-less formula must never come back in any tier
+  assert.doesNotMatch(css, /calc\(84px \+ env\(safe-area-inset-bottom\) \+ var\(--queue-h\)/,
+    'the old todo-less stack must stay swept from the sheet')
 })
 
 test('T1 the shared .error class is untouched (listError keeps document flow)', () => {
@@ -174,6 +193,52 @@ test('T4 fallback permission presets speak human, danger is marked, ids are not 
   assert.ok(js.includes('plus-row-danger'), 'rowHtml renders the danger marker')
   // catalog success path: the name/desc pass-through is untouched
   assert.ok(js.includes('title:o.name||o.value'), 'catalog names still win when present')
+})
+
+// ---------------------------------- r2 batch: NF-1 + C5 (2026-10-07-fix-pocket-r2-pages-batch)
+
+test('NF-1 (r2) the fallback permission presets still describe themselves when rpc is down', () => {
+  // Behavioural splice (error-visibility house pattern): the real
+  // renderPlusPermission runs against a dead rpc so the fallback options render.
+  // NF-1 was the fallback array speaking `desc:` while the rowHtml contract reads
+  // `o.description` — every description came out empty on the failure path.
+  const rowHtml = extractFunction(js, 'rowHtml')
+  const render = extractFunction(js, 'renderPlusPermission')
+  const host = { innerHTML: '' }
+  const src = `
+    let plusView = 'permission'
+    const L = ${JSON.stringify({ plusBack: '返回', plusPermission: '权限', plusPermissionLoading: '正在读取权限预设…' })}
+    const PLUS_ICONS = { permission: '<svg></svg>' }
+    const PLUS_BACK_SVG = '<svg></svg>'
+    const esc = (v) => String(v == null ? '' : v)
+    const $ = () => host
+    const plusSetSearch = () => {}
+    const rpc = async () => { throw new Error('rpc down') }
+    ${rowHtml}
+    ${render}
+    return renderPlusPermission().then(() => host.innerHTML)
+  `
+  return new Function('host', src)(host).then((html) => {
+    for (const desc of ['适合先看看 AI 的动作', 'AI 可以改工作区里的文件', '不再询问，直接执行']) {
+      assert.ok(html.includes(desc), `the zh fallback description reaches the sheet: ${desc}`)
+    }
+    assert.equal((html.match(/class="plus-row-desc"/g) || []).length, 4,
+      'three fallback rows + the current-permission row render a desc slot')
+    // negative guard: exactly one empty desc slot is legal (permission-current's
+    // desc:'' contract); the three fallback rows must never be empty again.
+    assert.equal((html.match(/<span class="plus-row-desc"><\/span>/g) || []).length, 1,
+      'only the current-permission row ships an empty description')
+  })
+})
+
+test('C5 (r2) the L table carries no dead unit/effort keys', () => {
+  for (const key of ['runningUnit', 'awaitingUnit', 'defaultEffort']) {
+    assert.ok(!(key in L), `${key} is gone from the zh table`)
+    assert.ok(!(key in LEN), `${key} is gone from the en table`)
+    assert.doesNotMatch(js, new RegExp(`L\\.${key}\\b`), `no consumer references L.${key}`)
+  }
+  // the model-catalog data field with the same name is a different organ and stays
+  assert.match(js, /reasoning\??\.defaultEffort/, 'the model catalog reasoning.defaultEffort stays untouched')
 })
 
 test('T4 presetLocked speaks Chinese, the sister sentence is untouched', () => {

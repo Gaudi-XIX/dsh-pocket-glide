@@ -197,3 +197,33 @@ test('consent accept tolerates same-site form posts; cross-site stays out; stric
     await t.stop()
   }
 })
+
+// ------------------------------------- W1 consent dead-end, both halves (r2 pages batch)
+// The tunnel gate 303s every unconsented request to /consent. Two client halves
+// made that a dead end (r2 audit W1): the service worker served the cached app
+// shell for the /consent navigation, and the app rpc parsed the consent HTML as
+// a generic "request failed" — an endless loop with no card. Both organs live in
+// lib/pages.js; asserted at the character layer plus a semantic drive of the
+// real BYPASS alternation (the SW fetch handler's own predicate).
+test('consent gate reachability: the SW bypasses /consent and the app rpc walks there', () => {
+  const sw = pocketPages.renderServiceWorker()
+  const bypassLine = sw.split('\n').find((line) => line.includes('const BYPASS='))
+  assert.ok(bypassLine, 'the SW ships a BYPASS list')
+  assert.match(bypassLine, /\|consent\)/, 'the BYPASS list must include consent (SW half of W1)')
+  const mark = 'const BYPASS=/^\\/('
+  const start = bypassLine.indexOf(mark)
+  const end = bypassLine.indexOf(')(\\/|$)/', start)
+  assert.ok(start >= 0 && end > start, 'the BYPASS regex has the expected shape')
+  const bypass = new RegExp('^\\/(' + bypassLine.slice(start + mark.length, end) + ')(\\/|$)')
+  assert.equal(bypass.test('/consent'), true, 'the /consent navigation passes through to the network')
+  assert.equal(bypass.test('/consent/accept'), true, 'the accept path is bypassed too')
+  assert.equal(bypass.test('/consentFake'), false, 'the bypass does not over-match prefixes')
+  assert.equal(bypass.test('/api/rpc'), true, 'the pre-existing bypass arms stay')
+
+  const { js } = pocketPages.mobilePageAssets({ locale: 'zh' })
+  assert.match(js, /if\(r\.url&&new URL\(r\.url\)\.pathname==='\/consent'\)/,
+    'the app rpc recognizes a redirect onto the consent card (rpc half of W1)')
+  assert.match(js, /e\.consentGate=true/, 'the rpc flags the gate like the stage script does')
+  assert.match(js, /location\.replace\('\/consent\?next=\/'\)/,
+    'the rpc walks the browser to the card (aligned with the stage callers)')
+})

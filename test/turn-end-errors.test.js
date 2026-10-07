@@ -126,10 +126,16 @@ test('the error line carries a dropped stream; the transcript still carries the 
   }
   // Each disconnect label is read by exactly two places: the copy classifier and the
   // notice writer. Any third reader belongs to the transcript and must be argued for.
+  // Gate follow (4.14, change 2026-10-07-fix-pocket-r2-pages-batch C3): aria-label
+  // single-sourcing moved the two inline zh/en ternaries onto L.status*, so each
+  // status key grew exactly two aria readers on top of its setStatusCopy readers
+  // (measured at this change: 5 / 4 / 2). Transport copy caps stay at three.
+  const readerCaps = { statusConnected: 5, statusDisconnected: 4, statusReconnecting: 3 }
   for (const key of ['disconnectedRetry', 'streamDownTunnel', 'streamDownHost', 'streamDownBackground', 'statusConnected', 'statusDisconnected', 'statusReconnecting']) {
     const reads = [...source.matchAll(new RegExp(`L\\.${key}\\b`, 'g'))].length
+    const cap = readerCaps[key] ?? 3
     assert.ok(reads >= 1, `${key} must have a consumer, not just a definition`)
-    assert.ok(reads <= 3, `${key} is read in ${reads} places; the transport copy needs at most three`)
+    assert.ok(reads <= cap, `${key} is read in ${reads} places; the transport copy needs at most ${cap}`)
   }
 
   // 3. visibleMessages is still the one projection point for turn failures.

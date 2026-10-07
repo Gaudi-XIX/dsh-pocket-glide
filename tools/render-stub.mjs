@@ -6,6 +6,10 @@
 // `node tools/render-stub.mjs --port N`. CONFIG.pendingQuestion seeds the interaction.pending RPC
 // (shape: { rpcId, sessionId, questions: [{ id, header?, question, detail?, options?: [{ label,
 // description? }], multiSelect? }] }); default null keeps the composer hidden (zero regression).
+// CONFIG.todos seeds the todos projection the same way (shape: [{ content: string,
+// status: 'pending'|'in_progress'|'completed' }]); default null keeps the dock hidden. The
+// `--todos` flag turns on a built-in two-row demo list for the todo-open×chatError visual
+// check (2026-10-07-fix-pocket-r2-pages-batch W2).
 import { createServer } from 'node:http';
 import { mobilePageAssets } from '../lib/pages.js';
 
@@ -17,6 +21,8 @@ const CONFIG = {
   keepaliveMs: 1200,
   // Set to a pending-question value to stub the question composer UI (see shape note above).
   pendingQuestion: null,
+  // Set to a todos array to stub the todo dock; --todos seeds a demo list (see shape note above).
+  todos: null,
   goal: {
     goal: { objective: '手机端目标条渲染目验（假数据）', phase: 'active', maxGoalRounds: 64, id: 'goal-x', revision: 1 },
     roundsStarted: 3, createdAt: 1791000000000, updatedAt: 1791000600000,
@@ -35,11 +41,18 @@ const portArgv = process.argv.indexOf('--port');
 const portOverride = portArgv !== -1 ? Number(process.argv[portArgv + 1]) : NaN;
 const PORT = Number.isFinite(portOverride) && portOverride > 0 ? portOverride : CONFIG.port;
 
+if (process.argv.includes('--todos') && !CONFIG.todos) {
+  CONFIG.todos = [
+    { content: '渲染目验任务一（进行中）', status: 'in_progress' },
+    { content: '渲染目验任务二（待处理）', status: 'pending' },
+  ];
+}
+
 const assets = mobilePageAssets({ locale: CONFIG.locale });
 const GOAL = CONFIG.goal;
 const QUEUE = CONFIG.queue;
 const EVENTS = CONFIG.events;
-const PROJECTIONS = { asOfSeq: 10, values: { goal: GOAL, inbox: QUEUE, todos: null, modelSelection: null } };
+const PROJECTIONS = { asOfSeq: 10, values: { goal: GOAL, inbox: QUEUE, todos: CONFIG.todos, modelSelection: null } };
 let streamRes = null;
 
 const server = createServer((req, res) => {
@@ -48,6 +61,16 @@ const server = createServer((req, res) => {
   if (req.method === 'POST' && p === '/emit') {
     if (streamRes) {
       streamRes.write(`event: event\ndata: ${JSON.stringify({ event: { type: 'goal/change', seq: 99, time: Date.now() } })}\n\n`);
+      res.writeHead(200); res.end('emitted');
+    } else { res.writeHead(503); res.end('no stream'); }
+    return;
+  }
+  // Fires the same failure SSE frame the geometry mock host does, so the
+  // todo-open×chatError combined state can be staged for visual checks.
+  if (req.method === 'POST' && p === '/emit-failure') {
+    if (streamRes) {
+      streamRes.write('event: failure\n');
+      streamRes.write(`data: ${JSON.stringify({ reason: 'transport' })}\n\n`);
       res.writeHead(200); res.end('emitted');
     } else { res.writeHead(503); res.end('no stream'); }
     return;
