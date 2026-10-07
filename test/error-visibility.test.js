@@ -893,3 +893,71 @@ test('the empty #chatError banner is display:none by structural rule (cd23147 lo
     'an empty #chatError must collapse via the :empty rule — losing it resurrects the phantom banner block',
   )
 })
+
+// 2026-10-07-fix-pocket-banner-dismiss-and-ttl: the notice's third exit. The 90s
+// deadline is armed inside showError itself, so this sandbox owns a fake clock to
+// prove three things the browser gate cannot: that a timer is really scheduled, that
+// firing it clears a standing notice, and that a newer notice is not killed by the
+// older one's deadline.
+function buildDeadlineSandbox() {
+  const containers = fakeContainers()
+  containers.chatError.getBoundingClientRect = () => ({ left: 60, right: 300, top: 700, bottom: 738, width: 240, height: 38 })
+  const body = ['showError', 'clearTransientError', 'dismissChatNotice', 'setStatusCopy'].map((name) => extractFunction(js, name)).join('\n')
+  let sandbox = null
+  const make = new Function(
+    'containers',
+    'document',
+    'setTimeout',
+    `
+    ${NOTICE_STATE()}
+    let chatErrorTapZone=true
+    const timers=[]
+    ${body}
+    return {
+      showError, clearTransientError, dismissChatNotice, containers,
+      get importantErrorActive(){return importantErrorActive},
+      timers,
+    }
+  `,
+  )
+  // Node's timer handle carries unref(); the page feature-detects it (so a test process is
+  // not held open by a 90s deadline), so the fake has to expose one to look like the host.
+  sandbox = make(containers, { hidden: false }, (fn, delay) => {
+    sandbox.timers.push({ fn, delay })
+    return { unref() { return this } }
+  })
+  return sandbox
+}
+
+test('the standing notice carries a 90s deadline, and firing it retires the notice', () => {
+  const sandbox = buildDeadlineSandbox()
+  assert.equal(sandbox.timers.length, 0, 'writing a plain error arms no deadline')
+  sandbox.showError('chatError', { disconnected: true })
+  assert.equal(sandbox.containers.chatError.textContent, L.disconnectedRetry)
+  assert.equal(sandbox.timers.length, 1, 'a standing notice must arm exactly one deadline')
+  assert.equal(sandbox.timers[0].delay, 90000, 'and it must be the page own 90s, not an inherited default')
+  sandbox.timers[0].fn()
+  assert.equal(sandbox.containers.chatError.textContent, '', 'the deadline must retire the notice it was armed for')
+  assert.equal(sandbox.importantErrorActive, false, 'and must drop the flag the frame path also owns')
+  assert.equal(sandbox.containers.statusText.textContent, L.statusConnected, 'and restore the status copy')
+})
+
+test('a deadline never kills a notice written after it', () => {
+  const sandbox = buildDeadlineSandbox()
+  sandbox.showError('chatError', { disconnected: true })
+  sandbox.showError('chatError', { message: '第二轮失败', important: true })
+  assert.equal(sandbox.timers.length, 2, 'each standing paint arms its own deadline')
+  sandbox.timers[0].fn()
+  assert.equal(sandbox.containers.chatError.textContent, '第二轮失败',
+    'the older deadline must leave a newer copy standing (the reader has not read it yet)')
+})
+
+test('a banner already gone stays gone when its deadline fires', () => {
+  const sandbox = buildDeadlineSandbox()
+  sandbox.showError('chatError', { disconnected: true })
+  assert.equal(sandbox.timers.length, 1)
+  sandbox.dismissChatNotice(sandbox.containers.chatError, { clientX: 296 })
+  assert.equal(sandbox.containers.chatError.textContent, '', 'the tap is the second exit')
+  assert.doesNotThrow(() => sandbox.timers[0].fn(), 'the deadline must tolerate a banner that already left')
+  assert.equal(sandbox.containers.chatError.textContent, '')
+})

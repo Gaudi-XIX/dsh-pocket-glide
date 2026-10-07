@@ -34,6 +34,7 @@ function renderSandbox(locale) {
     `const esc=v=>String(v==null?'':v)`,
     `const markdown=text=>String(text||'')`,
     `let agentRunning=false`,
+    `function formatBytes(n){n=Number(n)||0;if(n<1024)return n+' B';const units=['KB','MB','GB'];let v=n/1024,i=0;while(v>=1024&&i<units.length-1){v/=1024;i++}return v.toFixed(v<10?1:0)+' '+units[i]}`,
     js.slice(start, end),
     js.slice(messageStart, messageEnd),
   ].join('\n')
@@ -46,6 +47,8 @@ function renderSandbox(locale) {
 const DEAD = { kind: 'image', attachment: { name: 'shot.png' }, offloaded: true }
 const ORPHAN = { kind: 'image', attachment: {} }
 const LIVE = { kind: 'image', attachment: { attachmentId: 'a-1', name: 'shot.png' } }
+const FILE_LIVE = { kind: 'file', attachment: { attachmentId: 'f-1', name: 'report.pdf', bytes: 2048 } }
+const FILE_GONE = { kind: 'file', attachment: { name: 'old.zip' } }
 
 test('M19 a dropped image renders a named chip instead of nothing', () => {
   const { renderBlock } = renderSandbox('zh')
@@ -89,4 +92,24 @@ test('M19 the empty-string branch is gone from the source', () => {
     assert.ok(!js.includes(`if(block.offloaded||!a.attachmentId)return''`), `${locale}: an offloaded image must not collapse the row`)
     assert.ok(js.includes(`if(block.offloaded||!a.attachmentId)return'<div class="attach-image attach-gone">`), `${locale}: the chip branch is the only exit`)
   }
+})
+
+test('a live file renders a download card pointing at the attachment route', () => {
+  const html = renderSandbox('zh').renderBlock(FILE_LIVE, false)
+  assert.ok(html.startsWith('<a class="attach-file attach-file-open"'), 'the card is a link')
+  assert.ok(html.includes('href="/api/session-attachment?sessionId=s1&attachmentId=f-1"'), 'points at the attachment route')
+  assert.ok(html.includes('download'), 'the link asks the browser to save the file')
+  assert.ok(html.includes('report.pdf'), 'the real name is shown')
+  assert.ok(html.includes('2.0 KB'), 'the size is shown')
+  assert.ok(html.includes('attach-file-action'), 'the download affordance is rendered')
+  assert.ok(!html.includes('<img'), 'no image element for a file')
+  assert.ok(assets.zh.css.includes('.attach-file-open{'), 'the card has a style of its own')
+})
+
+test('a file without an attachment id keeps the inert chip', () => {
+  const html = renderSandbox('zh').renderBlock(FILE_GONE, false)
+  assert.ok(html.startsWith('<span class="attach-file"'), 'no link when the attachment is gone')
+  assert.ok(!html.includes('session-attachment'), 'nothing may be requested for a file that is gone')
+  assert.ok(!html.includes('attach-file-open'), 'no download affordance on the inert chip')
+  assert.ok(html.includes('old.zip'), 'the name still shows')
 })

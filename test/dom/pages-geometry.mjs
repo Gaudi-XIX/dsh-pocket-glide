@@ -319,6 +319,40 @@ const editSnapshot = `(() => {
   }, 120))
 })()`
 
+// Scene E probe (2026-10-07-fix-pocket-banner-dismiss-and-ttl): the notice's two new
+// exits and the measured band. overlap* are exact intersection areas in px², the gap is
+// the pixel distance between the banner's bottom and .composer-inner's top, and disp is
+// the computed display of #chatError (the question-open tier hides it by rule while a
+// standing copy stays in the DOM — hence both signals).
+const noticeBandSnapshot = `(() => {
+  const banner = document.getElementById('chatError')
+  const inner = document.querySelector('.composer-inner')
+  const prompt = document.getElementById('prompt')
+  const statusText = document.getElementById('statusText')
+  if (!banner || !inner || !prompt) return { missing: true }
+  const br = banner.getBoundingClientRect()
+  const ir = inner.getBoundingClientRect()
+  const overlapArea = (a, b) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top))
+  const w = window.innerWidth, h = window.innerHeight
+  return {
+    missing: false,
+    text: (banner.textContent || '').trim(),
+    disp: getComputedStyle(banner).display,
+    banner: { top: br.top, left: br.left, right: br.right, bottom: br.bottom, width: br.width, height: br.height },
+    overlapInner: overlapArea(br, ir),
+    gapInner: ir.top - br.bottom,
+    composerH: (getComputedStyle(document.body).getPropertyValue('--composer-h') || '').trim(),
+    composerOffset: document.getElementById('composer').offsetHeight,
+    innerOffset: inner.offsetHeight,
+    composerPad: (parseFloat(getComputedStyle(document.getElementById('composer')).paddingTop) || 0) + (parseFloat(getComputedStyle(document.getElementById('composer')).paddingBottom) || 0),
+    dockExtra: Math.max(0, document.getElementById('composer').offsetHeight - inner.offsetHeight - ((parseFloat(getComputedStyle(document.getElementById('composer')).paddingTop) || 0) + (parseFloat(getComputedStyle(document.getElementById('composer')).paddingBottom) || 0))),
+    promptH: prompt.style.height,
+    statusText: (statusText ? statusText.textContent : '').trim(),
+    questionOpen: document.body.classList.contains('question-open'),
+    inViewport: br.top >= 0 && br.left >= -1 && br.right <= w + 1 && br.bottom <= h + 1 && br.width > 0 && br.height > 0,
+  }
+})()`
+
 const FAILURE_COPY = '连接中断：连不上宿主的会话流。';
 
 async function scenarioBanner(host, port, failures) {
@@ -362,8 +396,12 @@ async function scenarioBannerQuestionOpen(host, port, failures) {
     if (snap.missing) return snap;
     no(snap.questionOpen && snap.composerHidden, 'the scenario must run with the question composer open and the main composer hidden');
     no(snap.text === FAILURE_COPY, `failure copy must persist, got ${JSON.stringify(snap.text)}`);
-    no(snap.inViewport && snap.selfHit, 'banner must stay visible and hittable with the composer hidden');
-    return snap;
+    // Rewritten in 2026-10-07-fix-pocket-banner-dismiss-and-ttl: the old contract ("banner
+    // stays visible and hittable") is what made the notice float OVER the question panel,
+    // which is where the user reported losing sight of it and of the panel beneath.
+    no(snap.banner.width === 0 && snap.banner.height === 0, 'the question-open tier must collapse the banner to zero area (body.question-open #chatError{display:none})');
+    no(!snap.inViewport && !snap.selfHit, 'and with zero area it can neither be read nor hit');
+    return { ...snap, disp: await page.evaluate(`getComputedStyle(document.getElementById('chatError')).display`) };
   });
 }
 
@@ -429,6 +467,96 @@ async function scenarioBannerTodo(host, port, failures) {
     nx(open.headerSelfHit, `expanded: todo header center not self-hit (topmost=${open.hitDesc})`);
     nx(open.inViewport, 'expanded: banner outside the viewport');
     return { snap, open };
+  });
+}
+
+// Scene E: the notice band is MEASURED, not a constant. At baseline the banner's bottom
+// was pinned at 84px, so a textarea grown to its 150px ceiling (the composer grows to
+// ~183px) left the banner sitting on top of the input. The claim here is not "the banner
+// moved" but "it is still exactly above the input, with a real gap, at both sizes".
+async function scenarioNoticeBand(host, port, failures) {
+  return withPage(port, host.origin, async (page) => {
+    await wait(900);
+    await page.evaluate(`fetch('/emit-failure',{method:'POST'})`);
+    await wait(400);
+    const idle = await page.evaluate(noticeBandSnapshot);
+    const no = (cond, msg) => { if (!cond) failures.push(`E(band/idle): ${msg} — ${JSON.stringify(idle)}`); };
+    no(!idle.missing, 'banner/composer/prompt organs missing from the DOM');
+    if (idle.missing) return idle;
+    no(idle.text === FAILURE_COPY, `the failure copy must be painted by the product path, got ${JSON.stringify(idle.text)}`);
+    no(idle.composerH.endsWith('px') && parseFloat(idle.composerH) > 0, `--composer-h must hold a measured band, got ${JSON.stringify(idle.composerH)}`);
+    // The band is the composer's own footprint, not #composer's flex column: the docks
+    // already have --todo-h/--queue-h, so counting them here would double-charge them.
+    const wantIdle = idle.innerOffset + idle.composerPad;
+    no(idle.dockExtra > 0, `non-vacuity: the docks must actually be mounted, else this scene cannot tell the two definitions apart (dockExtra=${idle.dockExtra})`);
+    no(Math.abs(parseFloat(idle.composerH) - wantIdle) < 1.5,
+      `--composer-h ${idle.composerH} must equal .composer-inner ${idle.innerOffset} + the composer's own padding ${idle.composerPad} (docks excluded) — expected ~${wantIdle}px, #composer.offsetHeight would give ${idle.composerOffset}px`);
+    no(idle.overlapInner === 0, `banner intersects .composer-inner (area ${idle.overlapInner}px²)`);
+    no(idle.gapInner >= 2, `the banner must keep a real gap above the input, got ${idle.gapInner}px`);
+
+    // grow the textarea to the 150px ceiling and re-run the same set
+    await page.evaluate(`(() => {
+      const p = document.getElementById('prompt')
+      p.value = Array.from({ length: 10 }, (_, i) => '第' + i + '行输入内容').join('\\n')
+      p.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`);
+    await wait(300);
+    const grown = await page.evaluate(noticeBandSnapshot);
+    const nx = (cond, msg) => { if (!cond) failures.push(`E(band/grown): ${msg} — ${JSON.stringify(grown)}`); };
+    nx(grown.text === FAILURE_COPY, `the notice must survive typing a long draft, got ${JSON.stringify(grown.text)}`);
+    nx(parseFloat(grown.promptH) >= 150, `non-vacuity: the textarea must actually reach its 150px ceiling, got ${JSON.stringify(grown.promptH)}`);
+    nx(Math.abs(grown.gapInner - idle.gapInner) <= 2, `the banner must track the input (gap ${idle.gapInner}px -> ${grown.gapInner}px, baseline bug: banner stays put and the input grows into it)`);
+    nx(grown.overlapInner === 0, `grown: banner intersects .composer-inner (area ${grown.overlapInner}px²)`);
+    nx(grown.inViewport, 'grown: banner outside the viewport');
+    return { idle, grown };
+  });
+}
+
+// Scene F: the notice's new exits. The right end of the banner is a dismiss control
+// (handled by a CSS ::after affordance, so #chatError stays :empty and keeps collapsing
+// when it has nothing to say) and the rest of the banner must NOT be one.
+async function scenarioNoticeDismiss(host, port, failures) {
+  return withPage(port, host.origin, async (page) => {
+    await wait(900);
+    await page.evaluate(`fetch('/emit-failure',{method:'POST'})`);
+    await wait(400);
+    const standing = await page.evaluate(noticeBandSnapshot);
+    const no = (cond, msg) => { if (!cond) failures.push(`F(dismiss): ${msg} — ${JSON.stringify(standing)}`); };
+    no(!standing.missing, 'banner organs missing from the DOM');
+    if (standing.missing) return standing;
+    no(standing.text === FAILURE_COPY, `non-vacuity: the notice must be painted first, got ${JSON.stringify(standing.text)}`);
+    no(standing.disp === 'block', `non-vacuity: the notice must be visible before the tap, display=${JSON.stringify(standing.disp)}`);
+
+    // a tap on the text half must not dismiss it: the guard is "is this the right end?"
+    await page.evaluate(`document.getElementById('chatError').dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: Math.round(document.getElementById('chatError').getBoundingClientRect().left + 5), clientY: Math.round(document.getElementById('chatError').getBoundingClientRect().top + 18) }))`);
+    await wait(200);
+    const leaning = await page.evaluate(noticeBandSnapshot);
+    no(leaning.text === FAILURE_COPY, `a tap on the banner's text must not dismiss it, got ${JSON.stringify(leaning.text)}`);
+
+    // a tap on the right end (the ::after zone) retires it and restores the status label
+    await page.evaluate(`(() => {
+      const b = document.getElementById('chatError')
+      const r = b.getBoundingClientRect()
+      b.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: Math.round(r.right - 4), clientY: Math.round(r.top + r.height / 2) }))
+    })()`);
+    await wait(200);
+    const after = await page.evaluate(noticeBandSnapshot);
+    const nx = (cond, msg) => { if (!cond) failures.push(`F(dismiss/after): ${msg} — ${JSON.stringify(after)}`); };
+    nx(after.text === '', `the tap must clear the standing copy, got ${JSON.stringify(after.text)}`);
+    nx(after.disp === 'none', `#chatError must collapse once empty, display=${JSON.stringify(after.disp)}`);
+    nx(after.statusText === '已连接', `the light must be told the transport is fine again, got ${JSON.stringify(after.statusText)}`);
+    // the affordance itself must be real, not only the handler: #chatError stays a bare
+    // content element, so the × and its hit area come from a ::after rule
+    const affordance = await page.evaluate(`(() => {
+      const el = document.getElementById('chatError')
+      const cs = getComputedStyle(el, '::after')
+      const box = el.getBoundingClientRect()
+      return { content: cs.content, width: parseFloat(cs.width) || 0, right: parseFloat(cs.right) || 0, pointerEvents: getComputedStyle(el).pointerEvents, height: box.height }
+    })()`);
+    no(affordance.content === '"×"', `the dismiss affordance must be painted by a ::after rule, got content=${JSON.stringify(affordance.content)}`);
+    no(affordance.width >= 24, `the affordance must be a real tap target, got ${affordance.width}px`);
+    no(affordance.pointerEvents === 'auto', `the banner must be hittable, got pointer-events:${affordance.pointerEvents}`);
+    return { standing, leaning, after, affordance };
   });
 }
 
@@ -512,6 +640,7 @@ async function main() {
     try {
       report.scenarios.push(await scenarioBanner(plain, CDP_PORT, failures));
       report.scenarios.push(await scenarioQueue(plain, CDP_PORT, failures));
+      report.scenarios.push(await scenarioNoticeDismiss(plain, CDP_PORT, failures));
     } finally {
       await plain.close();
     }
@@ -523,6 +652,7 @@ async function main() {
     });
     try {
       report.scenarios.push(await scenarioBannerTodo(todoHost, CDP_PORT, failures));
+      report.scenarios.push(await scenarioNoticeBand(todoHost, CDP_PORT, failures));
     } finally {
       await todoHost.close();
     }
@@ -550,7 +680,7 @@ async function main() {
     for (const line of failures) console.log(`  - ${line}`);
     return 1;
   }
-  console.log('GEOMETRY PASS: banner/edit-box/queue-list/todo-dock hold their geometry at 390x844');
+  console.log('GEOMETRY PASS: banner/edit-box/queue-list/todo-dock/notice hold their geometry at 390x844');
   return 0;
 }
 

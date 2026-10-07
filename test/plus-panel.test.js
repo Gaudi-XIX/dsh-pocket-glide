@@ -198,6 +198,73 @@ test('GET /api/session-attachment decodes Host base64 bytes with the Host media 
   }
 })
 
+test('GET /api/session-attachment downloads a non-image file with its real name', async () => {
+  const raw = Buffer.from('fake pdf bytes')
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname) =>
+        pathname === '/api/session/attachment'
+          ? {
+              ok: true,
+              value: { attachment: { attachmentId: 'f1', mediaType: 'application/pdf', name: 'report.pdf' }, data: raw.toString('base64') },
+            }
+          : undefined,
+    },
+  })
+  try {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(
+      `${t.base}/api/session-attachment?sessionId=s1&attachmentId=f1`,
+      { headers: { cookie } }
+    )
+    assert.equal(res.status, 200)
+    assert.equal(res.headers.get('content-type'), 'application/octet-stream')
+    assert.equal(
+      res.headers.get('content-disposition'),
+      'attachment; filename="report.pdf"'
+    )
+    const bytes = await readBinary(res)
+    assert.deepEqual(bytes, raw)
+  } finally {
+    await t.stop()
+  }
+})
+
+test('session-attachment filename falls back and is stripped of header-breaking characters', async () => {
+  const cases = [
+    { name: undefined, expected: 'attachment' },
+    { name: '', expected: 'attachment' },
+    { name: 'my"file.pdf', expected: 'myfile.pdf' },
+    { name: 'line\nbreak.pdf', expected: 'linebreak.pdf' },
+  ]
+  for (const { name, expected } of cases) {
+    const t = await startBridge({
+      harness: 'fake',
+      harnessOptions: {
+        respond: (pathname) =>
+          pathname === '/api/session/attachment'
+            ? {
+                ok: true,
+                value: { attachment: { attachmentId: 'f1', mediaType: 'application/pdf', name }, data: Buffer.from('x').toString('base64') },
+              }
+            : undefined,
+      },
+    })
+    try {
+      const cookie = await pairMobileUnchecked(t)
+      const res = await httpFetch(
+        `${t.base}/api/session-attachment?sessionId=s1&attachmentId=f1`,
+        { headers: { cookie } }
+      )
+      assert.equal(res.status, 200)
+      assert.equal(res.headers.get('content-disposition'), `attachment; filename="${expected}"`)
+    } finally {
+      await t.stop()
+    }
+  }
+})
+
 test('missing attachment is answered with 404', async () => {
   const t = await startBridge({
     harness: 'fake',

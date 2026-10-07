@@ -130,7 +130,10 @@ test('the error line carries a dropped stream; the transcript still carries the 
   // single-sourcing moved the two inline zh/en ternaries onto L.status*, so each
   // status key grew exactly two aria readers on top of its setStatusCopy readers
   // (measured at this change: 5 / 4 / 2). Transport copy caps stay at three.
-  const readerCaps = { statusConnected: 5, statusDisconnected: 4, statusReconnecting: 3 }
+  // 2026-10-07-fix-pocket-banner-dismiss-and-ttl: dismissing the banner or letting its
+  // 90s deadline fire restores the connected label, because the standing notice is what
+  // put the light into "reconnecting" — that is one more statusConnected reader (6).
+  const readerCaps = { statusConnected: 6, statusDisconnected: 4, statusReconnecting: 3 }
   for (const key of ['disconnectedRetry', 'streamDownTunnel', 'streamDownHost', 'streamDownBackground', 'statusConnected', 'statusDisconnected', 'statusReconnecting']) {
     const reads = [...source.matchAll(new RegExp(`L\\.${key}\\b`, 'g'))].length
     const cap = readerCaps[key] ?? 3

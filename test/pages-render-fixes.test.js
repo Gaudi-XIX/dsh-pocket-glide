@@ -71,6 +71,19 @@ function extractFunction(source, name) {
 
 // --------------------------------------------------------------- T1 chatError
 
+test('T1 the #chatError rule lookup cannot be satisfied by prose', () => {
+  // cssRule() finds the first '#chatError{' substring, so a stylesheet comment that spells
+  // the selector would let this whole block assert against a comment instead of the rule.
+  // Found the hard way while adding the dismiss rules; this makes the lookup honest.
+  // A comment may still *name* the element — only the `{` next to it is the trap.
+  const at = css.indexOf('#chatError{')
+  assert.notEqual(at, -1, 'the #chatError rule must exist')
+  const openedAt = css.lastIndexOf('/*', at)
+  const closedAt = css.lastIndexOf('*/', at)
+  assert.ok(openedAt === -1 || closedAt > openedAt, `the first #chatError rule must not sit inside a block comment (at ${at})`)
+  assert.match(cssRule(css, '#chatError'), /position:fixed/, 'and the lookup must reach the real declarations')
+})
+
 test('T1 the chat error banner is a positioned card, not a bottom-of-flex orphan', () => {
   const rule = cssRule(css, '#chatError')
   assert.ok(rule, 'a #chatError id rule must exist in the stylesheet (red at baseline)')
@@ -79,10 +92,12 @@ test('T1 the chat error banner is a positioned card, not a bottom-of-flex orphan
   // The composer lets the message area pass via this exact var stack; the banner
   // reuses it as its bottom anchor so the two never share a band. --todo-h joined
   // the stack in 2026-10-07-fix-pocket-r2-pages-batch (W2): the todo dock is a
-  // composer sibling, so the banner must clear it too — the formula text is
-  // re-anchored verbatim (de-pinned from the old todo-less calc).
-  assert.match(rule, /calc\(84px \+ env\(safe-area-inset-bottom\) \+ var\(--todo-h\) \+ var\(--queue-h\) \+ var\(--tunnel-warn-h\)\)/,
-    'the bottom anchor must reuse the composer clearance stack (todo dock included)')
+  // composer sibling, so the banner must clear it too. --composer-h replaced the
+  // hardcoded 84px in 2026-10-07-fix-pocket-banner-dismiss-and-ttl: the band is
+  // measured (syncComposerHeight), so a textarea grown to its 150px ceiling no
+  // longer leaves the banner pinned over the input.
+  assert.match(rule, /calc\(var\(--composer-h\) \+ var\(--todo-h\) \+ var\(--queue-h\) \+ var\(--tunnel-warn-h\)\)/,
+    'the bottom anchor must reuse the composer clearance stack (measured band, todo dock included)')
   // Readable card, not bare danger text floating over content.
   assert.match(rule, /background:/, 'the banner must carry a readable backdrop')
 })
@@ -98,9 +113,11 @@ test('T1 (r2-W2) the banner stack and the standalone base tier share one --todo-
   assert.ok(bottom && padding, 'both rules carry a calc() clearance anchor')
   assert.equal(bottom, padding, 'the banner formula must stay identical to the standalone base tier it came from (anti-fork)')
   assert.match(bottom, /var\(--todo-h\)/, 'both carry the todo dock clearance')
-  // negative guard: the todo-less formula must never come back in any tier
-  assert.doesNotMatch(css, /calc\(84px \+ env\(safe-area-inset-bottom\) \+ var\(--queue-h\)/,
-    'the old todo-less stack must stay swept from the sheet')
+  assert.match(bottom, /var\(--composer-h\)/, 'both carry the measured composer band')
+  // negative guard: the hardcoded band must never come back in any tier
+  assert.doesNotMatch(css, /calc\(84px \+ env\(safe-area-inset-bottom\)/,
+    'the hardcoded composer band must stay swept from the sheet')
+  assert.doesNotMatch(css, /calc\(84px \+ var\(--todo-h\)/, 'nor the hardcoded band without env()')
 })
 
 test('T1 the shared .error class is untouched (listError keeps document flow)', () => {
@@ -112,7 +129,10 @@ test('T1 showError/clearTransientError chatError call sites unchanged (zero JS d
   const shown = (js.match(/showError\('chatError'/g) || []).length
   const cleared = (js.match(/clearTransientError\('chatError'/g) || []).length
   assert.equal(shown, 12, 'showError chatError call count must equal the baseline')
-  assert.equal(cleared, 3, 'clearTransientError chatError call count must equal the baseline')
+  // 3 baseline sites + the banner dismiss (2026-10-07-fix-pocket-banner-dismiss-and-ttl):
+  // the tap-the-right-end exit must leave through the same guard as the frame exit, so it
+  // is a fourth call site by construction, not a drift.
+  assert.equal(cleared, 4, 'clearTransientError chatError call count: 3 baseline + 1 dismiss')
 })
 
 // ------------------------------------------------------- T2 queue-edit-box
