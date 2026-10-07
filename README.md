@@ -121,7 +121,7 @@ node --input-type=module -e "import{readFileSync}from'node:fs';const s=readFileS
 ```
 
 - **暴破限制**：错 PIN 计数 + 按 IP 限流（429 带 `Retry-After`，指数退避 `PIN_FAIL_BASE_SECONDS`→`PIN_FAIL_MAX_SECONDS`），
-  到 `PIN_FAIL_HARD_LOCK` 次**硬锁定**（`PIN_FAIL_LOCKOUT_MS`），只能由桌面改密码或重启桥解除；
+  到 `PIN_FAIL_HARD_LOCK` 次**硬锁定** 15 分钟（`PIN_FAIL_LOCKOUT_MS`），到期自解；桌面改密码或重启桥可提前解除；
   限流键在 LAN 模式就是 socket 对端地址（隧道模式才取 `cf-connecting-ip`）。长效密码可随时在桌面面板重置/取消。
 - **设备凭据**：每台手机独立 `dsh_mobile` 会话 cookie——`HttpOnly`、`SameSite=Strict`、
   `Max-Age=2592000`（30 天，`MOBILE_COOKIE_TTL_MS`；隧道 HTTPS 下追加 `Secure`）；有效期由服务端强制，
