@@ -302,7 +302,8 @@ node --input-type=module -e "import{readFileSync}from'node:fs';const s=readFileS
 
 - 桌面面板可配 Cloudflare tunnel token + hostname（`GET|POST /desktop/tunnel/config`，经
   `lib/settings-store.js` 原子落盘 `0600`）。两者齐且 hostname 形状合法（`isValidTunnelHostname`）时走
-  `cloudflared tunnel run --token`，URL 固定为 `https://<hostname>`。
+  `cloudflared tunnel run`（token 经 `TUNNEL_TOKEN` 环境变量交给子进程，不进命令行），URL 固定为
+  `https://<hostname>`。
 - **token 模式下本地转发目标由 Zero Trust 面板的 ingress 决定，不是桥端口**：ingress 必须指向
   `http://127.0.0.1:<桥端口>`（桥端口可能让位 43128 或被 `DSH_MOBILE_PORT` 覆盖，见「端口与绑定」）。
   配置错了隧道照样显示在线、手机全部 502——online 日志里带这句提示（`lib/tunnel.js`）。
@@ -386,6 +387,10 @@ node tools/render-stub.mjs                       # 渲染桩：真实页面资�
     LRU 淘汰、读时重插（`capSessionCursors()`）——原先「运行中既不淘汰也不刷新」的陈述已随实现翻转，此处存档。
 - **刻意代价（不是缺陷）：进入「一条都还没画出来」的会话会多发一次头页请求**。触发面＝每次进入一个缓冲为空的会话，含全新空会话：页面侧 `fetchOlderPage()` 遇到 `anchorSeq<0` 按「从头拉」处理，发一条**不带 `beforeSeq`** 的 `session.history`（`maxMessages: 30`）去铺第一页；`ensureTranscriptFilled()` 的空转录自举循环因此会先走这一条。**为什么可接受**：这一条请求本身就是空缓冲会话唯一的自举路径，去掉它「加载更多」就没有出口；它拿到的是最新一页，且两道门都不会让它空转——页面侧 `ensureTranscriptFilled()` 用 `count()<=before` 判「没多出消息就停」，桥侧 `LanMobileBridge.forwardRpc` 的 `session.history` 分支在不带 `beforeSeq` 时保留三级阶梯护栏（`pageRequests` 三种形状）。行为锁在 `test/stream-watermark.test.js` 的 `AC-A6 an empty buffer pulls the head page without beforeSeq` 与 `test/transcript-order.test.js` 的头页用例里。
 - 一切页面/桥侧改动的上线方式都是「改完 → 用户重启 DSH → 手机上目验」，中途不催重启。
-- 通知出站的 wxpusher 通道是 **shape-only 发送**：POST 体只带 `appToken`/`summary`/`content`/`contentType`（=1 文本），不带
-  `uid`/`tagIds`，而 WxPusher 的业务错误随 HTTP 200 返回——桥只判 `response.ok`，对面没收到也可能记
-  「已送达」（Server酱/Bark 走 URL 判 2xx，无此嫌疑）。真机通道实测待做；坐实另开修复卡。
+- 通知出站的 wxpusher 通道（2026-10-07 起）**读业务码而非只看 HTTP 200**：WxPusher 的业务错误随 HTTP 200 回在
+  body JSON 的 `code`（1000=成功），桥现在解析 body、`code!==1000` 判失败，并把对面的 `msg` 记进桥日志供诊断
+  （msg 里若回显了 key 会先打码；key 本身仍只存在于设置文件与出站请求两处）。密钥形态决定端点：`spt.` 前缀
+  （个人 SPT，扫码获取，无需建应用）走极简推送 `simple-push` 端点，其余按 `appToken` 走经典 send 端点；`summary`
+  出站前截到 100 字。残余边界：仍只发文本（`contentType=1`）、不带 `uid`/`tagIds`/`url`；Server酱/Bark 仍只判
+  HTTP 2xx（其业务码语义未接）；「测试」按钮只显示成功/失败两态，对面的 `msg` 要到桥日志（宿主控制台 + 滚动
+  文件日志）里看。

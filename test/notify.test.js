@@ -93,10 +93,13 @@ test('maskKey: short keys hide outright, long ones keep first 2 and last 4', () 
 
 test('notify channels: serverchan query, bark path segments, wxpusher body', async () => {
   const seen = []
-  const ok = () => ({ ok: true, text: async () => '{}' })
+  const ok = (text = '{}') => ({ ok: true, text: async () => text })
   const fetchImpl = async (url, init) => {
     seen.push({ url: String(url), init })
-    return ok()
+    // WxPusher answers business results in the body: a success is code 1000.
+    return String(url).includes('wxpusher')
+      ? ok('{"code":1000,"msg":"处理成功","data":{}}')
+      : ok()
   }
   const log = []
   const logger = (level, message) => log.push(`${level} ${message}`)
@@ -133,6 +136,91 @@ test('notify channels: serverchan query, bark path segments, wxpusher body', asy
   assert.ok(seen[1].url.includes(REAL_KEY))
   assert.equal(seen[2].url.includes(REAL_KEY), false, 'wxpusher keeps the token out of the URL')
   assert.ok(seen[2].init.body.includes(REAL_KEY))
+})
+
+// WxPusher verdict (2026-10-07-fix-pocket-wxpusher-simple-push): the old bug
+// was judging `response.ok` only while WxPusher reports business failures as
+// HTTP 200 with body `{code, msg}` — code 1000 is the only delivered.
+test('notify wxpusher: an spt. key routes to simple-push and summary is capped at 100', async () => {
+  const seen = []
+  const fetchImpl = async (url, init) => {
+    seen.push({ url: String(url), init })
+    return { ok: true, text: async () => '{"code":1000,"msg":"处理成功"}' }
+  }
+  const longTitle = '长'.repeat(120)
+  assert.equal(
+    await notifySend({ channel: 'wxpusher', key: 'spt.ABCDEFGHIJKLMNOPQRSTUVWXYZ' }, longTitle, '正文', { fetchImpl }),
+    true
+  )
+  assert.equal(seen[0].url, 'https://wxpusher.zjiecode.com/api/send/message/simple-push')
+  const sent = JSON.parse(seen[0].init.body)
+  assert.equal(sent.spt, 'spt.ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+  assert.equal(sent.appToken, undefined, 'spt mode never sends the classic appToken field')
+  assert.equal(sent.summary.length, 100, 'summary is truncated to the banner cap')
+  assert.equal(sent.content, '正文')
+  assert.equal(sent.contentType, 1)
+  // The documented prefix is lowercase `spt.`; the uppercase shape routes the
+  // same way (case-insensitive on purpose).
+  await notifySend({ channel: 'wxpusher', key: 'SPT.abcdefghijklmnop' }, 't', 'b', { fetchImpl })
+  assert.ok(seen[1].url.endsWith('/simple-push'), 'an SPT.-prefixed key is still a personal token')
+})
+
+test('notify wxpusher: HTTP 200 with a business failure answers false, peer msg logged with the key masked', async () => {
+  const log = []
+  const key = 'spt.TOPSECRET123456'
+  const delivered = await notifySend(
+    { channel: 'wxpusher', key },
+    't',
+    'b',
+    {
+      fetchImpl: async () => ({
+        ok: true,
+        text: async () => JSON.stringify({ code: 1001, msg: `spt无效:${key}` })
+      }),
+      log: (level, message) => log.push(`${level} ${message}`)
+    }
+  )
+  assert.equal(delivered, false, 'HTTP 200 alone is not a delivery: the body code decides')
+  assert.equal(log.length, 1)
+  assert.match(log[0], /notify send failed: wxpusher code=1001/)
+  assert.ok(log[0].includes('spt无效'), 'the peer business msg reaches the log for diagnosis')
+  assert.equal(log[0].includes(key), false, 'a key echoed inside the peer msg is masked first')
+  assert.ok(log[0].includes('••••'))
+
+  // A 200 whose body is not the expected JSON is a failure, not a guess —
+  // and the unreadable body is quoted nowhere.
+  const log2 = []
+  const delivered2 = await notifySend(
+    { channel: 'wxpusher', key },
+    't',
+    'b',
+    {
+      fetchImpl: async () => ({ ok: true, text: async () => '<html>gateway page</html>' }),
+      log: (level, message) => log2.push(`${level} ${message}`)
+    }
+  )
+  assert.equal(delivered2, false)
+  assert.match(log2[0], /notify send failed: wxpusher code unreadable/)
+  assert.equal(log2[0].includes('gateway'), false)
+})
+
+test('notify wxpusher: a network-level failure keeps the class-name-only note', async () => {
+  const log = []
+  const delivered = await notifySend(
+    { channel: 'wxpusher', key: 'spt.ABCDEFGHIJK' },
+    't',
+    'b',
+    {
+      fetchImpl: async () => {
+        const error = new Error('connect EHOSTUNREACH spt.ABCDEFGHIJK')
+        error.name = 'TypeError'
+        throw error
+      },
+      log: (level, message) => log.push(`${level} ${message}`)
+    }
+  )
+  assert.equal(delivered, false)
+  assert.deepEqual(log, ['warn notify send failed: TypeError'], 'no message, no key — class name only')
 })
 
 test('notifySend: a failing channel answers false and logs the class only', async () => {
