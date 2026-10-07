@@ -1295,8 +1295,9 @@ test('Bug 2: the cloudflared archive extraction spawns with windowsHide', () => 
 // Design #3b — the named tunnel (fixed hostname, dashboard token). Same
 // injection discipline as tunnel-output.test.js: a stubbed resolver and an
 // injected spawner, so nothing here reaches the network or the machine cache
-// chain. Assertion MESSAGES never carry the configured token — the args
-// themselves are the one place it may appear in this file.
+// chain. Assertion MESSAGES never carry the configured token — since the
+// token-env fix it rides `opts.env.TUNNEL_TOKEN` instead of the argv, which
+// is the one place it may appear in this file.
 // ---------------------------------------------------------------------------
 
 
@@ -1318,7 +1319,7 @@ function fakeNamedChild() {
 
 const NAMED_STUB_ENSURE = async () => 'stubbed-cloudflared'
 
-test('named tunnel: spawns run --token and resolves after the grace period', async () => {
+test('named tunnel: spawns run with the token in env, never in argv, and resolves after the grace period', async () => {
   const child = fakeNamedChild()
   const spawned = []
   const pending = startCloudflareNamedTunnel({
@@ -1326,8 +1327,8 @@ test('named tunnel: spawns run --token and resolves after the grace period', asy
     token: 'ey-named-token-value',
     hostname: 'phone.example.com',
     ensureImpl: NAMED_STUB_ENSURE,
-    spawnImpl: (bin, args) => {
-      spawned.push({ bin, args })
+    spawnImpl: (bin, args, opts) => {
+      spawned.push({ bin, args, opts })
       return child
     },
     graceMs: 20,
@@ -1337,9 +1338,23 @@ test('named tunnel: spawns run --token and resolves after the grace period', asy
   assert.equal(instance.url, 'https://phone.example.com')
   assert.equal(spawned.length, 1, 'the injected spawner was used — nothing was really launched')
   assert.equal(spawned[0].bin, 'stubbed-cloudflared')
-  assert.deepEqual(
-    spawned[0].args,
-    ['tunnel', '--no-autoupdate', 'run', '--token', 'ey-named-token-value']
+  assert.deepEqual(spawned[0].args, ['tunnel', '--no-autoupdate', 'run'])
+  assert.equal(
+    spawned[0].args.includes('ey-named-token-value'),
+    false,
+    'the token must not ride the argv (world-readable to local processes)'
+  )
+  assert.equal(
+    spawned[0].opts?.env?.TUNNEL_TOKEN,
+    'ey-named-token-value',
+    'the token rides the TUNNEL_TOKEN environment variable instead'
+  )
+  assert.equal(
+    Object.entries(spawned[0].opts?.env ?? {}).filter(
+      ([key, value]) => key !== 'TUNNEL_TOKEN' && String(value).includes('ey-named-token-value')
+    ).length,
+    0,
+    'the token appears in env only under TUNNEL_TOKEN'
   )
   // The pipes stay attached and draining for the life of the tunnel.
   assert.equal(child.stdout.destroyed, false)
