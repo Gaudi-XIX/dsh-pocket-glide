@@ -1499,6 +1499,31 @@ test('desktop tunnel config: masked readback, hostname validation, desktop gate'
       ).status,
       400
     )
+    // A hostname past the storage cap (150) is refused outright, not
+    // accept-and-silently-dropped: the endpoint must not answer ok for a
+    // save the store would never make (L-3).
+    const tooLong = `${'a'.repeat(139)}.example.com`
+    assert.equal(tooLong.length, 151)
+    assert.equal(
+      (
+        await httpFetch(`${t.base}/desktop/tunnel/config`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', Cookie: desktop },
+          body: JSON.stringify({ hostname: tooLong }),
+        })
+      ).status,
+      400
+    )
+    // At the cap exactly, the save goes through and sticks.
+    const atCap = `${'a'.repeat(138)}.example.com`
+    assert.equal(atCap.length, 150)
+    const atCapSave = await httpFetch(`${t.base}/desktop/tunnel/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Cookie: desktop },
+      body: JSON.stringify({ hostname: atCap }),
+    })
+    assert.equal(atCapSave.status, 200)
+    assert.equal((await atCapSave.json()).hostname, atCap)
     // A partial save (hostname only) must not wipe the stored token.
     const partial = await httpFetch(`${t.base}/desktop/tunnel/config`, {
       method: 'POST',
