@@ -90,6 +90,7 @@ function element(initial = '') {
 function fakeContainers() {
   return {
     chatError: element(),
+    reconnectBar: element(),
     listError: element(),
     settingsError: element(),
     questionError: element(),
@@ -101,6 +102,8 @@ function fakeContainers() {
 
 const NOTICE_ORGANS = [
   'isStreamDownCopy',
+  'isStreamCodeCopy',
+  'streamCodeCopy',
   'importantChatCopy',
   'showError',
   'clearTransientError',
@@ -112,10 +115,12 @@ const NOTICE_ORGANS = [
 
 // The flags the notice organs share. Every sandbox that runs one of them has to own
 // them, or the page code throws on a missing global and the test proves nothing.
+const CODE_COPY_LINE = js.match(/const STREAM_CODE_COPY=\{[^}]*\}/)[0]
 const NOTICE_STATE = (state = {}) => `
     let importantErrorActive=${JSON.stringify(Boolean(state.importantErrorActive))}
     let streamDownNoticeShown=${JSON.stringify(Boolean(state.streamDownNoticeShown))}
     let tunnelLinkActive=${JSON.stringify(Boolean(state.tunnelLinkActive))}
+    ${CODE_COPY_LINE}
     const L=${JSON.stringify(L)}
     const $=(id)=>containers[id]
 `
@@ -144,11 +149,19 @@ function buildNoticeSandbox(state = {}) {
   return make(containers, state.document || { hidden: false })
 }
 
-// The mandated shape: what one rendered error line actually shows.
+// The mandated shape: what one rendered error line actually shows. A DISCONNECT is no
+// longer an error-line copy (W4 separation): it lands in the top reconnect bar instead,
+// so the two render helpers below keep the two surfaces apart on purpose.
 function renderedError(error, fallback) {
   const sandbox = buildNoticeSandbox()
   sandbox.showError('chatError', error, fallback)
   return sandbox.containers.chatError.textContent
+}
+
+function renderedDisconnect(error) {
+  const sandbox = buildNoticeSandbox()
+  sandbox.showError('chatError', error)
+  return sandbox.containers.reconnectBar.textContent
 }
 
 // ----------------------------------------------------------------------- AC-C1
@@ -156,8 +169,10 @@ function renderedError(error, fallback) {
 test('AC-C1 a disconnect names itself in both locales', () => {
   assert.equal(L.disconnectedRetry, '连接已断开，正在重试…', 'the zh copy is the one the audit asked for')
   assert.equal(LEN.disconnectedRetry, 'Connection lost, retrying…', 'and the en branch exists beside it')
-  assert.equal(renderedError({ disconnected: true }), '连接已断开，正在重试…')
-  assert.equal(renderedError({ disconnected: true }), L.disconnectedRetry, 'the page label, not a test copy')
+  assert.equal(renderedDisconnect({ disconnected: true }), '连接已断开，正在重试…')
+  assert.equal(renderedDisconnect({ disconnected: true }), L.disconnectedRetry, 'the page label, not a test copy')
+  // W4 separation: the reconnect state never occupies the error banner.
+  assert.equal(renderedError({ disconnected: true }), '', 'the error banner stays empty for a reconnect')
 })
 
 test('AC-C1 no disconnected-to-empty mapping survives anywhere in the script', () => {
@@ -230,11 +245,12 @@ test('AC-C2 an ordinary copy is still cleared, and only the named line is touche
 test('the recovery frame retires a standing RPC disconnect, not just its own notice (V-4)', () => {
   const sandbox = buildNoticeSandbox()
   sandbox.showError('chatError', { disconnected: true })
-  assert.equal(sandbox.containers.chatError.textContent, L.disconnectedRetry, 'the disconnect names itself')
-  assert.equal(sandbox.importantErrorActive, true, 'and stands as the important message')
+  assert.equal(sandbox.containers.reconnectBar.textContent, L.disconnectedRetry, 'the disconnect names itself (in the bar, W4 separation)')
+  assert.equal(sandbox.containers.reconnectBar.hidden, false, 'and the bar is visible')
 
   sandbox.noteStreamRecovery()
-  assert.equal(sandbox.containers.chatError.textContent, '', 'but the recovery answers it, so it goes')
+  assert.equal(sandbox.containers.reconnectBar.textContent, '', 'but the recovery answers it, so it goes')
+  assert.equal(sandbox.containers.reconnectBar.hidden, true, 'and the bar collapses with it')
   assert.equal(sandbox.importantErrorActive, false, 'and the guard goes with it')
 })
 
@@ -260,11 +276,13 @@ test('a copy the recovery did not write survives it until a poll can answer for 
 test('the recovery still retires the outage notice it answered (V-4 companion)', () => {
   const sandbox = buildNoticeSandbox()
   sandbox.notifyStreamDown()
-  assert.equal(sandbox.importantErrorActive, true, 'the outage stands')
+  assert.equal(sandbox.streamDownNoticeShown, true, 'the outage stands (latched)')
+  assert.equal(sandbox.containers.reconnectBar.hidden, false, 'the bar is on screen')
 
   sandbox.noteStreamRecovery()
-  assert.equal(sandbox.containers.chatError.textContent, '', 'and the notice the recovery answered is gone')
-  assert.equal(sandbox.importantErrorActive, false)
+  assert.equal(sandbox.containers.reconnectBar.textContent, '', 'and the notice the recovery answered is gone')
+  assert.equal(sandbox.containers.reconnectBar.hidden, true)
+  assert.equal(sandbox.streamDownNoticeShown, false)
 })
 
 // ------------------------------------------------- 每轮断开最多一次（闩锁，不是绝对计数）
@@ -272,22 +290,23 @@ test('the recovery still retires the outage notice it answered (V-4 companion)',
 test('the disconnect notice speaks once per drop and re-arms on the first frame back', () => {
   const sandbox = buildNoticeSandbox({ tunnelLinkActive: true })
   sandbox.notifyStreamDown()
-  const first = sandbox.containers.chatError.textContent
+  const first = sandbox.containers.reconnectBar.textContent
   assert.equal(first, L.streamDownTunnel, 'a tunnel drop names the tunnel')
   assert.equal(sandbox.containers.statusText.textContent, L.statusReconnecting, 'and the dot gains words')
+  assert.equal(sandbox.containers.chatError.textContent, '', 'and never lands in the error banner (W4 separation)')
   assert.equal(sandbox.streamDownNoticeShown, true)
   // Further retry ticks of the same outage must not rewrite or stack the message.
-  sandbox.containers.chatError.textContent = '别的消息'
+  sandbox.containers.reconnectBar.textContent = '别的消息'
   sandbox.notifyStreamDown()
-  assert.equal(sandbox.containers.chatError.textContent, '别的消息', 'the latch swallowed the repeat')
+  assert.equal(sandbox.containers.reconnectBar.textContent, '别的消息', 'the latch swallowed the repeat')
   // The first frame that proves delivery closes the latch and retires the copy it answered.
-  sandbox.containers.chatError.textContent = first
+  sandbox.containers.reconnectBar.textContent = first
   sandbox.noteStreamRecovery()
   assert.equal(sandbox.streamDownNoticeShown, false, 'recovered')
-  assert.equal(sandbox.containers.chatError.textContent, '', 'and the notice it answered is gone')
+  assert.equal(sandbox.containers.reconnectBar.textContent, '', 'and the notice it answered is gone')
   assert.equal(sandbox.containers.statusText.textContent, L.statusConnected)
   sandbox.notifyStreamDown()
-  assert.equal(sandbox.containers.chatError.textContent, L.streamDownTunnel, 'a new drop is a new round')
+  assert.equal(sandbox.containers.reconnectBar.textContent, L.streamDownTunnel, 'a new drop is a new round')
 })
 
 test('the latch is a per-round limit, not a lifetime quota', () => {
@@ -296,9 +315,9 @@ test('the latch is a per-round limit, not a lifetime quota', () => {
     sandbox.notifyStreamDown()
     sandbox.notifyStreamDown()
     sandbox.notifyStreamDown()
-    assert.equal(sandbox.importantErrorActive, true, 'the copy is standing through the outage')
+    assert.equal(sandbox.streamDownNoticeShown, true, 'the notice is latched through the outage')
     sandbox.noteStreamRecovery()
-    assert.equal(sandbox.importantErrorActive, false, 'and the recovery releases the guard')
+    assert.equal(sandbox.streamDownNoticeShown, false, 'and the recovery releases the latch')
   }
 })
 
@@ -384,6 +403,7 @@ function buildConnectionSandbox(state = {}) {
       get unreachableStreak(){return unreachableStreak},
       set unreachableStreak(value){unreachableStreak=value},
       set lastLiveStatusAt(value){lastLiveStatusAt=value},
+      get streamDownNoticeShown(){return streamDownNoticeShown},
       set streamDownNoticeShown(value){streamDownNoticeShown=value},
       get importantErrorActive(){return importantErrorActive},
     }
@@ -458,10 +478,10 @@ test('the status poll leaves a standing notice alone instead of blanking it', as
   // notice, which is what flags it as the message a later poll must not erase.
   sandbox.notifyStreamDown()
   sandbox.containers.listError.textContent = '会话列表加载失败'
-  assert.equal(sandbox.containers.chatError.textContent, L.streamDownHost, 'the notice is on screen')
+  assert.equal(sandbox.containers.reconnectBar.textContent, L.streamDownHost, 'the notice is on screen')
   await sandbox.checkConnection()
-  assert.equal(sandbox.containers.chatError.textContent, L.streamDownHost, 'the outage poll leaves it alone')
-  assert.equal(sandbox.importantErrorActive, true, 'and the page still treats it as the important message')
+  assert.equal(sandbox.containers.reconnectBar.textContent, L.streamDownHost, 'the outage poll leaves it alone')
+  assert.equal(sandbox.streamDownNoticeShown, true, 'and the page still treats the drop as latched')
   assert.equal(sandbox.containers.listError.textContent, '', 'an ordinary list error is still cleared')
 })
 
@@ -596,7 +616,8 @@ test('AC-C3 a half-open stream is dropped to the poll and reported once', () => 
   sandbox.world.clock = 61_001
   sandbox.tick()
   assert.deepEqual(sandbox.world.calls, ['closeSessionStream', 'schedulePoll'], 'beyond the threshold the stream yields to the poll')
-  assert.equal(sandbox.containers.chatError.textContent, L.streamDownHost, 'and the reason is on screen')
+  assert.equal(sandbox.containers.reconnectBar.textContent, L.streamDownHost, 'and the reason is on screen (the top bar, W4 separation)')
+  assert.equal(sandbox.containers.chatError.textContent, '', 'the error banner stays free of the reconnect copy')
   assert.equal(sandbox.containers.statusText.textContent, L.statusReconnecting, 'and the dot says so too')
   assert.equal(sandbox.state().streamDownNoticeShown, true, 'the latch is what keeps it to one notice')
   // The line promises a retry, so one has to be scheduled — on the stale bound, not sooner.
@@ -800,6 +821,7 @@ function buildStreamSandbox() {
     function showSessionModel(){}
     function queueStreamRender(){world.calls.render+=1}
     function schedulePendingSync(){world.calls.sync+=1}
+    function scheduleProjectionsSync(){}
     function loadHistory(){world.calls.loadHistory+=1}
     function showError(){}
     function streamFailureCopy(){return 'stream failed'}
@@ -807,6 +829,13 @@ function buildStreamSandbox() {
     function schedulePoll(){}
     function armStreamStaleWatch(){}
     ${extractFunction(js, 'tokenChunkText')}
+    // W4: the SSE listeners delegate to the shared frame bodies, so the sandbox needs
+    // the real organs (and their watermark read) to keep exercising the same path.
+    ${extractFunction(js, 'eventSeq')}
+    const streamWatermarks=new Map()
+    ${extractFunction(js, 'streamWatermark')}
+    ${extractFunction(js, 'applyTokenFrame')}
+    ${extractFunction(js, 'applyStreamEventFrame')}
     ${open}
     return {
       openSessionStream,
@@ -902,7 +931,7 @@ test('the empty #chatError banner is display:none by structural rule (cd23147 lo
 function buildDeadlineSandbox() {
   const containers = fakeContainers()
   containers.chatError.getBoundingClientRect = () => ({ left: 60, right: 300, top: 700, bottom: 738, width: 240, height: 38 })
-  const body = ['showError', 'clearTransientError', 'dismissChatNotice', 'setStatusCopy'].map((name) => extractFunction(js, name)).join('\n')
+  const body = [...NOTICE_ORGANS, 'dismissChatNotice'].map((name) => extractFunction(js, name)).join('\n')
   let sandbox = null
   const make = new Function(
     'containers',
@@ -929,11 +958,17 @@ function buildDeadlineSandbox() {
   return sandbox
 }
 
+// W4 separation note: these three used to arm the deadline through a {disconnected}
+// error; that copy moved to the reconnect bar (which has no deadline — it exits when
+// recovery proves itself), so the deadline contract now runs on a standing IMPORTANT
+// error, which is the same code path the deadline was built for.
+const standingError = () => ({ message: `${L.streamFailure} (DEADLINE)`, important: true })
+
 test('the standing notice carries a 90s deadline, and firing it retires the notice', () => {
   const sandbox = buildDeadlineSandbox()
   assert.equal(sandbox.timers.length, 0, 'writing a plain error arms no deadline')
-  sandbox.showError('chatError', { disconnected: true })
-  assert.equal(sandbox.containers.chatError.textContent, L.disconnectedRetry)
+  sandbox.showError('chatError', standingError())
+  assert.equal(sandbox.containers.chatError.textContent, `${L.streamFailure} (DEADLINE)`)
   assert.equal(sandbox.timers.length, 1, 'a standing notice must arm exactly one deadline')
   assert.equal(sandbox.timers[0].delay, 90000, 'and it must be the page own 90s, not an inherited default')
   sandbox.timers[0].fn()
@@ -944,7 +979,7 @@ test('the standing notice carries a 90s deadline, and firing it retires the noti
 
 test('a deadline never kills a notice written after it', () => {
   const sandbox = buildDeadlineSandbox()
-  sandbox.showError('chatError', { disconnected: true })
+  sandbox.showError('chatError', standingError())
   sandbox.showError('chatError', { message: '第二轮失败', important: true })
   assert.equal(sandbox.timers.length, 2, 'each standing paint arms its own deadline')
   sandbox.timers[0].fn()
@@ -954,10 +989,20 @@ test('a deadline never kills a notice written after it', () => {
 
 test('a banner already gone stays gone when its deadline fires', () => {
   const sandbox = buildDeadlineSandbox()
-  sandbox.showError('chatError', { disconnected: true })
+  sandbox.showError('chatError', standingError())
   assert.equal(sandbox.timers.length, 1)
   sandbox.dismissChatNotice(sandbox.containers.chatError, { clientX: 296 })
   assert.equal(sandbox.containers.chatError.textContent, '', 'the tap is the second exit')
   assert.doesNotThrow(() => sandbox.timers[0].fn(), 'the deadline must tolerate a banner that already left')
   assert.equal(sandbox.containers.chatError.textContent, '')
+})
+
+// W4 (fix-pocket-disconnect-copy): a disconnect still opens the bar, but it arms no
+// deadline and sets no guard — its exits are the recovery frame and nothing else.
+test('a disconnect writes the bar and arms no deadline at all', () => {
+  const sandbox = buildDeadlineSandbox()
+  sandbox.showError('chatError', { disconnected: true })
+  assert.equal(sandbox.containers.reconnectBar.textContent, L.disconnectedRetry, 'the bar carries the copy')
+  assert.equal(sandbox.containers.chatError.textContent, '', 'and the banner stays empty')
+  assert.equal(sandbox.timers.length, 0, 'no 90s deadline for a reconnect notice')
 })

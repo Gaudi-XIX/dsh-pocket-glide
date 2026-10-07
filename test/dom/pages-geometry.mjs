@@ -89,24 +89,42 @@ function projections(todos = null) {
   };
 }
 
-function historyFor(todos = null) {
+function historyFor(todos = null, longHistory = false) {
+  // The real record shape puts seq INSIDE the event envelope (eventSeq reads
+  // entry.event.seq); a top-level seq reads as seq-less and defeats mergeEntries
+  // dedupe — the double-painted rows this mock once produced (scene G users x2).
   const record = (seq, text) => ({
-    seq,
-    event: { type: 'user/message', data: { message: { source: { kind: 'user' }, content: [{ type: 'text', text }] } } },
+    event: { seq, type: 'user/message', data: { message: { source: { kind: 'user' }, content: [{ type: 'text', text }] } } },
   });
-  return {
-    events: [
-      record(1, '起一条对话用于几何目验'),
-      { seq: 2, event: { type: 'assistant/message', data: { turn: 't1', message: { content: [{ type: 'text', text: '几何目验用的回复。' }] } } } },
-      { seq: 3, event: { type: 'turn/end', data: { turn: 't1', reason: { kind: 'completed' } } } },
-    ],
-    hasMore: false,
-    projections: projections(todos),
-  };
+  const turnEnd = (seq, turn) => ({ event: { seq, type: 'turn/end', data: { turn, reason: { kind: 'completed' } } } });
+  const replyFor = (seq, turn, text) => ({ event: { seq, type: 'assistant/message', data: { turn, message: { content: [{ type: 'text', text }] } } } });
+  if (!longHistory) {
+    return {
+      events: [
+        record(1, '起一条对话用于几何目验'),
+        replyFor(2, 't1', '几何目验用的回复。'),
+        turnEnd(3, 't1'),
+      ],
+      hasMore: false,
+      projections: projections(todos),
+    };
+  }
+  // Scene G (2026-10-07-feat-pocket-smart-scroll-anchors): a transcript long
+  // enough to scroll — twelve turns whose replies each run a few screens.
+  const events = [];
+  let seq = 0;
+  const reply = '这是长回复的一行，用来把视口撑出好几屏的距离。'.repeat(80);
+  for (let turn = 1; turn <= 12; turn++) {
+    events.push(record(++seq, `第 ${turn} 轮的提问，用于锚点目验`));
+    events.push(replyFor(++seq, `t${turn}`, reply));
+    events.push(turnEnd(++seq, `t${turn}`));
+  }
+  return { events, hasMore: false, projections: projections(todos) };
 }
 
-function startHost({ pendingQuestion = null, todos = null } = {}) {
+function startHost({ pendingQuestion = null, todos = null, longHistory = false } = {}) {
   let streamRes = null;
+  let nextSeq = 5000;
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     const send = (code, body, type = 'application/json; charset=utf-8') => {
@@ -119,6 +137,16 @@ function startHost({ pendingQuestion = null, todos = null } = {}) {
       streamRes.write(`data: ${JSON.stringify({ reason: 'transport' })}\n\n`);
       return send(200, { ok: true });
     }
+    if (req.method === 'POST' && url.pathname === '/emit-chunk') {
+      // Scene G: one assistant/chunk frame appended to the live stream — the
+      // fuel the follow machine runs on.
+      if (!streamRes) return send(503, { ok: false });
+      const frame = {
+        event: { seq: nextSeq++, type: 'assistant/chunk', data: { turn: 't-new', step: 1, chunk: { type: 'text-delta', index: 0, text: '流式追加的一行内容，用来观察跟滚。'.repeat(6) } } },
+      };
+      streamRes.write(`event: event\ndata: ${JSON.stringify(frame)}\n\n`);
+      return send(200, { ok: true });
+    }
     if (url.pathname === '/') {
       return send(200, renderMobilePage({ locale: 'zh', boot: JSON.stringify(bootData()), initialChat: false }), 'text/html; charset=utf-8');
     }
@@ -127,7 +155,7 @@ function startHost({ pendingQuestion = null, todos = null } = {}) {
     if (url.pathname === '/api/session/stream') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
       res.write(': open\n\n');
-      const frame = { records: historyFor(todos).events, projections: projections(todos), hasMore: false };
+      const frame = { records: historyFor(todos, longHistory).events, projections: projections(todos), hasMore: false };
       res.write(`event: snapshot\ndata: ${JSON.stringify(frame)}\n\n`);
       res.write(`event: status\ndata: ${JSON.stringify({ settings: null, agentRunning: true, at: Date.now() })}\n\n`);
       streamRes = res;
@@ -145,7 +173,7 @@ function startHost({ pendingQuestion = null, todos = null } = {}) {
         try { parsed = JSON.parse(body || '{}'); } catch { /* page always sends json */ }
         const method = parsed.method;
         let value;
-        if (method === 'session.history') value = historyFor(todos);
+        if (method === 'session.history') value = historyFor(todos, longHistory);
         else if (method === 'interaction.pending') value = pendingQuestion;
         else if (method === 'session.projections') value = projections(todos);
         else if (method === 'session.list') value = bootData().sess;
@@ -592,6 +620,121 @@ async function scenarioQueue(host, port, failures) {
   });
 }
 
+// Scene G (2026-10-07-feat-pocket-smart-scroll-anchors): the follow machine and
+// the dual anchors, driven with real streamed chunks in the real layout.
+//   G1 near the bottom both anchors are hidden;
+//   G2 a streamed chunk sticks to the bottom (following);
+//   G3 scrolling up unlocks: the next chunk must NOT steal the position, and ↓
+//      appears while ↑ stays dark (mutual exclusion);
+//   G4 tapping ↓ returns to the bottom, hides ↓, re-arms the follow, and lights
+//      ↑ because the last question sits more than a screen above the top;
+//   G5 tapping ↑ brings the last user message to the top edge (+pad);
+//   G6 the history tail carries msg-hist (content-visibility) and the tail
+//      messages do not.
+const scrollSnapshot = `(() => {
+  const box = document.getElementById('messages')
+  const latest = document.getElementById('jumpLatest')
+  const prompt = document.getElementById('jumpPrompt')
+  if (!box || !latest || !prompt) return { missing: true }
+  const rows = box.querySelectorAll(':scope > .message')
+  const lastUser = box.querySelectorAll(':scope > .message.user')
+  const anchor = lastUser.length ? lastUser[lastUser.length - 1] : null
+  const boxTop = box.getBoundingClientRect().top
+  return {
+    missing: false,
+    dist: box.scrollHeight - box.scrollTop - box.clientHeight,
+    clientH: box.clientHeight,
+    scrollTop: box.scrollTop,
+    showLatest: latest.classList.contains('show'),
+    showPrompt: prompt.classList.contains('show'),
+    latestHidden: latest.hidden,
+    promptHidden: prompt.hidden,
+    messages: rows.length,
+    users: box.querySelectorAll(':scope > .message.user').length,
+    assistants: box.querySelectorAll(':scope > .message.assistant').length,
+    histCount: box.querySelectorAll(':scope > .msg-hist').length,
+    cvFirst: rows.length ? getComputedStyle(rows[0]).contentVisibility : '',
+    cvFirstClass: rows.length ? rows[0].classList.contains('msg-hist') : false,
+    tailClass: rows.length ? Array.from(rows).slice(-8).some((r) => r.classList.contains('msg-hist')) : false,
+    // box-relative: "the top of the screen" for the transcript is the top of the
+    // scroll area (the back button overlays it), not the viewport origin — the
+    // shell chrome above it measures ~91px in this environment.
+    anchorTop: anchor ? anchor.getBoundingClientRect().top - boxTop : -1,
+  }
+})()`
+
+async function scenarioScroll(host, port, failures) {
+  return withPage(port, host.origin, async (page) => {
+    await wait(900); // let the long snapshot paint
+    const snap0 = await page.evaluate(scrollSnapshot);
+    const n0 = (cond, msg) => { if (!cond) failures.push(`G0(baseline): ${msg} — ${JSON.stringify(snap0)}`); };
+    n0(!snap0.missing, 'messages/anchor organs missing');
+    if (snap0.missing) return null;
+    n0(snap0.messages >= 24, `non-vacuity: expected the 24-message long history, got ${snap0.messages}`);
+    // "At the bottom" is the follow band (120px): the open jump lands, then the
+    // content-visibility estimates converge and --composer-h settles, which can
+    // leave a few dozen px of drift before the next paint re-sticks.
+    n0(snap0.dist < 120, `the page must open at the bottom (within the follow band), dist=${snap0.dist}`);
+    n0(!snap0.showLatest, 'at the bottom ↓ must be dark');
+    // ↑ lights exactly when the last question hangs more than a screen above the
+    // viewport top — which, in a long-reply transcript viewed from the bottom, is
+    // the product's whole point (the question is off-screen above while you read
+    // the answer).
+    n0(snap0.showPrompt === (snap0.anchorTop < -snap0.clientH), `↑ state must track the anchor position (anchorTop=${snap0.anchorTop}, clientH=${snap0.clientH}, show=${snap0.showPrompt})`);
+    n0(snap0.cvFirstClass, 'the first message must carry msg-hist');
+    n0(!snap0.tailClass, 'the last 8 messages must stay untagged');
+    n0(snap0.cvFirst === 'auto', `msg-hist must compute content-visibility:auto, got ${JSON.stringify(snap0.cvFirst)}`);
+
+    // G2: a streamed chunk sticks (following)
+    const before = snap0.scrollTop;
+    await page.evaluate(`fetch('/emit-chunk',{method:'POST'})`);
+    await wait(450);
+    const snap1 = await page.evaluate(scrollSnapshot);
+    const n1 = (cond, msg) => { if (!cond) failures.push(`G2(follow): ${msg} — ${JSON.stringify(snap1)}`); };
+    n1(snap1.scrollTop > before, `the streamed chunk must pull the view down (${before} -> ${snap1.scrollTop})`);
+    n1(snap1.dist < 60, `still following after the chunk, dist=${snap1.dist}`);
+
+    // G3: scroll up → unlock; the next chunk must not steal the position
+    await page.evaluate(`(() => { const b = document.getElementById('messages'); b.scrollTop = Math.max(0, b.scrollTop - Math.round(b.clientHeight * 2.5)) })()`);
+    await wait(300);
+    const parked = await page.evaluate(scrollSnapshot);
+    const n2 = (cond, msg) => { if (!cond) failures.push(`G3(unlock): ${msg} — ${JSON.stringify(parked)}`); };
+    n2(parked.showLatest, '↓ must appear past 1.5 screens from the bottom');
+    n2(!parked.showPrompt, '↑ must stay dark while ↓ is lit (mutual exclusion)');
+    const parkedTop = parked.scrollTop;
+    await page.evaluate(`fetch('/emit-chunk',{method:'POST'})`);
+    await wait(450);
+    const after = await page.evaluate(scrollSnapshot);
+    n2(Math.abs(after.scrollTop - parkedTop) < 6, `an unlocked chunk must not steal the position (${parkedTop} -> ${after.scrollTop})`);
+
+    // G4: ↓ returns to the bottom, re-arms the follow, and hands the floor to ↑
+    await page.evaluate(`document.getElementById('jumpLatest').click()`);
+    await wait(350);
+    const home = await page.evaluate(scrollSnapshot);
+    const n3 = (cond, msg) => { if (!cond) failures.push(`G4(jump-latest): ${msg} — ${JSON.stringify(home)}`); };
+    n3(home.dist < 60, `↓ must land at the bottom, dist=${home.dist}`);
+    n3(!home.showLatest, '↓ must go dark at the bottom');
+    n3(home.showPrompt, `↑ must light when the question is far above the viewport (anchorTop=${home.anchorTop}, clientH=${home.clientH})`);
+
+    // G5: ↑ brings the last question to the top edge (+ the 54px pad)
+    await page.evaluate(`document.getElementById('jumpPrompt').click()`);
+    await wait(600); // the settle re-aims against materialized cv layout
+    const asked = await page.evaluate(scrollSnapshot);
+    const n4 = (cond, msg) => { if (!cond) failures.push(`G5(jump-prompt): ${msg} — ${JSON.stringify(asked)}`); };
+    n4(Math.abs(asked.anchorTop - 54) < 40, `the last question must sit ~54px from the top, got ${asked.anchorTop}px`);
+    n4(!asked.showPrompt, '↑ must go dark once the question is in view');
+
+    // G6: after the jump the follow stays unlocked until the reader returns —
+    // one more chunk must not move the view.
+    const hold = asked.scrollTop;
+    await page.evaluate(`fetch('/emit-chunk',{method:'POST'})`);
+    await wait(450);
+    const still = await page.evaluate(scrollSnapshot);
+    n4(Math.abs(still.scrollTop - hold) < 6, `the unlocked view must hold (${hold} -> ${still.scrollTop})`);
+    return { snap0, snap1, parked, home, asked, still };
+  });
+}
+
 // ----------------------------------------------------------------------- main
 
 async function main() {
@@ -664,6 +807,12 @@ async function main() {
     } finally {
       await questionHost.close();
     }
+    const scrollHost = await startHost({ longHistory: true });
+    try {
+      report.scenarios.push(await scenarioScroll(scrollHost, CDP_PORT, failures));
+    } finally {
+      await scrollHost.close();
+    }
   } finally {
     await new Promise((resolve) => {
       if (child.exitCode !== null) return resolve();
@@ -680,7 +829,7 @@ async function main() {
     for (const line of failures) console.log(`  - ${line}`);
     return 1;
   }
-  console.log('GEOMETRY PASS: banner/edit-box/queue-list/todo-dock/notice hold their geometry at 390x844');
+  console.log('GEOMETRY PASS: banner/edit-box/queue-list/todo-dock/notice/scroll-follow hold their geometry at 390x844');
   return 0;
 }
 

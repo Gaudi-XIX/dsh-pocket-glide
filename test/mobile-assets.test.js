@@ -595,7 +595,45 @@ test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
 // must grow: the diff of this test is the receipt.
 // ---------------------------------------------------------------------------
 
-const ASSET_BUDGET_BYTES = 200_000
+// Raised 200_000 -> 210_000 (change 2026-10-07-feat-pocket-process-render-overhaul,
+// W1-卡2): the tool process cards grew the shell by ~10.9 KB measured against HEAD
+// 786ff4a (zh 192909 -> 203831, en 192884 -> 203687) — the host-verbatim verb
+// tables (stepVerbs/stepDone/stepCount, zh+en), the four embedded organs
+// (toolActivityCategory/diffLineSplit/toolSummaryLine/clusterToolBlocks), the
+// cluster card renderer, and the cluster-row/diff/tool-raw CSS. Headroom left:
+// ~6.2 KB.
+//
+// Raised 210_000 -> 225_000 (change 2026-10-07-feat-pocket-image-file-capability,
+// W2-卡7): the image/file capability grew the shell by ~17.6 KB measured against
+// the 卡2 tree (zh 203831 -> 221353, en 203687 -> 221190) — the lightbox overlay
+// markup + runtime + CSS (fixed 100dvh stage, two-level zoom, save/copy bar),
+// the inline text-attachment preview (toggle/fetch/cache/200-line cap), the
+// markdown-image rewrite in inlineMarkdown, the presented-file cards, the
+// per-session known-path collector, the isTextualAttachment/extension tables,
+// the 404-fallback heal, and 12 new locale strings (zh+en). Headroom left:
+// ~3.6 KB zh / ~3.8 KB en.
+//
+// Raised 225_000 -> 236_000 (change 2026-10-07-feat-pocket-smart-scroll-anchors,
+// W3-卡6): the scroll/anchors/virtualization/unread work grew the shell by
+// ~5.7 KB zh / ~8.0 KB en measured against the 卡7 tree (zh 221353 -> 227201,
+// en 221190 -> 229396) — the followStream scroll-organ block (distance/near-
+// bottom/anchor-visibility/markHistoryTail/settle organs + scroll/anchor
+// wiring), the unread-dot ledger (readOpenedMap/prune/note/isSessionUnread +
+// the is-unread row class), the msg-hist/scroll-anchors/anchor-fab/task-status
+// CSS, and the #scrollAnchors deck markup (zh+en aria labels). The offline.html
+// precache lives in renderServiceWorker and does NOT count against this shell
+// budget. Headroom left: ~8.8 KB zh / ~6.6 KB en.
+//
+// Raised 236_000 -> 248_000 (W4-收尾 双卡: disconnect-copy + tunnel-stream-fallback
+// client): the shell grew by ~12.3 KB zh / ~10.0 KB en measured against the 卡6
+// tree (zh 227201 -> 239538, en 229396 -> 239405) — the STREAM_CODE_COPY map +
+// streamCodeCopy/isStreamCodeCopy organs, the four named-reason locale strings
+// (zh+en), the #reconnectBar markup + CSS + the notify/recovery split, the shared
+// frame bodies (applyTokenFrame/applyStreamEventFrame), and the tunnel poll
+// client (mode discovery in checkConnection/applyLiveStatus, openEventPolling/
+// pollSessionEvents/setConnectionMode/reopenRealtime with the 1.5s-6s ladder).
+// Headroom left: ~8.5 KB zh / ~8.6 KB en.
+const ASSET_BUDGET_BYTES = 248_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

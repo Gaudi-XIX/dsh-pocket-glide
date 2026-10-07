@@ -87,6 +87,9 @@ class Node {
   querySelector(sel) {
     return this.descendants().find((n) => n.matchesSel(sel)) ?? null
   }
+  querySelectorAll(sel) {
+    return this.descendants().filter((n) => n.matchesSel(sel))
+  }
 }
 
 function makeSandbox(lang) {
@@ -194,13 +197,17 @@ function openModal(r) {
   return {
     r,
     panel,
-    close: panel.children[1],
-    frame: panel.children[0].querySelector('iframe'),
-    status: panel.children[0].querySelector('.dsh-pocket-status'),
+    // 改版(device-registry 卡):面板 = 页签条 + 本体 + 关闭钮;配对 iframe 与
+    // 设备列表都挂在本体下,按 class 寻址,不按子序。
+    tabs: panel.querySelector('.dsh-pocket-tabs'),
+    close: panel.querySelector('.dsh-pocket-close'),
+    frame: panel.querySelector('iframe'),
+    status: panel.querySelector('.dsh-pocket-status'),
+    devices: panel.querySelector('.dsh-pocket-devices'),
   }
 }
 
-const statusOf = (m) => m.panel.children[0].querySelector('.dsh-pocket-status')
+const statusOf = (m) => m.panel.querySelector('.dsh-pocket-status')
 
 // The sidebar label is the product name `pocket` in BOTH packs, so it can no
 // longer separate the locales on its own (that is the point of the rename).
@@ -217,7 +224,15 @@ const I18N = TABLE_MATCH
   ? vm.runInContext('(' + TABLE_MATCH[1] + ')', vm.createContext({}))
   : null
 
-const KEYS = ['label', 'close', 'opening', 'frameTitle', 'openFailed', 'reactUnavailable', 'slotsUnavailable']
+const KEYS = [
+  // 模态外壳(WP-CLIENT 原七键)
+  'label', 'close', 'opening', 'frameTitle', 'openFailed', 'reactUnavailable', 'slotsUnavailable',
+  // 已配对设备页签(device-registry 卡,client 半区管理页)
+  'tabConnect', 'tabDevices', 'devicesLoading', 'devicesEmpty', 'devicesFailed', 'retry',
+  'deviceOnline', 'deviceOffline', 'deviceFingerprint', 'firstPaired', 'credExpiry', 'lastSeen', 'neverSeen',
+  'permLan', 'permLanWan', 'permBadge', 'permMakeLan', 'permMakeWan', 'extend', 'credExpiredFmt',
+  'revoke', 'revokeArmed', 'revokeConfirm', 'extendDone', 'permDone', 'revokeDone', 'actionFailed',
+]
 
 /* ------------------------------------------------------------------ *
  * behavioural: locale resolution
@@ -403,7 +418,13 @@ test('no CJK survives outside the I18N table and the string literals equal its z
 
   const wholeTable = (SRC.match(/var I18N = \{[\s\S]*?\n    \}/) ?? [''])[0]
   assert.ok(wholeTable.length > 0, 'the I18N table must exist in the source')
-  const zhPart = wholeTable.slice(wholeTable.indexOf('zh:'), wholeTable.indexOf('en:'))
+  // Anchor at the pack declarations' own lines: a bare indexOf('en:') lands
+  // mid-key the moment any key name ends in "en" (lastSeen), truncating the
+  // zh pack and failing the equality below for the wrong reason.
+  const zhStart = wholeTable.indexOf('\n      zh: {')
+  const enStart = wholeTable.indexOf('\n      en: {')
+  const zhPart = wholeTable.slice(zhStart, enStart)
+  assert.ok(zhStart >= 0 && enStart > zhStart, 'both pack declarations must be present')
   assert.ok(zhPart.length > 0 && zhPart.includes('关闭'), 'the I18N.zh pack must be present')
 
   const inZhTable = zhPart.replace(/[^\u2e80-\u9fff\uff00-\uffef\u3000-\u303f]/g, '')
