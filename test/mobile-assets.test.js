@@ -633,6 +633,15 @@ test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
 // client (mode discovery in checkConnection/applyLiveStatus, openEventPolling/
 // pollSessionEvents/setConnectionMode/reopenRealtime with the 1.5s-6s ladder).
 // Headroom left: ~8.5 KB zh / ~8.6 KB en.
+//
+// Receipt (2026-10-08-feat-pocket-subagent-status-visibility, 刀③⑤④): budget
+// NOT raised — the shell grew by ~4.5 KB against the W4 tree (zh 239538 ->
+// 243995, en 239405 -> 243936): the interleaved visibleMessages single-pass
+// flush (segment keys + usage/messageTime backfill), the segKey suffix in
+// renderTurnProcess open-state keys, the STEP step-process label table +
+// stepTitleFor (top-3 join, replaces the self-invented stepCount block which
+// was deleted, netting most of the label cost back), and the unknown state
+// glyph + .ws-last.is-unknown CSS. Headroom left: ~4.0 KB zh / ~4.1 KB en.
 const ASSET_BUDGET_BYTES = 248_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
