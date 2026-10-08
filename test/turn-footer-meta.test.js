@@ -655,17 +655,17 @@ test('A18 the pill rides the LAST text block when an earlier step had text too',
 
 // The mechanism, pinned so the node-identity shape cannot come back. Both the old
 // F-1 sentinel and the half-fix are named here: a regression to either would make
-// the projections above print one pill per block again.
-test('A19 the pill winner is the last text item index, not a node or a seq comparison', () => {
+// the projections above print one pill per block again. Under interleaved segments
+// the winner is the final reply block in rendered order, backfilled after the walk.
+test('A19 the pill winner is the last reply block emitted, backfilled on the rendered tail', () => {
   const projection = between('function visibleMessages(events)', 'function inlineMarkdown(')
-  assert.ok(projection.includes('const lastTextIdx=textItems.length-1'),
-    'the winner must be derived from the text item count')
-  assert.ok(projection.includes('usage:textIdx===lastTextIdx?normalizeUsage(turn.usage):undefined'),
-    'the pill predicate must compare the item index')
-  assert.ok(projection.includes('messageTime:textIdx===lastTextIdx?item.messageTime:undefined'),
-    'the clock must ride the same last-item gate as the pill')
+  assert.ok(projection.includes('let group=[],segment=0,lastText=-1,lastTime=undefined'),
+    'the emitter must track the last reply position in rendered order')
+  assert.ok(projection.includes('if(lastText>=0){rendered[lastText].messageTime=lastTime;rendered[lastText].usage=normalizeUsage(turn.usage)}'),
+    'the pill and the clock must be backfilled onto the final reply block')
   assert.ok(!projection.includes('lastTextSeq'), 'the _seq sentinel must stay gone')
   assert.ok(!projection.includes('item.node==='), 'the half-fixed node comparison must stay gone')
+  assert.ok(!projection.includes('textItems'), 'the old text-item queue must stay gone (segments emit in arrival order)')
 })
 
 // --------------------------------------------------------- A17 exact prompt parity
