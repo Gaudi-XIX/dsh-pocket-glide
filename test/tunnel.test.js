@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url'
 import { startCloudflareNamedTunnel, resolveCloudflared, ensureCloudflared, extractTryCloudflareUrl } from '../lib/tunnel.js'
 import { createSettingsStore, SETTINGS_FILE_NAME } from '../lib/settings-store.js'
 import { LanMobileBridge } from '../lib/bridge.js'
+import { TUNNEL_HOSTNAME_MAX_LENGTH } from '../lib/constants.js'
+import { encodeQr } from '../lib/qr-svg.js'
 import { createMuxMonitor } from '../lib/mux-client.js'
 import { startBridge, httpFetch } from './helpers.js'
 
@@ -1436,41 +1438,60 @@ test('named tunnel: the online log names the dashboard ingress target', async ()
 })
 
 // L-2 (2026-10-07-fix-pocket-contract-minis): storage caps the tunnel hostname
-// at 150 — the QR pairing-URL budget (63-byte fixed prefix + 150 = 213 bytes =
-// BYTE_CAPACITY at MAX_VERSION). Read side (hand-edited files) and write side
-// (desktop panel save) enforce the same twin gate; the bridge's DNS-shape 253
-// check is a different concern and stays.
-test('settings store: a hostname past the 150 QR budget is dropped on read and on write', () => {
+// at the pairing-QR budget — the fixed 63-byte URL prefix + hostname must fit
+// BYTE_CAPACITY at MAX_VERSION. Single-sourced since
+// 2026-10-07-fix-pocket-hostname-cap-single-source: every cap site (settings-store
+// read and merge, the panel endpoint's 400) reads TUNNEL_HOSTNAME_MAX_LENGTH
+// (lib/constants.js), and the boundaries below are DERIVED from that constant —
+// hardening any consumer back to a private literal goes red here, while changing
+// the constant moves every gate together. The bridge's DNS-shape 253 check is a
+// different concern and stays.
+const HOSTNAME_SUFFIX = '.example.com'
+const hostnameOfLength = (n) => 'a'.repeat(n - HOSTNAME_SUFFIX.length) + HOSTNAME_SUFFIX
+
+test('settings store: a hostname past the QR-budget cap is dropped on read and on write', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pocket-hostname-cap-'))
   try {
-    const hostname150 = 'a'.repeat(138) + '.example.com'
-    const hostname151 = 'b'.repeat(139) + '.example.com'
-    assert.equal(hostname150.length, 150)
-    assert.equal(hostname151.length, 151)
+    const atCap = hostnameOfLength(TUNNEL_HOSTNAME_MAX_LENGTH)
+    const overCap = hostnameOfLength(TUNNEL_HOSTNAME_MAX_LENGTH + 1)
+    assert.equal(atCap.length, TUNNEL_HOSTNAME_MAX_LENGTH)
+    assert.equal(overCap.length, TUNNEL_HOSTNAME_MAX_LENGTH + 1)
     const store = createSettingsStore(dir)
-    // Read side: a hand-edited file keeps a 150-char hostname in full...
+    // Read side: a hand-edited file keeps an at-cap hostname in full...
     fs.writeFileSync(
       path.join(dir, SETTINGS_FILE_NAME),
-      JSON.stringify({ notify: { channel: 'off', key: '', enabled: false }, tunnel: { token: '', hostname: hostname150 } }),
+      JSON.stringify({ notify: { channel: 'off', key: '', enabled: false }, tunnel: { token: '', hostname: atCap } }),
       'utf8'
     )
-    assert.equal(store.load().tunnel.hostname, hostname150)
+    assert.equal(store.load().tunnel.hostname, atCap)
     // ...and an over-budget one falls back to the default on read.
     fs.writeFileSync(
       path.join(dir, SETTINGS_FILE_NAME),
-      JSON.stringify({ notify: { channel: 'off', key: '', enabled: false }, tunnel: { token: '', hostname: hostname151 } }),
+      JSON.stringify({ notify: { channel: 'off', key: '', enabled: false }, tunnel: { token: '', hostname: overCap } }),
       'utf8'
     )
-    assert.equal(store.load().tunnel.hostname, '', 'a 151-char hostname reads back as the default')
-    // Write side: 150 is kept verbatim...
-    assert.equal(store.save({ tunnel: { hostname: hostname150 } }), true)
-    assert.equal(store.load().tunnel.hostname, hostname150)
+    assert.equal(store.load().tunnel.hostname, '', 'an over-cap hostname reads back as the default')
+    // Write side: at-cap is kept verbatim...
+    assert.equal(store.save({ tunnel: { hostname: atCap } }), true)
+    assert.equal(store.load().tunnel.hostname, atCap)
     // ...and an over-budget patch field is discarded, the stored value untouched.
-    assert.equal(store.save({ tunnel: { hostname: hostname151 } }), true)
-    assert.equal(store.load().tunnel.hostname, hostname150, 'the 151-char patch was not applied')
+    assert.equal(store.save({ tunnel: { hostname: overCap } }), true)
+    assert.equal(store.load().tunnel.hostname, atCap, 'the over-cap patch was not applied')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// The single source has a WHY worth pinning: the cap is exactly what the pairing
+// QR can still render. Build the real pairing URL shape (63 fixed bytes + the
+// hostname) and walk the real encoder — at the cap it must encode, one past the
+// cap selectVersion() must throw. This is the tripwire the JSDoc blocks in
+// lib/constants.js and lib/qr-svg.js promise: raise the cap without raising QR
+// capacity (or shrink the capacity under the cap) and this test goes red.
+test('tunnel hostname cap tracks the pairing-QR budget: renders at the cap, throws one past it', () => {
+  const pairingUrl = (hostname) => `https://${hostname}/pair?token=${'a'.repeat(43)}`
+  assert.doesNotThrow(() => encodeQr(pairingUrl(hostnameOfLength(TUNNEL_HOSTNAME_MAX_LENGTH))))
+  assert.throws(() => encodeQr(pairingUrl(hostnameOfLength(TUNNEL_HOSTNAME_MAX_LENGTH + 1))))
 })
 
 test('desktop tunnel config: masked readback, hostname validation, desktop gate', async () => {
@@ -1514,11 +1535,12 @@ test('desktop tunnel config: masked readback, hostname validation, desktop gate'
       ).status,
       400
     )
-    // A hostname past the storage cap (150) is refused outright, not
+    // A hostname past the storage cap is refused outright, not
     // accept-and-silently-dropped: the endpoint must not answer ok for a
-    // save the store would never make (L-3).
-    const tooLong = `${'a'.repeat(139)}.example.com`
-    assert.equal(tooLong.length, 151)
+    // save the store would never make (L-3). The boundary derives from the
+    // same constant the endpoint reads — a private literal there goes red here.
+    const tooLong = hostnameOfLength(TUNNEL_HOSTNAME_MAX_LENGTH + 1)
+    assert.equal(tooLong.length, TUNNEL_HOSTNAME_MAX_LENGTH + 1)
     assert.equal(
       (
         await httpFetch(`${t.base}/desktop/tunnel/config`, {
@@ -1530,8 +1552,8 @@ test('desktop tunnel config: masked readback, hostname validation, desktop gate'
       400
     )
     // At the cap exactly, the save goes through and sticks.
-    const atCap = `${'a'.repeat(138)}.example.com`
-    assert.equal(atCap.length, 150)
+    const atCap = hostnameOfLength(TUNNEL_HOSTNAME_MAX_LENGTH)
+    assert.equal(atCap.length, TUNNEL_HOSTNAME_MAX_LENGTH)
     const atCapSave = await httpFetch(`${t.base}/desktop/tunnel/config`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', Cookie: desktop },
