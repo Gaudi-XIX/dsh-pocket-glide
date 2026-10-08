@@ -294,13 +294,13 @@ test('isSessionUnread: activity after last open, excluding running/blank/focused
   assert.equal(isSessionUnread(row, 4000, null), true, 'activity since last open')
   assert.equal(isSessionUnread(row, 5000, null), false, 'opened at the exact activity time')
   assert.equal(isSessionUnread(row, 6000, null), false)
-  assert.equal(isSessionUnread(row, 0, null), true, 'never opened → unread')
+  assert.equal(isSessionUnread(row, 0, null), false, 'never opened → quiet (a restarted host must not light every row)')
   assert.equal(isSessionUnread({ ...row, running: true }, 0, null), false, 'running sessions stay quiet')
   assert.equal(isSessionUnread({ ...row, blank: true }, 0, null), false, 'blank shells have nothing to read')
   assert.equal(isSessionUnread(row, 0, 's1'), false, 'the focused session never dots itself')
   assert.equal(isSessionUnread({ sessionId: 's2' }, 0, 's1'), false, 'no updatedAt → no dot')
   assert.equal(isSessionUnread(null, 0, null), false)
-  assert.equal(isSessionUnread(row, undefined, null), true, 'a missing ledger entry reads as never opened')
+  assert.equal(isSessionUnread(row, undefined, null), false, 'a missing ledger entry reads as never opened')
 })
 
 const workspaceSandbox = ({ storage = {}, activeSession = null } = {}) => {
@@ -316,6 +316,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null } = {}) => {
     'workspaces', 'sessionSummaries', 'expandedWsIds', 'activeSession', 'container', 'localStorage', `
     const L=${JSON.stringify({ noWorkspaces: 'none', noTasksHint: 'hint', taskUnit: ' tasks', newChat: 'new', untitled: 'untitled', justNow: 'now', minute: 'm', hour: 'h', day: 'd' })}
     const BLANK_ROW_VISIBLE_MS=${24 * 60 * 60 * 1000}
+    const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${body}
@@ -325,10 +326,11 @@ const workspaceSandbox = ({ storage = {}, activeSession = null } = {}) => {
     }
   `)
   const sandbox = make(
-    [{ workspaceId: 'w1', title: 'DSH', sessionIds: ['read', 'unread', 'blank1'] }],
+    [{ workspaceId: 'w1', title: 'DSH', sessionIds: ['read', 'unread', 'fresh', 'blank1'] }],
     [
       { sessionId: 'read', updatedAt: 1000, blank: false },
       { sessionId: 'unread', updatedAt: 9000, blank: false },
+      { sessionId: 'fresh', updatedAt: 9000, blank: false },
       { sessionId: 'blank1', updatedAt: 9000, blank: true },
     ],
     new Set(['w1']),
@@ -343,11 +345,13 @@ const workspaceSandbox = ({ storage = {}, activeSession = null } = {}) => {
 }
 
 test('renderWorkspaces paints is-unread on exactly the rows the ledger marks', () => {
-  const storage = { 'dsh-pocket-opened-at': JSON.stringify({ read: 5000 }) }
+  const storage = { 'dsh-pocket-opened-at': JSON.stringify({ read: 5000, unread: 5000 }) }
   const sandbox = workspaceSandbox({ storage, activeSession: null })
   const markup = sandbox.markup()
   assert.match(markup, /class="task-row is-done is-unread"[^>]*data-id="unread"/, 'activity after last open → dot')
   assert.doesNotMatch(markup, /data-id="read"[^>]*is-unread/, 'opened after its last activity → quiet')
+  assert.doesNotMatch(markup, /data-id="fresh"[^>]*is-unread/, 'never opened (no ledger entry) → quiet')
+  assert.doesNotMatch(markup, /data-id="unread"[^>]*is-unread/, 'a ledger entry with no later activity → quiet')
   assert.doesNotMatch(markup, /data-id="blank1"[^>]*is-unread/, 'blank rows stay quiet')
   const focused = workspaceSandbox({ storage, activeSession: 'unread' }).markup()
   assert.doesNotMatch(focused, /data-id="unread"[^>]*is-unread/, 'the focused session never dots itself')

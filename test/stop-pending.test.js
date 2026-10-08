@@ -179,7 +179,7 @@ test('stopPending reconciles where the turn actually ends', () => {
     'updateRunning clears the flag when the turn settles');
   assert.match(js, /status=agentRunning&&!pendingQuestion\?statusLineHtml\(\):''/,
     'paintMessages renders the shared status line');
-  assert.match(js, /queueEditText='';stopPending=false;renderGoalBar\(\)/,
+  assert.match(js, /queueEditText='';goalBusy=false;goalEditing=false;goalEditText='';stopPending=false;renderGoalBar\(\)/,
     'a session switch drops a stale stop request');
 });
 

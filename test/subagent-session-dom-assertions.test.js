@@ -373,10 +373,10 @@ test('R1-audit follow-up blankRowVisible owns the freshness boundary', () => {
 // (agentAvailable:false, the wire's only "not routable" signal). The new chain shows
 // both explicitly, and the green check survives only where nothing says otherwise.
 
-test('STATUS-1 a held writer (agentAvailable:false) is unknown, not done', () => {
+test('STATUS-1 a held writer (agentAvailable:false) reads done like the desktop', () => {
   const sandbox = buildRenderSandbox();
-  assert.equal(sandbox.taskState({ running: false, agentAvailable: false }), 'unknown', 'the only honest reading: we cannot say done');
-  assert.ok(sandbox.taskGlyph('unknown').includes('?'), 'the glyph is a question mark, not a check');
+  assert.equal(sandbox.taskState({ running: false, agentAvailable: false }), 'done', 'agentAvailable is not a state signal — a restart lights nothing');
+  assert.ok(!sandbox.taskState({ running: false, agentAvailable: false }).match(/unknown/), 'the unknown state is gone entirely');
 });
 
 test('STATUS-2 a frozen parent with a running child (descendantRunning) reads running', () => {
@@ -393,24 +393,26 @@ test('STATUS-3 a settled row with no adverse signal keeps the green check', () =
   assert.ok(!glyph.includes('spin') && !glyph.includes('?'), 'and it is neither the spinner nor the unknown mark');
 });
 
-test('STATUS-4 priority: awaiting and error still outrank unknown, unknown outranks done', () => {
+test('STATUS-4 priority: awaiting and error outrank the rest; no signal means done', () => {
   const sandbox = buildRenderSandbox();
   assert.equal(sandbox.taskState({ awaitingQuestion: true, agentAvailable: false }), 'awaiting');
   assert.equal(sandbox.taskState({ lastError: 'x', agentAvailable: false }), 'error');
   assert.equal(sandbox.taskState({ running: true, descendantRunning: true }), 'running');
-  assert.equal(sandbox.taskState({ running: false, agentAvailable: undefined }), 'done', 'missing agentAvailable is not unknown');
+  assert.equal(sandbox.taskState({ running: false, agentAvailable: undefined }), 'done', 'missing agentAvailable is done');
+  assert.equal(sandbox.taskState({ running: false, agentAvailable: false }), 'done', 'false is not a state either (desktop parity)');
   assert.equal(sandbox.taskState({ blank: true }), 'blank');
 });
 
-test('STATUS-5 the workspace pill paints the unknown state end to end', () => {
+test('STATUS-5 a held writer paints done end to end (the unknown pill is retired)', () => {
   const sandbox = buildRenderSandbox({
     workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['held1'] }],
     summaries: [{ sessionId: 'held1', updatedAt: Date.now(), running: false, agentAvailable: false }],
   });
   sandbox.renderWorkspaces();
 
-  assert.ok(sandbox.markup.includes('ws-last is-unknown'), 'the pill class carries the new state');
-  assert.ok(sandbox.markup.includes('task-row is-unknown'), 'and the row class does too');
+  assert.ok(sandbox.markup.includes('ws-last is-done'), 'the pill class carries done');
+  assert.ok(sandbox.markup.includes('task-row is-done'), 'and the row class does too');
+  assert.ok(!sandbox.markup.includes('is-unknown'), 'no unknown anywhere');
 });
 
 // ------------------------------------------------- BUG-2 agentPreset reads the projection, never the summary

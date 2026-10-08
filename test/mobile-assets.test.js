@@ -642,7 +642,16 @@ test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
 // stepTitleFor (top-3 join, replaces the self-invented stepCount block which
 // was deleted, netting most of the label cost back), and the unknown state
 // glyph + .ws-last.is-unknown CSS. Headroom left: ~4.0 KB zh / ~4.1 KB en.
-const ASSET_BUDGET_BYTES = 248_000
+//
+// Receipt (2026-10-09 fix 0.4.2, goal verbs batch): budget raised 248_000 ->
+// 252_000 — the shell grew by ~2.1 KB against the 0.4.1 tree (zh 247945 ->
+// 250050, en 247865 -> 249970): the goal-bar verb row + inline edit UI
+// (renderGoalBar pause/resume/edit/clear markup, GOAL_* SVGs), the goal verb
+// vocabulary (14 strings), goalAction/startGoalEdit/cancelGoalEdit/
+// saveGoalEdit, the goalBusy/goalEditing/goalEditText state triple in both the
+// let-decl and the reset, the .goal-actions/.goal-bar.is-editing CSS, and the
+// modeHint per-view sync. Headroom left: ~1.9 KB zh / ~2.0 KB en.
+const ASSET_BUDGET_BYTES = 252_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

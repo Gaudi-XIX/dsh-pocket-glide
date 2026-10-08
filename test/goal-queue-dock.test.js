@@ -96,7 +96,7 @@ test('queuedRowsOf marks which rows carry the Host MessageId', () => {
 // -------------------------------------------------------------- dock render
 
 function buildDockSandbox() {
-  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120 });
+  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120, classList: { toggle() {}, add() {}, remove() {} } });
   const containers = { goalBar: fake(), queueDock: fake() };
   const classState = {};
   const cssVars = {};
@@ -112,9 +112,10 @@ function buildDockSandbox() {
     `
     const L={
       goalPhaseActive:'进行中',goalPhasePaused:'已暂停',goalPhaseBlocked:'受阻',goalPhaseComplete:'已完成',
-      goalRoundUnit:' 轮',queueCount:'排队消息 {n} 条',queueImage:'图片',queueFile:'文件',queueUnrenderable:'[图片/文件]'
+      goalRoundUnit:' 轮',goalPause:'暂停',goalResume:'恢复',goalEdit:'编辑',goalClear:'清除',goalSave:'保存',goalCancel:'取消',
+      queueCount:'排队消息 {n} 条',queueImage:'图片',queueFile:'文件',queueUnrenderable:'[图片/文件]'
     }
-    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText=''
+    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',goalBusy=false,goalEditing=false,goalEditText=''
     const $=(id)=>containers[id]
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'goalOf')}
@@ -203,7 +204,7 @@ test('the queue dock drives the queue-open class and --queue-h like the todo doc
 // --------------------------------------------------- queue row management
 
 function buildQueueActionSandbox(rpc) {
-  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120, querySelector: () => null });
+  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120, querySelector: () => null, classList: { toggle() {}, add() {}, remove() {} } });
   const containers = { goalBar: fake(), queueDock: fake() };
   const toasts = [];
   const classState = {};
@@ -388,7 +389,7 @@ test('the docks are wired where the page already consumes projections', () => {
     'applyHistory feeds the docks alongside todos');
   assert.match(js, /updateTodos\(projections\);updateGoal\(projections\);updateQueue\(projections\)/,
     'paintInstantHistory feeds the docks too');
-  assert.match(js, /renderTodoDock\(\);currentGoal=null;queuedTurn=\[\];queueBusy=false;queueEditing=null;queueEditText='';stopPending=false;renderGoalBar\(\);renderQueueDock\(\)/,
+  assert.match(js, /renderTodoDock\(\);currentGoal=null;queuedTurn=\[\];queueBusy=false;queueEditing=null;queueEditText='';goalBusy=false;goalEditing=false;goalEditText='';stopPending=false;renderGoalBar\(\);renderQueueDock\(\)/,
     'a session switch clears the docks with the todos');
 
   // Live updates: the stream events that fold into these projections schedule
@@ -453,4 +454,37 @@ test('the updateQueue RPC is allowlisted with the request wrap the host declares
   assert.deepEqual(entry.args(payload), { request: payload },
     'the whole call rides a single json param named request');
   assert.ok(RPC_ALLOWLIST.has('session.updateQueue'), 'paired phones may call it');
+});
+
+test('the goals RPCs ride flat agentId+ref args, probed against the host catalog', () => {
+  // Live-probed 2026-10-09 (dsh-goal descriptors + desktop refOf): every goals/*
+  // verb takes a plain agentId plus the CAS ref {id,revision}; edit additionally
+  // carries the json request. Stale refs are the host's guard (GOAL_STALE_REVISION).
+  for (const verb of ['pause', 'resume', 'clear']) {
+    const entry = HARNESS_ENDPOINTS['goals.' + verb];
+    assert.equal(entry.endpoint, 'goals/' + verb, verb + ' hits the goals service');
+    const payload = { sessionId: 's1', ref: { id: 'g1', revision: 3 } };
+    assert.deepEqual(entry.args(payload), { agentId: 's1', ref: { id: 'g1', revision: 3 } },
+      verb + ' passes the ref unwrapped');
+    assert.ok(RPC_ALLOWLIST.has('goals.' + verb), 'paired phones may call ' + verb);
+  }
+  const edit = HARNESS_ENDPOINTS['goals.edit'];
+  assert.equal(edit.endpoint, 'goals/edit');
+  const editPayload = { sessionId: 's1', ref: { id: 'g1', revision: 3 }, request: { objective: 'new objective' } };
+  assert.deepEqual(edit.args(editPayload), { agentId: 's1', ref: { id: 'g1', revision: 3 }, request: { objective: 'new objective' } },
+    'edit carries the json request beside the ref');
+  assert.ok(RPC_ALLOWLIST.has('goals.edit'), 'paired phones may call edit');
+});
+
+test('the goal bar renders verbs that drive the goals service', () => {
+  assert.match(js, /rpc\('goals\.'\+verb,\{sessionId:owner,ref:\{id:inner\.id,revision:inner\.revision\}\}\)/,
+    'pause/resume/clear go through the goals verbs with the projection ref');
+  assert.match(js, /rpc\('goals\.edit',\{sessionId:activeSession,ref:\{id:inner\.id,revision:inner\.revision\},request:\{objective:text\}\}\)/,
+    'edit sends the new objective in the request param');
+  assert.match(js, /\$\('goalBar'\)\.onclick=/, 'the goal bar has a click handler');
+  assert.match(js, /\$\('goalBar'\)\.oninput=/, 'the goal edit box has an input handler');
+  assert.match(js, /if\(phase==='complete'\)\{host\.classList\.remove\('is-editing'\);host\.hidden=true;host\.innerHTML='';return\}/,
+    'a completed goal hides the whole bar');
+  assert.match(css, /\.goal-actions\{/, 'the verb row is styled');
+  assert.match(document, /<div id="goalBar" class="goal-bar" hidden><\/div>/, 'the bar keeps its server-side slot');
 });
