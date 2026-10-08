@@ -1,7 +1,7 @@
 # Pocket 对「子代理 / Agent Team / ACP 工人」全盲，且把它们在跑时的父会话画成已完成（绿勾）
 
 调研时间：2026-10-08 W4 11:47–12:05（数据基准：现网 `D:\DSH\resources\app.asar` = 官方 desktop 0.2.0-rc.1，
-`~/.dsh/storages/session_projcache/sessions` 263 个投影文件全量扫描，pocket 源码 = HEAD `786ff4a` / 版本 0.3.1）
+`~/.dsh/storages/session_projcache/sessions` 263 个投影文件全量扫描；pocket 源码基准 = `dsh-pocket` HEAD `4e92143`、`package.json` 版本 **0.4.0**）
 取证件与复跑命令见文末「§6 可复跑取证」。结论由直读宿主发布包内官方文档与投影源码得出，非推断。
 
 ## 一句话结论
@@ -107,5 +107,18 @@ Select-String F:\defws\dsh-pocket\lib\bridge.js -Pattern "origin !== 'subagent'|
 - **ACP 工人的 subagent 会话形状同理未实测**：本次派 ACP 工人未落地（本会话工具面没有 `subagent_*` 的 ACP 位，
   `dispatch.mjs` 只写出任务卡 `F:\AgentData\work\20261008-115117-codebuddy-codebuddy-hy4\TASK.md`、`PROGRESS.md` 0 字节、无进程），
   改由内置 subagent 取证。这条派单失败本身是舰队运营问题，与本 bug 无关，但记此免得下游以为「ACP 显示」已验证过。
-- lead 自身 `running` 的宿主算式（`entry.running` 来自 manager `getListSnapshot()`）本次未继续下探到 manager 层；
-  「派活交还控制权 ⇒ lead running=false」这一步是由 pocket 现象 + `taskState` 兜底逻辑反推，与用户实机观察一致，未做单点源码直证。
+- **lead 自身 `running` 的宿主算式已直证**（`@deepseek-ai/dsh-api-session-controller/lib/types/client/sessions/manager.js`）：
+  running 是**逐会话**的 agent 状态，由 `syncFromListSnapshot()` 把宿主列表响应的 `summary.running` 灌进
+  `session.handleRunning(s.running)`，撤回时置 `handleRunning(false)`（状态帧形状 `{kind:'status', running:false, agentAvailable:false}`）。
+  ⇒ 宿主**不会**把后代活动折进父行的 `running`；桌面那句「父行的 ongoing loading 来自其已加载 parent 目录中正在运行的直接 child」
+  是**客户端侧聚合**（`dsh-client-ui-workspace` 自己做的）。所以 pocket 必须在 `lib/pages.js` 侧自己按 `parentId` 归并，等不到宿主替它算。
+- **仍缺一件实测**：pocket 收到的 `session.list` 实况里子行是否总是存在（取决于宿主是否已把 child 补进快照、以及 scope 未加载时的 `?? false`）；
+  需要真机连一次 pocket、在 lead 派 subagent 期间抓一次 `session.list` 响应体才能定。修法设计已按「有子行就聚合、无子行退回现状」写。
+
+## 8. 与 GitHub 发布线的冲突提示（12:1x 补记）
+
+本文件已进入 `dsh-pocket` 仓 HEAD（笔 `288fb36` + 本笔），**内含本机绝对路径**（`F:\defws\…`、`C:\Users\toast\…`、`F:\AgentData\work\…`）、
+内部工人 id（`subagent_cb_hy4`、`codebuddy-hy4` 一类）与 flow 卡名。另一条线正在做「对外推干净新历史」的副本整形，
+其 11:5x 统计的私有路径命中基线是 **pocket 41 处**（清单在 `F:\AgentData\work\20261008-release-pocket\private-path-inventory.txt`）——
+该清单取的是整形时点的 `git ls-files`，**本文件不在其中**；若发布副本后续按新 HEAD 重刷，命中数会从这里往上走。
+远端是**私有**仓（用户 10-08 令），带本机路径本身可接受；此处只记账，避免下游把「41 处」当现势值消费。
