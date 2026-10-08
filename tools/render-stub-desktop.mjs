@@ -268,7 +268,7 @@ function pageOptions(locale) {
 }
 
 const STATE_NOTES = [
-  ['devices', '有设备', '点「连接设备管理」应出现 3 张卡。每台「切权限」键的文案必须与它当前通道相反（lan 那台＝「开启公网」，lan+wan 那台＝「切为仅本地」），点一次就真的改状态 → B-1 目验点；已过期那台的「凭证到期」行应是红字并带（已过期）。'],
+  ['devices', '有设备', '点「设备与通知」应出现 3 张卡。每台「切权限」键的文案必须与它当前通道相反（lan 那台＝「开启公网」，lan+wan 那台＝「切为仅本地」），点一次就真的改状态 → B-1 目验点；已过期那台的「凭证到期」行应是红字并带（已过期）。'],
   ['empty', '零设备', '点第三键 → 「还没有已配对的设备。」必须看得见（B-2 目验点：显隐规则挂在 .device-list.is-empty 上，与 JS 加类的元素同一片）。看不见就是 B-2 回归。'],
   ['fail', '取数失败(非 JSON)', '点第三键 → 「设备列表读取失败。」+「重试」应可见可点；桩是首点失败、再点成功（data-action="device-retry" 走事件委托，CSP 下可用）。'],
   ['failjson', '取数失败(JSON)', '同一次 500 但带 JSON body：loadDevicePanel 不读 r.ok，这条路径显示的是零设备文案而不是错误文案 —— 目验时请分清这两态。'],
@@ -294,7 +294,7 @@ function indexHtml() {
     '<h1>桌面配对页渲染目验桩 · render-stub-desktop.mjs</h1>' +
     '<p>纯渲染 + 桩接口，不含真桥，不写 <code>mobile-sessions.json</code>。端口 ' + PORT +
     '（<code>render-stub.mjs</code> 用 4399，互不冲突）。切换状态用 <code>?s=</code>，切语言用 <code>&locale=</code>。</p>' +
-    '<p><strong>取数入口是顶部第三键「连接设备管理」</strong>；<code>connected</code> 态则应当开屏自己取数' +
+    '<p><strong>取数入口是顶部第三键「设备与通知」</strong>；<code>connected</code> 态则应当开屏自己取数' +
     '（B-3 的判定点：开屏面板不是空的）。</p>' +
     '<p>当前渲染用的 <code>lib/pages.js</code> sha256=<code>' + pagesSha.slice(0, 16) + '</code>' +
     (FROZEN ? '（<code>--frozen</code>：不会随磁盘变化重导）' : '（磁盘一变，下一次请求文档就重导）') + '</p>' +

@@ -146,7 +146,7 @@ test('the mode bar carries the third key: a mode-devices handle that stays enabl
     qrSvg: '',
   })
   assert.match(connected, /data-action="mode-devices"/, 'the third mode key ships with the page')
-  assert.match(connected, /连接设备管理/, 'the key copy is the agreed user wording')
+  assert.match(connected, /设备与通知/, 'the key copy is the agreed user wording')
   const btnDevices = connected.match(/<button id="btnDevices"[^>]*>/)
   assert.ok(btnDevices, 'the device key renders as its own button')
   assert.ok(!btnDevices[0].includes('disabled'), 'the device key is not gated on the connection state')

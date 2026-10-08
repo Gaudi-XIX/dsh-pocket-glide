@@ -526,7 +526,11 @@ test('the registry persists across a real restart: PIN-only restore and silent c
     try {
       assert.equal(second.bridge.devices.size, 1, 'the profile came back from disk')
       assert.equal(second.bridge.devices.values().next().value.publicConsentedAt > 0, true, 'with the consent answer')
-      assert.equal(second.bridge.sessions.size, 1, 'the session map itself is intact too')
+      // Restart-parked, not live: the pairing record waits in the resumable map
+      // and revives silently only when the phone presents its cookie again.
+      assert.equal(second.bridge.sessions.size, 0, 'restored sessions stay parked — the live map fills only when the phone calls in')
+      assert.equal(second.bridge.resumableSessions.size, 1, 'the pairing record parks in the resumable map')
+      assert.equal(second.bridge.resumableSessions.values().next().value.parkedByRestart, true, 'marked restart-parked so the cookie may silently revive it')
       // New tunnel origin: the old cookie never arrives. Only the PIN.
       second.bridge.sessions.clear()
       second.bridge.pendingPairings.clear()
