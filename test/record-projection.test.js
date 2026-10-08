@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { compactSessionRecords, compactSessionFrame, stripRecordsThrough, compactSessionRows } from '../lib/bridge.js'
-import { SESSION_ROW_ARRAY_MAX, SESSION_ROW_TEXT_LIMIT } from '../lib/projections.js'
+import { applyDescendantRunning, SESSION_ROW_ARRAY_MAX, SESSION_ROW_TEXT_LIMIT } from '../lib/projections.js'
 
 const assistantMessage = {
   type: 'assistant/message',
@@ -294,4 +294,55 @@ test('AC-D8: the projection never strips the host timestamp', () => {
   assert.equal(compact.records[0].data.time, 456, 'and so does a data-level key the drop list must never name')
   assert.equal(compact.records[0].data.turn, 1, 'the projection still carries the turn the renderer reads')
   assert.deepEqual(frame.records[0].data, { time: 456, turn: 1 }, 'the frame it was handed is never mutated')
+})
+
+// ---- descendantRunning aggregation (false-green-check report, 2026-10-08) ----
+// The host reports `running` per session; a lead's row stays running:false once
+// it hands control to a child. The flag derived here is the single source the
+// pill (taskState) and the phone notification (notify tick sample) both read,
+// so they can never disagree about "still working".
+
+test('a running subagent marks only its direct parent as descendantRunning', () => {
+  const lead = { sessionId: 'lead-1', running: false, updatedAt: 2 }
+  const childA = { sessionId: 'child-a', parentSessionId: 'lead-1', origin: 'subagent', running: true, updatedAt: 3 }
+  const childB = { sessionId: 'child-b', parentSessionId: 'lead-1', origin: 'subagent', running: false, updatedAt: 4 }
+  const other = { sessionId: 'other', running: false, updatedAt: 5 }
+  const rows = compactSessionRows(applyDescendantRunning([lead, childA, childB, other]))
+
+  assert.equal(rows[0].descendantRunning, true, 'the parent with a running direct child is marked')
+  assert.equal(rows[1].descendantRunning, undefined, 'the running child itself carries no flag')
+  assert.equal(rows[2].descendantRunning, undefined, 'an idle child carries no flag')
+  assert.equal(rows[3].descendantRunning, undefined, 'unrelated rows are untouched')
+  // The flag is a plain boolean, so the small-row whitelist carries it to the
+  // phone without any whitelist change.
+  assert.equal(typeof rows[0].descendantRunning, 'boolean', 'the flag survives compaction as a small value')
+})
+
+test('grandchildren aggregate only through their own parent, one level deep', () => {
+  const grand = { sessionId: 'grand', parentSessionId: 'child', origin: 'subagent', running: true, updatedAt: 1 }
+  const child = { sessionId: 'child', parentSessionId: 'lead-1', origin: 'subagent', running: false, updatedAt: 2 }
+  const lead = { sessionId: 'lead-1', running: false, updatedAt: 3 }
+  const rows = compactSessionRows(applyDescendantRunning([grand, child, lead]))
+
+  assert.equal(rows[1].descendantRunning, true, 'the direct parent of the running row is marked')
+  assert.equal(rows[2].descendantRunning, undefined, 'the grandparent is not (desktop sidebar shares only direct children)')
+})
+
+test('applyDescendantRunning never mutates the rows it marks', () => {
+  const lead = { sessionId: 'lead-1', running: false, updatedAt: 2 }
+  const child = { sessionId: 'child', parentSessionId: 'lead-1', origin: 'subagent', running: true, updatedAt: 3 }
+  const source = [lead, child]
+
+  applyDescendantRunning(source)
+
+  assert.equal('descendantRunning' in lead, false, 'the cached row object is untouched')
+  assert.deepEqual(source, [lead, child], 'the input list is returned unchanged in place')
+})
+
+test('a list with no running subagent is returned as-is', () => {
+  const rows = [{ sessionId: 'a', running: false }, { sessionId: 'b', parentSessionId: 'a', origin: 'subagent', running: false }]
+  const input = [...rows]
+
+  assert.equal(applyDescendantRunning(input), input, 'no marks, same array identity')
+  assert.equal(applyDescendantRunning('not-a-list'), 'not-a-list', 'non-array input passes through')
 })
