@@ -65,6 +65,20 @@ test('mobile page folds one whole turn into a single turn-process container', ()
   assert.ok(html.includes("transcriptView==='verbose'"), 'fold opens only in verbose view')
 })
 
+test('fold headers drive the flip by hand, not through the native webview toggle', () => {
+  const html = renderMobilePage({ locale: 'zh' })
+  // Older WebKit webviews refuse to toggle a <details> whose <summary> is
+  // display:flex — the phone symptom "点开没反应" (live report 2026-10-09). The
+  // desktop client drives its process-group header with an onClick for the same
+  // reason, so the page installs a delegated tap driver in bindOpenState.
+  assert.ok(html.includes("box.dataset.summaryTapBound='1'"), 'the summary tap driver is installed once per #messages')
+  assert.ok(html.includes("event.preventDefault();details.open=!details.open"), 'a summary tap preventDefaults the native action and flips .open by hand')
+  assert.ok(html.includes("rememberOpenState(details.dataset.openKey,details.open)"), 'the manual flip is recorded, so it survives the next repaint')
+  // The driver must only own summary taps inside #messages: sheets and the
+  // pairing funnel keep their own native <details> semantics.
+  assert.ok(html.includes("root.closest('#messages')"), 'the driver is scoped to the transcript, not the whole document')
+})
+
 test('mobile reconnect page is importable and returns non-empty markup', () => {
   const html = renderMobileReconnectPage('zh', 'lan')
   assert.ok(html.length > 100)

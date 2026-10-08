@@ -4,6 +4,21 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.4.3 — 2026-10-09
+
+### 修复（用户可见）
+
+- **「已调用工具」折叠点开没反应**（手机 webview）：页面所有折叠头是 `display:flex` 的
+  `<summary>`，旧 WebKit webview 的原生 `<details>` 切换在此失效（桌面 Chrome 不受影响，
+  正是"手机上点不开"的形态）。现按桌面客户端同款思路改为 JS 驱动翻转（tap → 手动
+  `.open` 切换并记入重绘存续表），健康浏览器由 `preventDefault` 抑制原生翻转避免双翻。
+- **排队消息「取消」符号不齐**：remove 由文本 `×` 改为与立即发送/编辑同规格的 13×13
+  stroke SVG（红色 `is-danger` 保留为破坏性标记）。
+- **退出重进后返回键/边缘手势失效**：自动跳回会话的 resume 跳转原以 `replaceState`
+  改写当前条目——列表态下当前条目正是 init 铺的 `{view:'sessions'}` 应用内锚，被改写后
+  返回键与边缘手势都会退出应用，刷新才恢复。现改为 push（栈下陈旧 chat 条目已有折叠
+  守卫，不会复活"返回键重开当前会话"旧 bug）。
+
 ## 0.4.2 — 2026-10-09
 
 ### 新增（用户可见）

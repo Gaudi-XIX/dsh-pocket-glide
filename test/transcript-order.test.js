@@ -327,7 +327,7 @@ test('one back action always leaves the chat view', () => {
     'a stale duplicate chat entry collapses to the session list instead of reopening the same chat',
   )
   assert.ok(js.includes("history.state?.view==='chat'&&history.length>1"), 'a single-entry stack does not press a dead back button')
-  assert.ok(js.includes('await openSession(target.sessionId,titleFor(target),false,false)'), 'the resume jump does not push history')
+  assert.ok(js.includes('await openSession(target.sessionId,titleFor(target),false,true)'), 'the resume jump pushes its chat entry: the current entry while the list shows IS the synthetic sessions anchor, and replacing it left back/swipe exiting the app (live report 2026-10-09)')
   assert.ok(
     js.includes('await openSession(nextFocus.sessionId,titleFor(nextFocus),false,false)'),
     'the boot reconcile jump does not push history',

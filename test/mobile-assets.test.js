@@ -650,8 +650,9 @@ test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
 // vocabulary (14 strings), goalAction/startGoalEdit/cancelGoalEdit/
 // saveGoalEdit, the goalBusy/goalEditing/goalEditText state triple in both the
 // let-decl and the reset, the .goal-actions/.goal-bar.is-editing CSS, and the
-// modeHint per-view sync. Headroom left: ~1.9 KB zh / ~2.0 KB en.
-const ASSET_BUDGET_BYTES = 252_000
+// modeHint per-view sync. 0.4.3 adds ~1.1 KB zh (fold tap-driver in bindOpenState,
+// REMOVE_SVG, resume-push comment): budget 252_000 → 253_000. Headroom left: ~0.7 KB zh / ~0.8 KB en.
+const ASSET_BUDGET_BYTES = 253_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

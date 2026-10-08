@@ -295,6 +295,16 @@ test('recall sends remove and refreshes the registry with the answer', async () 
   assert.deepEqual(box.toasts, [], 'no error on the happy path');
 });
 
+test('the remove affordance is the same 13px stroke icon family as steer/edit', () => {
+  const { js } = mobilePageAssets({ locale: 'zh' })
+  // The text × glyph sat on a different baseline, size, and weight than the
+  // 13×13 stroke SVGs next to it (live report 2026-10-09); the red is-danger
+  // stays as the destructive marker, only the glyph unifies.
+  assert.ok(js.includes('REMOVE_SVG=\'<svg width="13" height="13"'), 'remove ships as a 13×13 stroke SVG like its siblings')
+  assert.ok(!js.includes('aria-label="\'+esc(L.queueRemove)+\'">×</button>'), 'the bare × glyph is gone from the remove button')
+  assert.ok(js.includes('+esc(L.queueRemove)+\'">\'+REMOVE_SVG+\'</button>'), 'the remove button renders REMOVE_SVG')
+})
+
 test('a refused action toasts the failure and clears the busy flag', async () => {
   const box = buildQueueActionSandbox(async (method) => {
     if (method === 'session.updateQueue') throw new Error('queued item is no longer pending');
