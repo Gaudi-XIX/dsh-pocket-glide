@@ -88,6 +88,8 @@ P-4/P-6/P-7 是正向断言（要求「真的发出去了」），因此 P-1/P-2
 
 ## 4b. 用户补充观测：「进去啥都没点，就刷刷刷全部跳过了」→ 真凶在桌面卡片
 
+> **校准（同轮第三版修正）**：下面这条桌面链条的**代码事实成立**（宿主 `dsh-client-ui-user-questions` 确实把裸 Enter 当提交、且在 legacy 模式下自动聚焦），它是一条真实的宿主缺陷、值得单独上报；**但它不解释本条观测**——操作者当时在**手机**上，既没碰鼠标也没碰键盘。真凶见 **§5d**。本节保留是因为它是排查路上排除了的分支，不是因为它是答案。
+
 这条观测把范围从「Pocket 的鼠标」挪到**宿主桌面 GUI 的键盘**——而且 10-08 11:30 那次空答案提交时手机本就离线，**作答端一直是桌面**。本次实测的盲区正是桌面（只测了 Pocket），现补。
 
 `@deepseek-ai/dsh-client-ui-user-questions/lib/client.js`（宿主发布包原文，非推断）里四件事叠成一条免确认通路：
@@ -113,7 +115,46 @@ P-4/P-6/P-7 是正向断言（要求「真的发出去了」），因此 P-1/P-2
 
 
 
-## 5. 建议（按影响排序）
+## 5d. 根因（第三轮，实测抓出；此前两版归因均作废）
+
+操作者补了两句关键事实才把范围对准：现象发生在**手机 Pocket**上，且**手没碰任何东西**。前两轮拿"自己测过的东西"（Pocket 鼠标、桌面键盘）去套未描述完的现象，都错了。
+
+直接实测（`tmp/20261008-question-timeout-probe/who-deletes.mjs`，给 `pendingQuestions` 的 `delete`/`clear` 装栈回溯）打出真凶：
+
+```
+!!! clear(1 entries) from: WebSocket.handleOpen (dsh-pocket/lib/mux-client.js:197)
+# read -> null
+```
+
+**`mux-client.js` 在事件流每次 `handleOpen`（首连与每次重连）时清空整个 `pendingQuestions`。** 现网频率实测：`pocket.log` 自 09-30 起有 86 条 mux 生命周期记录，`mux downlink lost: Harness mux WebSocket failed.` 之后 **1–2 秒**就 `mux carrier up` —— 一次网络抖动、一次亮屏/切后台就够。
+
+完整链条（三段，缺一不可）：
+
+1. **Pocket 的提问状态是一次性推送态**：唯一来源是 mux 的 `waterfall` 帧（`consumeMuxEnvelope`），错过即无。
+2. **重连清空**：`handleOpen → pendingQuestions.clear()`。此时手机正在显示的那道题从表里消失，`interaction.pending` 转而返回 `null` 或**另一道**（实测：同会话积压多道时，`find` 按 Map 插入顺序返回**最早那道**，新到的会被遮挡）。
+3. **没有重建来源**：宿主的会话投影确实有权威未答集 `userQuestions.active`（`dsh-user-questions` 的持久折叠，注释写明 exposing to every Client），**但 Pocket 从不读它**——`lib/projections.js` 对 question/active/interaction **零命中**。
+
+这三段合起来就是「啥都没点，刷刷刷全部跳过」：每次重连抹掉当前题，下一道冒出来，连着几道就像自动翻页。而 10-06 那条至今未解释的 `This question request is no longer pending` 是同一件事的另一面——重连后去答一道已被抹掉的题。
+
+### 为什么不能只在 Pocket 侧修掉
+
+宿主 gateway 的 `receiveRemoteEventResult`（`dsh-api-gateway/lib/index.js`）：
+
+```js
+const pending = this.pendingRemoteEvents.get(result.eventId);
+if (pending === void 0 || !pending.deliveries.has(client)) return;   // 静默丢弃，不报错、不回执
+```
+
+- `eventId` 是宿主侧、跨代际有效的（宿主仍在 `pendingRemoteEvents` 里等），
+- 但重连后的**新 client 不在该事件的 `deliveries` 集合**里 → 答案被**静默吞掉**；
+- 而投影 `active` 只带 `callId`，**不带 `eventId`** ⇒ 从投影恢复出来的问题在 Pocket 侧无从作答。
+
+所以「重连后从投影重建 pending」这条路在现有能力边界下**走不通**：缺的是宿主侧一项能力——把仍在等待的 remote event 向新 client 重投（或开放一个按 `callId` 作答的旁路）。这是可提给 DSH 官方的具体请求，比上一版"裸 Enter"的表述有用得多。
+
+Pocket 侧仍可做的缓解（都不如根治）：重连清空时**别静默**——把"这道题因连接重建而无法作答"显示出来；以及 `interaction.pending` 改为返回**最新**那道而不是最早那道，消除遮挡。
+
+
+## 6. 建议（§5d 之后重排）
 
 1. **对 Pocket（唯一待裁定的动作，A 之后剩下的就是它）**：既然代码证明「空答案 ⇔ 一次跳过点击」，可改的只有命中区设计——skip 走二次确认，或与提交分开到不同命中区；并把文案从「跳过」改成能表达后果的句子（如「本题不答，按跳过提交」）。**未动手，等用户裁定**：这属于方向分叉（三种改法各有取舍），且本轮用户只令做 A。
 2. **对宿主/preset**：不要把 `tool-ask-user` 开成 `mode: timed`，除非先给 Pocket 补 `attachWait` claim——否则手机端提问必在 timeout 到点后自答（见 §2 最后一条）。这是**架构风险，不是当前影响**：当前影响为 0（现网 legacy），换到 timed 的那天才兑现。
