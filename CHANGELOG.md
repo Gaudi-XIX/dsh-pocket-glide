@@ -34,6 +34,16 @@
 
 ### 修复（用户可见）
 
+- **后台在跑却画绿勾（假完成）**（feat-pocket-subagent-status-visibility，2026-10-08 刀④⑥批）：
+  子代理（含 agent team 成员 / ACP 工人，宿主侧同为 origin:'subagent' 子会话）在跑时，父会话行自身
+  `running:false`，手机列表因此画绿勾（已完成）——实际没做完；完成推送同判据也会误报。本笔把
+  「直接子代理在跑」聚合为父行 `descendantRunning` 派生布尔（桥端单源 `applyDescendantRunning`，
+  列表/开机数据/通知采样三消费点共用），父行转圈不画勾；写手被占（agentAvailable:false）的行改为
+  **灰问号「状态未知」**，绿勾只剩真完成。手机不可见的子代理行自身不再参与完成判定（不再重复推送）。
+  另修同源小 bug：权限预设下拉的当前值改读会话投影（`agentPresetOf`），不再恒回默认档。
+- **转录过程/正文交替编排 + 桌面词表**（同卡刀⑤，2026-10-08）：一轮内改为「过程折叠块→正文→过程折叠块→
+  正文…」按到达序交替呈现（原先过程整块先出、正文堆后）；过程段标题接宿主官方词表（如
+  「已读取文件并修改了文件」），删除自造计数措辞。页壳字节 243995/243936，预算 248000 内不升。
 - **wxpusher 假成功**（fix-pocket-wxpusher-simple-push）：换 simple-push 语义+读业务码 `code===1000`，
   「HTTP 200 但没送到」不再记成功；对面错误消息脱敏截断后透出给「测试」按钮。
 - **隧道 token 出命令行**（fix-pocket-tunnel-token-env）：命名隧道 token 改走 `TUNNEL_TOKEN` 环境变量，
