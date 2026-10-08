@@ -146,6 +146,35 @@ provisioning 与 running 成员用共享 ongoing loading，failed 红点），�
 
 ## 8. 两处取证冲突的处理（Provenance）
 
+## 7.5. 实施落地（2026-10-08 刀④⑤⑥批，v4 追记）
+
+本文件 §5 的修复面已按「交替编排主卡」（flow change `2026-10-08-feat-pocket-subagent-status-visibility`）落地，落点与取证一致：
+
+- **父行聚合（§5-1）**：`lib/projections.js` 新增 `applyDescendantRunning(items)`——`origin==='subagent' && running===true`
+  的行给其 `parentSessionId` 直接父行标 `descendantRunning:true`（**单层**，对齐桌面 sidebar「直接 child 共享 ongoing」；
+  非变异、无标记时原数组直返防缓存污染）。桥端三消费点单源接线：`buildMobileBoot` / `session.list` 处理器 /
+  `pollNotifyRunning`。页面侧 `taskState()` 链改 `awaiting→error→running||descendantRunning→blank→unknown→done`，
+  `taskGlyph` 增灰问号 unknown 形，`.ws-last.is-unknown` 配色随行。
+- **notify 同判据（§5-2）**：采样改 `running: item.running===true||item.descendantRunning===true`；并修掉第二处
+  误报源——子代理行自身也进 judge 循环（手机不可见 + 生命周期已折进父行），循环头部 `origin==='subagent'` 直接跳过。
+- **agentPreset（§6）**：`agentPresetOf(projections)` 三态（undefined=无投影数据 / null=显式无预设 / string=id），
+  `openSession` / `refreshActiveSessionSummary` / `openSessionSettings` 三处弃 `summary.agentPreset`；
+  `selectPreset` 改读宿主 `agentPresets/select` 的**裸 string** 返回（registry `select()` `return preset.id` 直通，
+  非 `value.agentPreset`）。
+- **词表（§5 呈现）**：折叠段标题接宿主官方词表（`lib/step-process.generated.js`，`tools/sync-step-process.mjs`
+  生成、三守门），`stepTitleFor` 按 top-3 类别 join（`{first}并{second}` / `，` / `{title}等`），删自造计数；
+  工具卡标题 `L.stepDone[cat]` 无计数。
+- **交替编排**（本 bug 同卡的主诉求，§5 未列因当时定位为「看齐 ZCode」的呈现项）：`visibleMessages` 单趟冲刷——
+  tool/reasoning 入过程组，非空 text/image/file 冲刷组并直发正文，到达序保留；`renderTurnProcess` 键加
+  segment 维度（`:s{segment}`）；`assistant/message` 事件不再误关轮（`turn.closed` 归 `turn/end`）。
+- 测试面：`record-projection.test.js`（聚合四测）、`subagent-session-dom-assertions.test.js`（STATUS-1..5 +
+  PRESET-1..2）、`notify-judge.test.js`（父冻结子跑不误报 + 结算恰一次）、`visible-interleave.test.js`（交替序六测）、
+  `pages-process-render.test.js`（fold-title join 行为测）。全量基线 968 tests / 966 pass / 2 skipped（2026-10-08 19:0x）。
+- 遗留（候选延期，见 flow 卡）：ZCode 式子代理目录面板（§5-3 可选项）、`bodyPreview`/`toolSlice` 取回式大消息、
+  ACP 舰队台账（§5-6）；`detailed` 档在 pocket 与 standard 等价（死档）维持现状。
+
+## 8. 两处取证冲突的处理（Provenance）
+
 | 项 | 第一版（LEAD 直读） | 第二版采信 | 依据 |
 |---|---|---|---|
 | 父指针对段的名字 | 写作 `parentId` | **改为 `parentSessionId`** | 我第一版引的是 `projectList()` 里宿主 **UI store 内部 byId** 形状；RPC 线格式由 `listFields()`（`dsh-api-session-controller/lib/types/list.js`）与 `interface SessionSummary` 声明定为 `parentSessionId`，两路独立取证一致 ⇒ 采信 `parentSessionId`，第一版该处为**读错层** |
