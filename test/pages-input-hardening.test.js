@@ -11,6 +11,7 @@
 // so nothing here needs a new export.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { renderDesktopPairingPage } from '../lib/pages.js'
 
 function pairingOptions(overrides = {}) {
@@ -64,13 +65,42 @@ test('B-9 a non-string tunnel error is escaped instead of throwing', () => {
   assert.ok(!html.includes('<object'), 'and it must not be able to open a tag')
 })
 
-test('B-9 a device row with hostile fields renders', () => {
-  const html = render(
-    { connectedDevices: [{ label: 7, remoteAddress: undefined, expiresAt: Date.now() }] },
-    'a numeric label and a missing address',
-  )
-  assert.ok(html.includes('7 ·'), 'the numeric label still reaches the row')
-  assert.ok(!html.includes('undefined'), 'and a missing address must not print the word undefined')
+test('B-9 a device card with hostile fields renders', () => {
+  // The old connected-devices row is gone (2026-10-08 §10.4 R-2); the hostile
+  // device shapes the bridge can produce now land in the new panel card
+  // renderer deviceCardHtml — pinned here with the same intent as before.
+  const source = readFileSync(new URL('../lib/pages.js', import.meta.url), 'utf8')
+  const extract = (name) => {
+    const start = source.indexOf(`function ${name}(`)
+    assert.notEqual(start, -1, `${name} must exist in the pages.js source`)
+    let depth = 0
+    for (let i = start; i < source.length; i++) {
+      if (source[i] === '{') depth++
+      else if (source[i] === '}') {
+        depth--
+        if (depth === 0) return source.slice(start, i + 1)
+      }
+    }
+    throw new Error(`unbalanced braces after ${name}`)
+  }
+  const names = ['deviceState', 'devicePermBadge', 'devicePermLabel', 'deviceCredLabel', 'deviceFirstSeen', 'deviceLastSeen', 'deviceCardHtml']
+  const body = names.map(extract).join('\n')
+  const T = {
+    devOnline: '在线', devOffline: '离线', devPermLan: '仅本地', devPermWan: '本地+公网',
+    devMakeLan: '仅本地', devMakeWan: '本地+公网', devCredExpired: '{d}（已过期）',
+    devFingerprint: '指纹', devFirstPaired: '首次配对', devCredExpiry: '凭证到期',
+    devLastSeen: '最后上线', devNeverSeen: '从未', devPermBadge: '通道权限：{v}',
+    devExtend: '延长30天', revoke: '吊销',
+  }
+  const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+  const formatTimestamp = (v) => {
+    const d = new Date(v); const p = (n) => String(n).padStart(2, '0')
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes())
+  }
+  const deviceCardHtml = new Function('T', 'escHtml', 'formatTimestamp', `${body}\nreturn deviceCardHtml`)(T, escHtml, formatTimestamp)
+  const card = deviceCardHtml({ label: 7, remoteAddress: undefined, expiresAt: Date.now(), permission: 'lan', online: true })
+  assert.ok(card.includes('>7<'), 'the numeric label still reaches the card name')
+  assert.ok(!card.includes('undefined'), 'a missing address must not print the word undefined')
 })
 
 test('B-9 a missing QR payload does not take the page down', () => {

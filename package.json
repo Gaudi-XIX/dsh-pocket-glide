@@ -13,26 +13,6 @@
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "test:real-webserver": "node test-real-webserver.mjs"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Gaudi-XIX/dsh-pocket.git"
-  },
-  "bugs": {
-    "url": "https://github.com/Gaudi-XIX/dsh-pocket/issues"
-  },
-  "homepage": "https://github.com/Gaudi-XIX/dsh-pocket#readme",
-  "author": "Gaudi-XIX <49468224+Gaudi-XIX@users.noreply.github.com>",
-  "keywords": [
-    "dsh",
-    "dsh-plugin",
-    "deepseek-harness",
-    "pocket",
-    "phone",
-    "mobile",
-    "remote",
-    "bridge",
-    "cloudflare-tunnel"
-  ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
@@ -67,5 +47,25 @@
     "SECURITY.md",
     "CONTRIBUTING.md"
   ],
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gaudi-XIX/dsh-pocket.git"
+  },
+  "author": "Gaudi-XIX <49468224+Gaudi-XIX@users.noreply.github.com>",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "pocket",
+    "phone",
+    "mobile",
+    "remote",
+    "bridge",
+    "cloudflare-tunnel"
+  ],
+  "homepage": "https://github.com/Gaudi-XIX/dsh-pocket#readme",
+  "bugs": {
+    "url": "https://github.com/Gaudi-XIX/dsh-pocket/issues"
+  }
 }

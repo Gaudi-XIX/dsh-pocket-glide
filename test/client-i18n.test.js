@@ -197,13 +197,11 @@ function openModal(r) {
   return {
     r,
     panel,
-    // 改版(device-registry 卡):面板 = 页签条 + 本体 + 关闭钮;配对 iframe 与
-    // 设备列表都挂在本体下,按 class 寻址,不按子序。
-    tabs: panel.querySelector('.dsh-pocket-tabs'),
+    // The modal is overlay > panel > (body + close); the body holds the status
+    // line and the paired iframe. Locate children by class, never by order.
     close: panel.querySelector('.dsh-pocket-close'),
     frame: panel.querySelector('iframe'),
     status: panel.querySelector('.dsh-pocket-status'),
-    devices: panel.querySelector('.dsh-pocket-devices'),
   }
 }
 
@@ -227,11 +225,6 @@ const I18N = TABLE_MATCH
 const KEYS = [
   // 模态外壳(WP-CLIENT 原七键)
   'label', 'close', 'opening', 'frameTitle', 'openFailed', 'reactUnavailable', 'slotsUnavailable',
-  // 已配对设备页签(device-registry 卡,client 半区管理页)
-  'tabConnect', 'tabDevices', 'devicesLoading', 'devicesEmpty', 'devicesFailed', 'retry',
-  'deviceOnline', 'deviceOffline', 'deviceFingerprint', 'firstPaired', 'credExpiry', 'lastSeen', 'neverSeen',
-  'permLan', 'permLanWan', 'permBadge', 'permMakeLan', 'permMakeWan', 'extend', 'credExpiredFmt',
-  'revoke', 'revokeArmed', 'revokeConfirm', 'extendDone', 'permDone', 'revokeDone', 'actionFailed',
 ]
 
 /* ------------------------------------------------------------------ *
