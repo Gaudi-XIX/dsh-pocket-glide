@@ -132,6 +132,7 @@ const renderSandbox = () => {
     function renderMessageTail(){return ''}
     function clusterToolBlocks(){return []}
     function toolActivityCategory(){return 'tools'}
+    function stepTitleFor(){return ''}
     function renderToolCard(){return ''}
     ${body}
     return { renderMessage, renderTurnProcess }

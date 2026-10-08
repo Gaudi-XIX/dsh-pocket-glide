@@ -18,9 +18,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mobilePageAssets } from '../lib/pages.js'
+import { STEP_PROCESS_LABELS } from '../lib/step-process.generated.js'
 import { toolActivityCategory } from '../lib/constants.js'
 
 const assets = { zh: mobilePageAssets({ locale: 'zh' }), en: mobilePageAssets({ locale: 'en' }) }
+
+// The page embeds the generated host table as STEP (message.stepProcess.*);
+// the sandbox needs the same data the rendered asset carries.
+function STEP_TABLE(locale) {
+  return locale === 'en' ? STEP_PROCESS_LABELS.en : STEP_PROCESS_LABELS.zh
+}
 
 function labels(locale) {
   const line = assets[locale].js.match(/^const L=(\{.*\});/m)
@@ -49,13 +56,14 @@ function extractFunction(source, name) {
 function renderSandbox(locale) {
   const js = assets[locale].js
   const names = [
-    'toolActivityCategory', 'diffLineSplit', 'toolSummaryLine', 'clusterToolBlocks',
+    'toolActivityCategory', 'diffLineSplit', 'toolSummaryLine', 'clusterToolBlocks', 'stepTitleFor',
     'renderBlock', 'toolClusterState', 'toolArgsOf', 'diffRowsHtml', 'renderToolDiff',
     'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'pretty',
   ]
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
     'L',
+    'STEP',
     'activeSession',
     `${body};
      const esc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
@@ -67,7 +75,7 @@ function renderSandbox(locale) {
      const transcriptView='verbose'
      const pendingQuestion=null
      return { renderBlock, renderToolCard, renderTurnProcess, clusterToolBlocks, toolActivityCategory, diffLineSplit, toolSummaryLine }`,
-  )(labels(locale), 's1')
+  )(labels(locale), STEP_TABLE(locale), 's1')
 }
 
 const tool = (name, status, args, result) => ({ kind: 'tool', id: name + ':' + Math.random(), name, status, args, result: result || '' })
@@ -154,13 +162,17 @@ const CATEGORIES = ['read', 'readImage', 'write', 'search', 'edit', 'commands', 
 test('verb tables cover every category in both locales and both states', () => {
   for (const locale of ['zh', 'en']) {
     const L = labels(locale)
-    for (const table of ['stepVerbs', 'stepDone', 'stepCount']) {
+    // stepCount is retired: the desktop titles carry no counts (processTitle),
+    // and the card title follows the plain done-phrase. The generated STEP
+    // table (message.stepProcess.*) is the single narration source instead.
+    for (const table of ['stepVerbs', 'stepDone']) {
       assert.ok(L[table], `${locale}: ${table} must exist`)
       assert.deepEqual(Object.keys(L[table]).sort(), [...CATEGORIES].sort(), `${locale}: ${table} covers exactly the narration categories`)
       for (const key of CATEGORIES) {
         assert.ok(String(L[table][key]).length > 0, `${locale}: ${table}.${key} must be non-empty`)
       }
     }
+    assert.equal(L.stepCount, undefined, 'the self-invented count table is retired')
     assert.ok(L.toolRaw, `${locale}: the raw-details summary must exist`)
     assert.ok(L.diffMore.includes('{n}'), `${locale}: the elision row must carry the {n} slot`)
   }
@@ -350,14 +362,42 @@ function turnOf(locale, blocks) {
   return renderSandbox(locale).renderTurnProcess({ turnKey: '7', streaming: false, blocks })
 }
 
-test('three reads collapse into one counted card with a row per file', () => {
+// Desktop processTitle port: the fold's summary title joins the top-3
+// categories' done-phrases without counts, exactly like dsh-client-ui-chat.
+test('the fold title is the count-free top-3 join, desktop phrasing', () => {
+  const { renderTurnProcess } = renderSandbox('zh')
+  const one = renderTurnProcess({ turnKey: 'a', streaming: false, blocks: [tool('read', 'done', { file_path: '/w/a' })] })
+  assert.ok(one.includes('已读取文件'), 'one category speaks its done-phrase only')
+  const two = renderTurnProcess({ turnKey: 'b', streaming: false, blocks: [
+    tool('read', 'done', { file_path: '/w/a' }),
+    tool('edit', 'done', { file_path: '/w/a', old_string: 'x', new_string: 'y' }),
+  ] })
+  assert.ok(two.includes('已读取文件并修改了文件'), 'two categories join with joinTwo and strip the shared 已 prefix')
+  const three = renderTurnProcess({ turnKey: 'c', streaming: false, blocks: [
+    tool('read', 'done', { file_path: '/w/a' }),
+    tool('edit', 'done', { file_path: '/w/a', old_string: 'x', new_string: 'y' }),
+    tool('bash', 'done', { command: 'npm test' }),
+  ] })
+  assert.ok(three.includes('已读取文件，修改了文件，执行了命令'), 'three categories join with the zh comma')
+  const four = renderTurnProcess({ turnKey: 'd', streaming: false, blocks: [
+    tool('read', 'done', { file_path: '/w/a' }),
+    tool('edit', 'done', { file_path: '/w/a', old_string: 'x', new_string: 'y' }),
+    tool('bash', 'done', { command: 'npm test' }),
+    tool('read_image', 'done', { file_path: '/w/i.png' }),
+  ] })
+  assert.ok(four.includes('等</span>'), 'a fourth category wraps the title in the more-template')
+})
+
+test('three reads collapse into one card with a row per file', () => {
   const html = turnOf('zh', [
     tool('read', 'done', { file_path: '/w/src/a.ts' }),
     tool('read', 'done', { file_path: '/w/src/b.ts' }),
     tool('read', 'done', { file_path: '/w/src/c.ts' }),
   ])
   assert.equal(html.split('class="tool change-cluster"').length - 1, 1, 'one card for the whole run')
-  assert.ok(html.includes('已读取 3 个文件'), 'the count title speaks the card examples from the card')
+  // Desktop wording has no counts on the card title (processTitle uses plain
+  // done-phrases); the per-file rows below the fold are the count.
+  assert.ok(html.includes('已读取文件'), 'the title is the Host done-phrase, count-free')
   assert.equal(html.split('cluster-row').length - 1 >= 3, true, 'three rows')
   for (const name of ['a.ts', 'b.ts', 'c.ts']) assert.ok(html.includes(name), `${name} gets its row`)
 })
@@ -372,13 +412,13 @@ test('a mixed turn cuts into per-category cards with Host count phrasing', () =>
     tool('edit', 'done', { file_path: '/w/a.ts', old_string: 'x', new_string: 'y' }),
   ])
   assert.equal(html.split('class="tool change-cluster"').length - 1, 3, 'reads, commands and the edit each get a card')
-  assert.ok(html.includes('执行了 3 条命令'), 'the commands card counts in the Host tone')
+  assert.ok(html.includes('执行了命令'), 'the commands card speaks the count-free Host done-phrase')
   assert.ok(html.includes('修改了文件'), 'a single edit keeps the plain past tense')
 })
 
 test('the en page counts in english', () => {
   const html = turnOf('en', [tool('read', 'done', { file_path: '/w/a.ts' }), tool('read', 'done', { file_path: '/w/b.ts' })])
-  assert.ok(html.includes('Read 2 files'))
+  assert.ok(html.includes('Read files'), 'the en title is the count-free Host done-phrase')
 })
 
 test('merged edit clusters fold each row into its own diff', () => {
@@ -386,7 +426,7 @@ test('merged edit clusters fold each row into its own diff', () => {
     tool('edit', 'done', { file_path: '/w/a.ts', old_string: 'a1', new_string: 'a2' }),
     tool('edit', 'done', { file_path: '/w/b.ts', old_string: 'b1', new_string: 'b2' }),
   ])
-  assert.ok(html.includes('修改了 2 个文件'), 'the count title')
+  assert.ok(html.includes('修改了文件'), 'the count-free Host done-phrase title')
   assert.equal(html.split('details class="cluster-row"').length - 1, 2, 'each edit row is its own expander')
   assert.ok(html.includes('diff-line-del'), 'and carries its diff')
 })
