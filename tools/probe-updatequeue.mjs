@@ -1,7 +1,7 @@
 // E-stage live probe: session.updateQueue edit + remove against the local bridge.
 // Canonical version in dsh-pocket/tools/ (fixed from tmp/20261006-pocket-verify/).
 // Title convention: the bridge has no session delete channel, so every probe run leaves one
-// undeletable session in the defws workspace. PROBE_TAG is prefixed to the FIRST prompt text so
+// undeletable session in the local DSH workspace. PROBE_TAG is prefixed to the FIRST prompt text so
 // the host-derived session title carries the marker — disclose the leftover before probing, then
 // clean up manually from the DSH UI by filtering titles on 'pocket-probe'. Live-verified
 // 2026-10-06: host title derivation keeps the marker word but STRIPS the '[' ']' from PROBE_TAG

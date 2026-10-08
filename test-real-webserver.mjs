@@ -1,5 +1,5 @@
 /**
- * Integration probe: load @defws/dsh-pocket onto the REAL dsh-host-webserver that
+ * Integration probe: load dsh-pocket onto the REAL dsh-host-webserver that
  * ships inside the official DSH payload.
  *
  * What the unit suite already covers: everything the plugin does on its own —

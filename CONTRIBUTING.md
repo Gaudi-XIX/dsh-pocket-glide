@@ -74,8 +74,8 @@ Two literal traps that have burned time here:
 ## Before opening a pull request
 
 - `npm test` green on your machine.
-- Any behaviour change documented in `README.md` and `README.zh-CN.md`, and recorded in
-  `CHANGELOG.md` under the version you are targeting.
+- Any behaviour change documented in `README.md` (Chinese, the master) and `README.en.md`
+  (English mirror), and recorded in `CHANGELOG.md` under the version you are targeting.
 - No machine-specific absolute paths, account names, hostnames, addresses or credentials in code,
   comments, docs or fixtures — including your own. Use `<DSH profile dir>`, `<this checkout>` or an
   OS-neutral example.

@@ -47,8 +47,9 @@ test('① files 收编了 README 承诺的每一项，且每一项都在盘上',
     'LICENSE',
     'cordis.patch.yml',
     'README.md',
-    'README.zh-CN.md',
+    'README.en.md',
     'CHANGELOG.md',
+    'CHANGELOG.en.md',
   ]) {
     assert(pkg.files.includes(promised), `package.json files 必须含 '${promised}'（README 正在承诺它）`)
     assert(existsSync(join(root, promised)), `files 里的 '${promised}' 必须真在仓里，不能只是声明`)
@@ -57,14 +58,14 @@ test('① files 收编了 README 承诺的每一项，且每一项都在盘上',
   // 清单与那句承诺只能有一个方向漂——要么清单收回去、要么 README 改掉那句话。
   assert.equal(pkg.files.includes('test'), false, '发布件不带 test/；要收回这条就先改 README 那句话')
   assert.match(
-    read('README.md'),
+    read('README.en.md'),
     /deliberately \*\*not\*\* in the published file list/i,
-    'README 必须继续解释 test/ 为什么不在发布件里；只改清单不改文档=文档撒谎',
+    '英文 README 必须继续解释 test/ 为什么不在发布件里；只改清单不改文档=文档撒谎',
   )
   assert.match(
-    read('README.zh-CN.md'),
+    read('README.md'),
     /发布文件清单/,
-    '中文 README 同一句话必须在位（两版结构对齐是本仓的对外承诺）',
+    '中文 README（主文档）同一句话必须在位（两版结构对齐是本仓的对外承诺）',
   )
   assert.match(
     pkg.scripts.test,
@@ -95,16 +96,16 @@ test('② 声明 Apache-2.0 ⇒ LICENSE 正文在场、随包发布、不是未�
 // ③（acceptance 第③条）
 // 钉的是哪句语义：R1 的判语——照旧脚本跑一次 = 往**在役** desktop profile 注入
 // 无法解析的 `link:` 依赖 + bundles 行，`pnpm install` 失败、profile 半改态（地雷）。
-// 钉三件：① 退役包名 `@defws/dsh-phone-native` 作为**身份字面**不许回来；② 脚本声明的包名
+// 钉三件：① 退役包身份 `dsh-phone-native`（原带内部 scope 的前一任名字）作为**身份字面**不许回来；② 脚本声明的包名
 // 必须等于本仓 `package.json name`（两处各写各的时候，脚本就变成了「装另一个东西」——
 // 这正是原地雷的成因）；③ 写之前的源树体检（缺件拒写）与「备份先于改动」仍在，
 // 因为地雷的正解不是改名，是「不合格一个字节都不写」。
-// ⚠️ 口径：钉的是**包名** `@defws/dsh-phone-native`，不是 `phone-native` 这个子串——脚本头注
+// ⚠️ 口径：钉的是退役身份 `dsh-phone-native` 这个包名尾部，不是 `phone-native` 任意子串——脚本头注
 // 故意留了一句「它曾指向一个已不存在的退役目录」当事故说明。那是历史，
 // 不是回归；把它读成回归再去删注释，就把事故的唯一痕迹抹掉了。
 test('③ install-to-profile 只可能装现役包，且不合格拒写', () => {
   const src = read(join('tools', 'install-to-profile.mjs'))
-  assert.doesNotMatch(src, /@defws\/dsh-phone-native/, '退役包名不得再作为身份出现在脚本里')
+  assert.doesNotMatch(src, /dsh-phone-native/, '退役包身份不得再作为身份出现在脚本里')
   const declared = /const PACKAGE_NAME = '([^']+)'/.exec(src)?.[1]
   assert.equal(declared, pkg.name, '脚本里的包名必须等于 package.json name（一致性钉，不是现值钉）')
   const link = /const LINK_PATH = '([^']+)'/.exec(src)?.[1]
@@ -123,7 +124,7 @@ test('③ install-to-profile 只可能装现役包，且不合格拒写', () => 
 // 它会让人以为闭环已经验过。删文件 + 同步 README 是同一笔动作，这里钉后半句。
 test('④ 退役的闭环脚本没有尸体，也没有残留承诺', () => {
   assert.equal(existsSync(join(root, 'test-closed-loop.mjs')), false, '根级闭环脚本必须不在')
-  assert.doesNotMatch(read('README.md'), /closed-loop/i, 'README 不得再承诺闭环测试')
+  assert.doesNotMatch(read('README.en.md'), /closed-loop/i, '英文 README 不得再承诺闭环测试')
 })
 
 // ⑤（acceptance 第⑤条）
@@ -133,13 +134,13 @@ test('④ 退役的闭环脚本没有尸体，也没有残留承诺', () => {
 // 并且把「改 `lib/**` 必须重启 DeepSeek Harness」这个关键前提整个藏掉了。
 // 负向 + 正向成对钉：只删错话不写对话，措辞下一轮就会漂回去。
 test('⑤ README 不再卖「独立桥进程」，且正向说法在位', () => {
-  // 2026-10-08 起 README.md 是英文版（对外发布包），中文话术在 README.zh-CN.md。两版各自的
-  // 负/正成对都保留：错话在两种语言里都不许回来，对话在两种语言里都不许被顺手删掉。
-  const en = read('README.md')
+  // 2026-10-08 TASK-2 起 README.md 是中文主文档（对外发布主干），英文全文在 README.en.md。
+  // 两版各自的负/正成对都保留：错话在两种语言里都不许回来，对话在两种语言里都不许被顺手删掉。
+  const en = read('README.en.md')
   assert.doesNotMatch(en, /independent bridge process|standalone bridge process/i, '英文版不得卖「独立/standalone 桥进程」')
   assert.match(en, /not a separate process/i, '与上一句成对：对话必须留在文档里')
   assert.match(en, /restart/i, '「改源码/新增 bundle 须重启宿主」这句前提不许被顺手删掉')
-  const zh = read('README.zh-CN.md')
+  const zh = read('README.md')
   assert.doesNotMatch(zh, /独立桥进程/, '「独立桥进程」是被明确改掉的事实错误，中文版同样不许回潮')
   assert.match(zh, /不是独立进程/, '同上成对')
   assert.match(zh, /重启/, '同上：重启前提在中文版也必须在位')
@@ -152,7 +153,8 @@ test('⑤ README 不再卖「独立桥进程」，且正向说法在位', () => 
 test('⑥ 插件仓内不放归档（死码不得躺在可加载树里）', () => {
   assert.equal(existsSync(join(root, '_archive')), false, '插件仓顶层不应再有 _archive 目录')
   assert.equal(existsSync(join(root, '_archive', 'pre-pocket-20260929')), false, '旧归档目录必须已迁出')
-  assert.doesNotMatch(read('README.md'), /pre-pocket-20260929/, '文档也不得再指回仓内旧归档路径')
+  assert.doesNotMatch(read('README.en.md'), /pre-pocket-20260929/, '文档也不得再指回仓内旧归档路径')
+  assert.doesNotMatch(read('README.md'), /pre-pocket-20260929/, '中文主文档同上')
 })
 
 // ⑥b — 迁入点在工作区归档仓，那是**另一棵树**的时点事实：link 装机件在没有工作区布局的机器
@@ -369,9 +371,9 @@ test('⑫ 治理文件在场、被 README 指着，CI 跑的就是 scripts.test'
   // 因此这里反过来要求：矩阵没有 ubuntu 时，README 必须如实写明只验证 Windows，
   // 否则「配置缩了、文档还在宣称跨平台」这种漂移会被立刻抓到。
   if (!runners.includes('ubuntu-latest')) {
-    assert.match(read('README.md'), /Tested and CI-verified on Windows only/,
-      '矩阵没有 ubuntu 腿 ⇒ README 必须声明只在 Windows 验证')
-    assert(read('README.zh-CN.md').includes('CI 也只跑 Windows'),
+    assert.match(read('README.en.md'), /Tested and CI-verified on Windows only/,
+      '矩阵没有 ubuntu 腿 ⇒ 英文 README 必须声明只在 Windows 验证')
+    assert(read('README.md').includes('CI 也只跑 Windows'),
       '中文版同步声明（两份不许一份承认、一份宣称）')
   } else {
     assert.fail('matrix 里出现了 ubuntu-latest：POSIX 腿要重新加回，先确认那六条断言已按平台改写')
@@ -379,7 +381,7 @@ test('⑫ 治理文件在场、被 README 指着，CI 跑的就是 scripts.test'
   assert.match(ci, /24\.x/, 'CI 用 node 24.x')
   assert.deepEqual(
     [...new Set(pkg.files.filter((f) => f.startsWith('README')))].sort(),
-    ['README.md', 'README.zh-CN.md'],
+    ['README.en.md', 'README.md'],
     '两版 README 都必须在发布清单里（files 只收其一=对外文档缺一半）',
   )
 })

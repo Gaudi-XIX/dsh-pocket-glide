@@ -22,8 +22,8 @@ quietly.
 
 ## Docs kept in step
 
-- [ ] `README.md` — the section describing this behaviour
-- [ ] `README.zh-CN.md` — the same section, in Chinese
+- [ ] `README.md` (Chinese master) — the section describing this behaviour
+- [ ] `README.en.md` — the same section, in English
 - [ ] `CHANGELOG.md` — an entry under the target version (user-facing wording only)
 - [ ] `SECURITY.md` — if the change widens what a paired device, or a stranger, can reach
 

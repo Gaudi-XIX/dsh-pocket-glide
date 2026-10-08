@@ -1,8 +1,8 @@
 /**
- * Register @defws/dsh-pocket in a DSH profile (default: `desktop`).
+ * Register dsh-pocket in a DSH profile (default: `desktop`).
  *
  * What it edits — exactly two places in `<DSH_HOME>/profiles/<profile>/package.json`:
- *   1. `dependencies["@defws/dsh-pocket"] = "link:<path to this checkout>"`
+ *   1. `dependencies["dsh-pocket"] = "link:<path to this checkout>"`
  *   2. `dsh.profile.bundles` — append the same package name if absent
  * It backs the file up first, and it never touches anything else in the profile.
  *
@@ -41,7 +41,7 @@ import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-const PACKAGE_NAME = '@defws/dsh-pocket'
+const PACKAGE_NAME = 'dsh-pocket'
 /** Must match `package.json name`; the link target is this repo's source tree. */
 const LINK_PATH = 'link:/path/to/this/checkout/dsh-pocket'
 /** Files that make a directory a loadable copy of this plugin. */

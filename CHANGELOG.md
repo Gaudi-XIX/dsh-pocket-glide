@@ -1,180 +1,144 @@
 # Changelog
 
-All notable user-facing changes to this project are documented here.
+本仓对所有用户可见的变更在此记录。
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
-project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Entries
-describe what changes for someone installing or using the plugin — internal refactoring,
-audit trails and build notes live in the commit history instead.
+格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本遵循
+[Semantic Versioning](https://semver.org/lang/zh-CN/)。条目描述的是对安装或使用本插件的人
+而言什么变了——内部重构、审计轨迹与构建笔记留在提交历史里。
 
-Because the plugin runs inside the host process, **every release needs a DeepSeek Harness
-restart** before a phone picks it up.
+插件跑在宿主进程内，所以**每个版本发布后都要重启一次 DeepSeek Harness**，手机才会用上
+新代码。
 
 ## 0.4.0 - 2026-10-08
 
-### Added
+### 新增
 
-- **Streaming survives a public tunnel.** Cloudflare's quick tunnel buffers SSE frames,
-  so an AI reply used to freeze and then arrive in lumps. Over a tunnel the phone now
-  falls back to adaptive incremental polling (from 1.5 s, and it pulls immediately when
-  the page returns to the foreground); on the LAN the real-time stream is unchanged.
-- **Tool activity reads as a story.** Tool cards show a localized three-state narrative
-  (editing a file → changed a file) instead of an English tool name plus raw JSON,
-  collapse repeated actions ("read 5 files"), render line-level diffs for edit/write,
-  and keep the technical payload behind a second-level disclosure.
-- **Images and files became usable on a phone.** Lightbox for images (fullscreen, two
-  zoom levels, save), inline preview for text attachments (truncated with "show all" and
-  copy), and files or images the assistant presents now render as cards. A new
-  session-file endpoint serves only paths that already appear in this session's event
-  stream — anything else answers 404, so no arbitrary file read is possible.
-- **Device profiles and recovery.** A paired phone recovers with the PIN alone after the
-  tunnel hostname changes or the host restarts — credential and public-access consent are
-  re-issued from the device record instead of being asked again. The desktop panel gains a
-  paired-devices page (name, paired at, expiry, last seen, per-channel permission) with
-  per-device revoke, extend and permission edits. Existing pairings migrate without
-  re-pairing.
-- **Smart scrolling.** The transcript pins to the bottom while streaming, stops the
-  moment you scroll up, and offers two anchors: "latest" and "back to your last message".
-  Historical messages are virtualized, so long sessions stay responsive.
-- **Unread markers per session**, and an **offline fallback page** instead of a white
-  screen when the connection drops, with one-tap reload.
-- **Approval pushes.** When the assistant is waiting for an answer to a question, a
-  notification goes out immediately (silently skipped if no push channel is configured).
+- **流式回复在公网隧道下存活。** Cloudflare quick tunnel 会缓冲 SSE 帧，AI 回复过去会
+  冻住然后整块到达。走隧道时手机现在降级为自适应增量轮询（1.5 s 起步，页面回到前台立刻
+  拉一次）；局域网上仍是逐 token 实时流。
+- **工具活动读起来像一段故事。** 工具卡渲染成本地化的三态叙述（改文件 → 已改文件），
+  不再是一串英文工具名加原始 JSON；同类操作折叠（「读了 5 个文件」），edit/write 渲染
+  行级 diff，技术载荷收在二级展开里。
+- **手机上的图片与文件可用起来了。** 图片灯箱（全屏、两档缩放、保存），文本附件行内预览
+  （截断 +「显示全部」+ 复制），助手出示的文件或图片渲染成卡片。新增 session-file 端点只
+  服务本会话事件流里出现过的路径，其它一律 404，读不了任意文件。
+- **设备档案与恢复。** 隧道域名变了或宿主重启后，已配对手机只凭 PIN 就能恢复——凭据与
+  公网同意从设备记录里重新签发，不再追问。桌面面板新增已配对设备页（名称、配对时间、
+  到期、最后上线、按通道权限），支持逐台撤销、续期与改权限。既有配对迁移无需重新配对。
+- **智能滚动。** 转录流式时钉在底部，一旦向上滚就停；两个锚点：「最新」与「回到你最后
+  一条消息」。历史消息做了虚拟化，长会话保持流畅。
+- **每会话未读标记**，以及断连时**离线兜底页**而不是白屏，一键重载。
+- **审批推送。** 助手等你回答问题时立即推一条通知（没配推送渠道就静默跳过）。
 
-### Changed
+### 变更
 
-- Completion notifications judge "done" from a quiet period (90 s), a 10 s grace, an
-  immediate push when a queued message is sent, and a 30-minute backstop — fewer false
-  "task finished" reports and fewer missed ones.
-- Disconnect copy is now specific: session expired, desktop disconnected, workspace
-  closed and connection timeout are separate messages, and the reconnect banner is
-  visually distinct from an error banner.
+- 完成通知的「完成」判定：90 秒静默期、10 秒宽限、队列消息发出时立即推、30 分钟兜底——
+  「任务完成」误报变少，漏报也变少。
+- 断连文案分得更细：会话过期、桌面断开、工作区关闭、连接超时各自独立成文；重连横幅与
+  错误横幅视觉上区分开。
 
-### Fixed
+### 修复
 
-- WxPusher no longer records a success when the push was not delivered: the simple-push
-  endpoint is used and the business code in the response body decides the outcome. The
-  peer's own error text is masked and surfaced on the "send test" button.
-- A named tunnel's Cloudflare token is passed through the `TUNNEL_TOKEN` environment
-  variable instead of the command line, so same-machine processes can no longer read it.
-- Opening a session that contains an assistant-attached image no longer crashes the phone
-  page.
+- WxPusher 不再在推送未送达时记成功：改走 simple-push 端点，以响应体里的业务码判定结果。
+  对端自己的错误文案被脱敏后呈现在「发送测试」按钮上。
+- 命名隧道的 Cloudflare token 改经 `TUNNEL_TOKEN` 环境变量传递，不再走命令行，同机进程
+  从进程列表里读不到它。
+- 打开一条带助手附件图片的会话不再让手机页崩溃。
 
 ## 0.3.1 - 2026-10-07
 
-### Added
+### 新增
 
-- File attachments in history are downloadable cards with the real filename and size, not
-  dead chips. Images keep rendering inline; an attachment the host already reclaimed stays
-  a read-only chip and is not requested.
+- 历史里的文件附件是可下载的卡片，带真实文件名与大小，不再是死 chips。图片继续行内
+  渲染；宿主已回收的附件保持只读 chip，不再去请求。
 
-### Fixed
+### 修复
 
-- Saving a file from the phone no longer names everything "attachment": the download
-  carries the filename recorded by the host (with quotes and newlines stripped).
-- A transient notice ("connection lost", "moved to the background, resuming when you
-  return") is no longer permanent. It now has three exits — a stream frame, a 90-second
-  expiry, or the × on its right edge — all behind the same guard, so a successful poll
-  cannot silently clear something that still matters.
-- Notices follow the composer as it grows instead of being pinned at a fixed height and
-  getting covered by it.
-- The notice yields to the question panel rather than floating above it.
-- Returning the phone page to the foreground reopens the session stream when it is down.
+- 从手机保存文件不再一律命名成「attachment」：下载携带宿主记录的文件名（引号与换行已
+  剥离）。
+- 瞬时提示条（「连接丢失」「已切后台，回来时恢复」）不再是永久的。它现在有三个出口——
+  一条流帧、90 秒过期、右侧 ×——都在同一道闸后面，所以一次成功的轮询不会悄悄清掉
+  仍然要紧的东西。
+- 提示条跟着输入框长高而移动，不再钉死在固定高度被遮住。
+- 提示条给提问面板让路，不再浮在它上面。
+- 手机页回到前台时，若会话流已断则重开。
 
 ## 0.3.0 - 2026-10-07
 
-### Added
+### 新增
 
-- PWA manifest is attached, so "add to home screen" gives a real app shell instead of a
-  bookmark.
-- The connection dot is tri-state: connected / host unresponsive / disconnected. A desktop
-  that stopped answering is no longer presented as business-as-usual.
-- Outbound completion notifications over ServerChan, Bark or WxPusher, with channel, key
-  and on/off controls in the desktop panel; settings are written atomically.
-- A consent page gates pairings that arrive over a tunnel: public access needs an explicit
-  acknowledgement before RPC is allowed.
-- Named tunnels: a Cloudflare token plus a fixed hostname in the desktop panel, so the URL
-  stops changing at every start. The dashboard ingress must point at
-  `http://127.0.0.1:<bridge port>`; both the panel and the online log say so.
-- Paired phones recover without re-scanning a QR code, from a device list in the panel.
-- Pairing results persist, so a host restart does not invalidate a 30-day device cookie.
-- The desktop goal bar and the queue dock are mirrored on the phone: queued messages can be
-  edited inline, withdrawn, or sent immediately.
-- The stop button reacts instantly (spinner plus a "stopping" line) instead of waiting for
-  two round trips.
+- 挂上 PWA manifest，「加到主屏幕」得到的是应用壳而不是书签。
+- 连接点变三态：已连接 / 宿主无响应 / 已断开。不再把停止应答的桌面端当一切正常。
+- 通过 ServerChan、Bark 或 WxPusher 外发完成通知，渠道、key 与开关都在桌面面板里；
+  设置原子写。
+- 同意页拦住从隧道进来的配对：公网访问需要显式确认之后才放行 RPC。
+- 命名隧道：桌面面板配 Cloudflare token + 固定域名，URL 不再每次启动都变。Zero Trust
+  面板的 ingress 必须指向 `http://127.0.0.1:<桥端口>`；面板与 online 日志都会说明。
+- 已配对手机不用重新扫码，从面板的设备列表就能恢复。
+- 配对结果持久化，宿主重启不会作废 30 天设备 cookie。
+- 桌面目标栏与队列 dock 在手机上同步：队列消息可以行内编辑、撤回或立即发送。
+- 停止按钮即时响应（spinner +「停止中」一行），不再等两个往返。
 
-### Fixed
+### 修复
 
-- Token-by-token streaming output is restored — an event-shape mismatch was swallowing
-  every streamed piece.
-- Sending an image is no longer rejected outright: the page budgets the transfer, and a
-  413 now reports both the original size and the limit with next steps.
-- A tunnel killed from outside no longer disconnects LAN sessions with it.
-- Empty leftover desktop sessions no longer appear as unnamed rows, and a failed session
-  creation is no longer silent.
-- A wedged "thinking…" indicator is reclaimed by an idle watchdog, while a turn awaiting a
-  user question is not.
-- Render fixes: the send-failure banner is a fixed banner (not pushed out of view by the
-  composer or the queue dock), inline editing of queued messages no longer borrows composer
-  styles, long queued text no longer breaks its row, the "+" panel's sub-page keeps a real
-  back button, and the multi-select empty-answer hint uses multi-select wording.
-- Permission presets fall back to localized names and plain-language descriptions when the
-  host catalog is unavailable, with the dangerous tier marked in red.
-- The reconnect-failure page offers "go back to the computer and re-scan" in tunnel mode.
-- Turning notifications off actually stops outbound pushes.
-- Incremental sync no longer drops records that carry no sequence number.
-- The tunnel hostname ceiling matches what a QR code can hold (150 characters), the same
-  limit is enforced on read, write and the panel's save endpoint, and an over-long value is
-  a visible 400 rather than a "success" that discards it.
+- 逐 token 流式输出恢复——一次事件形状不匹配曾吞掉每一块流内容。
+- 发图片不再被直接拒绝：页面做传输预算，413 现在同时报告原大小与上限及下一步。
+- 隧道被外部杀掉不再连带断开局域网会话。
+- 桌面残留的空会话不再以无名行出现，创建会话失败也不再沉默。
+- 卡住的「思考中…」指示器由空闲看门狗回收，等用户回答的回合不受影响。
+- 渲染修复：发送失败横幅是固定横幅（不被输入框或队列 dock 顶出视野）；队列消息行内
+  编辑不再借用输入框样式；长队列文本不再撑破行；「+」面板的子页保留真实返回键；
+  多选空答提示用多选措辞。
+- 宿主目录不可用时权限预设回落到本地化名称与白话描述，危险档标红。
+- 重连失败页在隧道模式下给出「回电脑重新扫码」的路径。
+- 关掉通知真的停发外推。
+- 增量同步不再丢没有序列号的记录。
+- 隧道域名上限与二维码容量一致（150 字符），读写与面板保存端点都执行同一上限，
+  超长是可见的 400 而不是「成功」后丢弃。
 
-### Removed
+### 移除
 
-- Nothing user-facing was removed in this release.
+- 本版没有移除任何用户可见功能。
 
 ## 0.2.1 - 2026-10-03
 
-### Added
+### 新增
 
-- Each assistant turn gets exactly one timestamp on its final message, plus a token-usage
-  pill on the same bubble; user messages keep their own time.
+- 每个助手回合在末条消息上恰有一个时间戳，同一气泡上带 token 用量 pill；用户消息保留
+  自己的时间。
 
-### Fixed
+### 修复
 
-- The running indicator no longer disappears early in long, event-dense turns.
-- The session list hides subagent sessions and no longer leaves a host error message plus a
-  stuck "retry" on screen.
-- The phone no longer jumps into a subagent session when the host reports focus there at
-  boot; an unknown row is let through rather than replaced.
-- Extracting a cloudflared archive on Windows hides the console window.
+- 长且事件密集的回合里，运行指示器不再提前消失。
+- 会话列表隐藏子代理会话，也不再在屏上留下宿主错误消息加卡住的「重试」。
+- 宿主在启动时报告焦点在子代理会话，手机不再跳进去；未知行放行而不是被替换。
+- Windows 上解压 cloudflared 归档时隐藏控制台窗口。
 
-### Changed
+### 变更
 
-- The desktop entry is labelled "pocket" instead of "connect phone".
+- 桌面入口文案从「connect phone」改成「pocket」。
 
 ## 0.2.0 - 2026-10-03
 
-### Added
+### 新增
 
-- Session list ordering is fixed and "load more" has a definite page size (30 by default,
-  capped at 200).
-- Named disconnect copy for dropped streams, background moves and tunnel failures.
-- Swipe-back from a session lands on the workspace list instead of leaving the browser.
-- Touch targets raised to 44 px, light theme contrast at WCAG AA, status roles and live
-  regions added, focus trapping in the "+" panel, labelled icon buttons.
+- 会话列表排序固定，「加载更多」有明确的页大小（默认 30，上限 200）。
+- 流断开、切后台、隧道失败各自有明确的断连文案。
+- 会话里往回滑落在工作区列表上，而不是离开浏览器。
+- 触控目标抬到 44 px，浅色主题对比度过 WCAG AA，加状态角色与 live region，「+」面板
+  焦点圈住，图标按钮带 label。
 
-### Changed
+### 变更
 
-- The pairing password is 8 digits instead of 6. Input fields and validation accept 6–12,
-  so a durable password already on disk keeps working without migration.
-- Host credential caching gained a TTL and generation invalidation, so an authority change
-  or a failed handshake re-authenticates instead of retrying with a stale cookie.
-- The session watermark is tracked per session; probes and refreshes can't borrow another
-  session's progress.
-- The "+" panel search box no longer opens the keyboard by itself.
+- 配对密码从 6 位改为 8 位。输入框与校验接受 6–12 位，盘上已有的长效密码不迁移也能用。
+- 宿主凭据缓存加了 TTL 与代数失效：权限变更或握手失败时重新认证，而不是拿旧 cookie
+  重试。
+- 会话水位线按会话记；探测与刷新不能借别个会话的进度。
+- 「+」面板搜索框不再自己弹出键盘。
 
 ## 0.1.0
 
-### Added
+### 新增
 
-- First release: LAN listener with an optional Cloudflare quick tunnel, QR and PIN pairing,
-  session list, history, sending a message and streaming the reply.
+- 首个版本：局域网监听 + 可选 Cloudflare quick tunnel，二维码与 PIN 配对，会话列表、
+  历史、发消息与流式看回复。

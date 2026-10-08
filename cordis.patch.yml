@@ -1,7 +1,7 @@
 # One package: Pocket DSH. Install it into a dsh profile
 # (`dsh plugin --profile <name> add link:<path to this checkout>`) — the patch
 # layer below inserts the single plugin row that mounts the host half: the
-# independent lightweight bridge, the pairing gate, the device registry,
+# phone bridge, the pairing gate, the device registry,
 # the tunnel manager and the phone routes.
 #
 # The package has TWO halves, both declared by its own package.json:
@@ -20,4 +20,4 @@
 
 - insert:
     - id: pocket
-      name: '@defws/dsh-pocket'
+      name: 'dsh-pocket'

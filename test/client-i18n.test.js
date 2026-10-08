@@ -240,7 +240,7 @@ const KEYS = [
 
 test('the client registers once by package name and keeps inject = ["slots"]', () => {
   const box = makeSandbox('zh-CN')
-  assert.equal(box.def.id, '@defws/dsh-pocket', 'registered under the package name')
+  assert.equal(box.def.id, 'dsh-pocket', 'registered under the package name')
   assert.equal(typeof box.def.factory, 'function')
   const r = mount('zh-CN')
   assert.equal(typeof r.dispose, 'function', 'apply must hand back a disposer')
@@ -450,7 +450,7 @@ test('the client half stays a classic script: no ESM form, loader registration i
   assert.doesNotMatch(SRC, /^export /m, 'no ESM export statement')
   assert.doesNotMatch(SRC, /^import /m, 'no ESM import statement')
   assert.match(SRC, /window\.__ModuleLoader__\.load\(\{/, 'registration goes through the host loader')
-  assert.match(SRC, /id: '@defws\/dsh-pocket'/, 'registered by package name')
+  assert.match(SRC, /id: 'dsh-pocket'/, 'registered by package name')
 })
 
 test('the zh and en packs expose the same seven keys, with one shared product-name literal', () => {

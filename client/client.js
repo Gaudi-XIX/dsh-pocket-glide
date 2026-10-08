@@ -1,4 +1,4 @@
-/* @defws/dsh-pocket client —— 侧栏常驻「pocket」按钮 + dataelement 原版配对页。
+/* dsh-pocket client —— 侧栏常驻「pocket」按钮 + dataelement 原版配对页。
  * 注册纪律：必须用 window.__ModuleLoader__.load({id, factory}) 按【包名】注册，
  * 不能写 ESM export（宿主客户端半区不走 ESM 解析，SyntaxError 会触发安全模式）。
  *
@@ -8,7 +8,7 @@
  * 因此没有跨站 cookie 与 CSRF 问题；本文件不重写任何一行配对 UI。 */
 console.log('[dsh-pocket] client fingerprint: app-origin-pairing-iframe-v5')
 window.__ModuleLoader__.load({
-  id: '@defws/dsh-pocket',
+  id: 'dsh-pocket',
   factory: function (require) {
     var module = { exports: {} }
 
@@ -222,7 +222,7 @@ window.__ModuleLoader__.load({
       if (document.getElementById(STYLE_ID)) return
       var tag = document.createElement('style')
       tag.id = STYLE_ID
-      tag.dataset.plugin = '@defws/dsh-pocket'
+      tag.dataset.plugin = 'dsh-pocket'
       tag.textContent = CSS
       document.head.appendChild(tag)
     }
