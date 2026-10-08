@@ -413,6 +413,39 @@ test('STATUS-5 the workspace pill paints the unknown state end to end', () => {
   assert.ok(sandbox.markup.includes('task-row is-unknown'), 'and the row class does too');
 });
 
+// ------------------------------------------------- BUG-2 agentPreset reads the projection, never the summary
+
+test('PRESET-1 agentPresetOf reads the projection map with three states', () => {
+  const make = new Function(
+    `
+    ${extractFunction(js, 'agentPresetOf')}
+    return agentPresetOf;
+  `,
+  )();
+
+  // undefined: the row carries no projection values at all (list rows without
+  // the agentPreset key) — the caller must keep its current preset.
+  assert.equal(make(undefined), undefined, 'no projections at all reads undefined');
+  assert.equal(make({}), undefined, 'empty projections read undefined');
+  assert.equal(make({ values: {} }), undefined, 'values without agentPreset read undefined');
+  // null: the host projected an explicit "no preset".
+  assert.equal(make({ values: { agentPreset: null } }), null, 'a projected null is a real null, not undefined');
+  // string: the projected id wins.
+  assert.equal(make({ values: { agentPreset: 'balanced' } }), 'balanced', 'a projected id passes through');
+  // A non-string value (defensive) never leaks through.
+  assert.equal(make({ values: { agentPreset: 5 } }), undefined, 'non-string values read undefined');
+});
+
+test('PRESET-2 the settings row feeds the projection into the preset state', () => {
+  const sandbox = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['s1'] }],
+    summaries: [{ sessionId: 's1', updatedAt: Date.now(), running: false, projections: { values: { agentPreset: 'codex-plan' } } }],
+  });
+  // taskState must not be confused by a projections-bearing row (the state chain
+  // reads only signal booleans; a values map is not a completion signal).
+  assert.equal(sandbox.taskState({ sessionId: 's1', running: false, projections: { values: { agentPreset: 'codex-plan' } } }), 'done', 'a preset row with no other signal stays done');
+});
+
 // ------------------------------------------------- R1.4 default-entry drift guard (layout lock)
 
 test('R1.4 the default entry cannot pick up the DOM script — one-level glob, resolved by node:fs', () => {
