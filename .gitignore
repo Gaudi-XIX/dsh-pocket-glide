@@ -1,0 +1,26 @@
+node_modules/
+
+# cloudflared pre-seeded by tools/fetch-cloudflared.mjs (a vendored binary is not
+# source; the runtime keeps its own copy in the cache dir resolved by
+# lib/tunnel.js — %LOCALAPPDATA%\dsh-pocket\cloudflared by default, or
+# <DSH_HOME>/pocket/cloudflared when an isolated data root is in force)
+vendor/
+
+# pocket's file logger writes pocket.log plus a cascade of rotated generations
+# (pocket.log.1 … pocket.log.<ROTATIONS>, see lib/file-log.js); tools may drop
+# run logs here too. The glob covers every generation, not just the first.
+*.log
+*.log.*
+
+# Packaging/unpacking byproducts. Empirical reason (change
+# 2026-10-02-fix-pocket-audit-remediation): a worker's `git archive HEAD` copy left
+# a 942KB control.tar at this repository root. This tree is the host's `link:`
+# loadable target, so a stray archive that gets eaten by `files`/an install script
+# is a production incident, not a tidy-up problem.
+*.tar
+*.tgz
+
+# A `npm install` inside a checkout drops package-lock.json next to the project
+# pnpm lockfile. This package is pnpm-only (see pnpm-lock.yaml / .npmrc), so a
+# second lockfile here would mean two package managers claiming one project.
+package-lock.json

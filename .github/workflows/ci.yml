@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: node ${{ matrix.node }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        node: ['24.x']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # One runtime dependency (pngjs). The suite imports the plugin directly, so nothing is
+      # built and nothing is installed globally.
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      # Serial by design: each test file binds its own loopback listener.
+      - name: Test suite
+        run: node --test --test-concurrency=1 test/*.test.js
