@@ -357,8 +357,25 @@ test('⑫ 治理文件在场、被 README 指着，CI 跑的就是 scripts.test'
   assert.match(readme, /SECURITY\.md/, 'README 必须指向 SECURITY.md（凭据类问题的唯一出口）')
   const ci = read(join('.github', 'workflows', 'ci.yml'))
   assert.match(ci, /test\/\*\.test\.js/, 'CI 必须跑 test/ 套件本身，不是另一条命令')
-  assert.match(ci, /windows-latest/, 'CI 矩阵含 windows-latest（本仓主要的装机平台）')
-  assert.match(ci, /ubuntu-latest/, 'CI 矩阵含 ubuntu-latest（跨平台回归面）')
+  // 平台腿只认 matrix.os 那一行。整篇正文匹配会被注释里的平台名蒙对（2026-10-08 实录：
+  // ci.yml 注释大段写着 ubuntu-latest 解释为何撤掉这条腿，而 /ubuntu-latest/ 因此照样绿，
+  // 这条断言当时已经名存实亡）。先证明那一行存在，再断言它的内容。
+  const osLine = /^[ \t]*os:[ \t]*\[([^\]]*)\]/m.exec(ci)
+  assert(osLine, 'ci.yml 必须有 matrix.os 这一行（否则下面的平台断言全是空转）')
+  const runners = osLine[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
+  assert(runners.length > 0, 'matrix.os 不能是空列表')
+  assert(runners.includes('windows-latest'), 'CI 含 windows-latest（本仓主要的装机平台）')
+  // 撤掉 POSIX 腿是刻意决定（六条断言钉的是 Windows 行为，见 ci.yml 注释与 README）。
+  // 因此这里反过来要求：矩阵没有 ubuntu 时，README 必须如实写明只验证 Windows，
+  // 否则「配置缩了、文档还在宣称跨平台」这种漂移会被立刻抓到。
+  if (!runners.includes('ubuntu-latest')) {
+    assert.match(read('README.md'), /Tested and CI-verified on Windows only/,
+      '矩阵没有 ubuntu 腿 ⇒ README 必须声明只在 Windows 验证')
+    assert(read('README.zh-CN.md').includes('CI 也只跑 Windows'),
+      '中文版同步声明（两份不许一份承认、一份宣称）')
+  } else {
+    assert.fail('matrix 里出现了 ubuntu-latest：POSIX 腿要重新加回，先确认那六条断言已按平台改写')
+  }
   assert.match(ci, /24\.x/, 'CI 用 node 24.x')
   assert.deepEqual(
     [...new Set(pkg.files.filter((f) => f.startsWith('README')))].sort(),

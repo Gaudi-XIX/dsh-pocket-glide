@@ -53,10 +53,17 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      # One runtime dependency (pngjs). The suite imports the plugin directly, so nothing is
-      # built and nothing is installed globally.
+      # One runtime dependency (pngjs), pinned by pnpm-lock.yaml (lockfileVersion 9.0) —
+      # and .npmrc is a pnpm config file, so installing with pnpm is the only reading of
+      # this repository that is self-consistent. --frozen-lockfile means CI resolves
+      # exactly what is committed instead of re-picking "latest" on every run.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: pnpm install --frozen-lockfile
 
       # Serial by design: each test file binds its own loopback listener.
       - name: Test suite
