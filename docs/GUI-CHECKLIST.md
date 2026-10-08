@@ -58,6 +58,7 @@
 | 6 | question-open 共存态 | 提问 composer 现身、输入框隐藏、body.question-open 在位 | 父卡验收项 5 ⊘→✅ **首例已落**：R3 audit 批（2026-10-07-fix-pocket-r3-audit-batch）render-verification.md 场景 6 ✅（scene67/scene1b，CONFIG.pendingQuestion 桩态，2026-10-07） |
 | 7 | 回合恰一枚钟 | 每轮消息结束后整轮只在最后一条 AI 气泡结尾一枚钟（用户气泡自持一枚；回合中段与流式中气泡零钟）；判据锚 A18（clocks===2）/A16（clocks===1）/verify-footer-turns T1 | clock 卡 reflux 新卡点（30d2080） |
 | 8 | **错误横幅可见性** | 有文案态下 #chatError 悬于 composer 上沿（bottom=让位 var 栈 84px+safe-area+queue-h+tunnel-warn-h）、不与 .composer-inner 相交、中心 self-hit、视口内；question-open 态横幅仍可见可命中 | R3 audit 卡 T1 首例实证（2026-10-07-fix-pocket-r3-audit-batch）：test/dom/pages-geometry.mjs 场景 A/A2 + 该卡 research/shots/scene1*.png |
+| 9 | **状态诚实与交替编排**（2026-10-08 刀④⑤⑥批新增） | ① 列表三态：子代理在跑的父会话行 = running 转圈（非绿勾）；agentAvailable:false 行 = 灰问号 unknown（非绿勾）；真完成才绿勾。② 转录分段：一轮内「过程折叠块→正文→过程折叠块→正文…」按到达序交替（而非过程全堆在正文前）；被回复切断的过程段呈折叠态，轮尾活跃段流式展开。③ 工具折叠标题用桌面词表 join（如「已读取文件并修改了文件」），无计数。 | 刀④⑤⑥批（applyDescendantRunning/taskState unknown/stepTitleFor/交替编排 visibleMessages）；行为测试 visible-interleave.test.js + subagent-session-dom-assertions.test.js STATUS-1..5/PRESET-1..2 + record-projection.test.js 聚合四测；渲染层首例待落（§2 桩验步骤，场景构造=父行 descendantRunning:true 桩态） |
 
 场景 5 是 gate-lesson 的直接对应物，任何 UI 增量不得跳过；场景 1-4 首例实证见父卡
 `archive/2026-10-06-2026-10-06-fix-pocket-review-findings/lead-render-verification.md`（4 ✅ 1 ⊘）。
