@@ -3,6 +3,22 @@
 > 载体性质：pocket 手机页（`lib/pages.js` 渲染资产）专属目验清单。`F:\defws\flow-plugin\docs\GUI-CHECKLIST.md`
 > 是 flow 看板专用同名文件，两者同名不同物，勿跨产品引用（phantom 引用教训见文末留痕节）。
 
+## 0. 状态（2026-10-07 刷新，卡 2026-10-07-docpatch-pocket-renderstub-todos-doc）
+
+首例实践覆盖：八场景中七场景已有首例实证，**待办未全清零**——
+
+- 场景 1-4：父卡首例（archive/2026-10-06-2026-10-06-fix-pocket-review-findings/lead-render-verification.md，
+  4 ✅ 1 ⊘——那个 ⊘ 即当时的场景 6，已被下行 R3 批补落）。
+- 场景 5/6/8：R3 audit 批首例（archive/2026-10-07-2026-10-07-fix-pocket-r3-audit-batch/research/
+  render-verification.md）：scene1=场景 5（turn 运行态隐藏元素现身）、scene67+scene1b=场景 6
+  （CONFIG.pendingQuestion 桩态）、scene1*.png+pages-geometry 场景 A/A2=场景 8。
+- **场景 7 仍 ⊘（唯一未清零项）**：repo 桩 EVENTS 无 turn/end 帧，钟不渲染无从目验；判据锚已由
+  verify-footer-turns 字符层锁定，待桩态补齐（桩 EVENTS 支持 turn/end）后抽查补实。
+
+常设义务（非待办清单，逐卡生效）：§1 双必选（用户可见面增量 ship 前）照旧；场景 5 任何 UI 增量不得
+跳过；§4 四层披露缺层明说；场景 8 判据公式随动——让位 var 栈（84px/safe-area/queue-h/tunnel-warn-h）
+变更时同步改判据文案（campaign-final-report record-only 清单在案）。
+
 ## 1. 目验触发条件
 
 - 用户可见面（UI/交互/布局）增量 ship 前：换家独立审查 + 渲染层复验双必选（与 flow 仓 stages-verify.md
@@ -39,7 +55,7 @@
 | 3 | goalBar 位置 | 不被 absolute toolbar 压住；徽章+目标文案+轮次完整渲染 | 父卡验收项 3 |
 | 4 | 编辑态焦点保持 | SSE 事件（POST /emit→goal/change）触发重绘后编辑框仍在、activeElement 保持、光标位置保持 | 父卡验收项 4（修复②） |
 | 5 | **默认隐藏元素现身** | turn 运行中+有排队时隐藏元素（排队坞/状态条）真实现身可见——非仅 DOM 存在（gate-lesson 核心场景：字符层断言验不出「该现身时现身」） | memory pocket-review-gate-lesson |
-| 6 | question-open 共存态 | 提问 composer 现身、输入框隐藏、body.question-open 在位 | 父卡验收项 5 ⊘→**待构造项：依赖姊妹卡桩态能力**（tools/render-stub.mjs 的 CONFIG.pendingQuestion；姊妹卡已交付〔2026-10-06 apply 落地〕，本项可桩验，尚无首例实践记录） |
+| 6 | question-open 共存态 | 提问 composer 现身、输入框隐藏、body.question-open 在位 | 父卡验收项 5 ⊘→✅ **首例已落**：R3 audit 批（2026-10-07-fix-pocket-r3-audit-batch）render-verification.md 场景 6 ✅（scene67/scene1b，CONFIG.pendingQuestion 桩态，2026-10-07） |
 | 7 | 回合恰一枚钟 | 每轮消息结束后整轮只在最后一条 AI 气泡结尾一枚钟（用户气泡自持一枚；回合中段与流式中气泡零钟）；判据锚 A18（clocks===2）/A16（clocks===1）/verify-footer-turns T1 | clock 卡 reflux 新卡点（30d2080） |
 | 8 | **错误横幅可见性** | 有文案态下 #chatError 悬于 composer 上沿（bottom=让位 var 栈 84px+safe-area+queue-h+tunnel-warn-h）、不与 .composer-inner 相交、中心 self-hit、视口内；question-open 态横幅仍可见可命中 | R3 audit 卡 T1 首例实证（2026-10-07-fix-pocket-r3-audit-batch）：test/dom/pages-geometry.mjs 场景 A/A2 + 该卡 research/shots/scene1*.png |
 
