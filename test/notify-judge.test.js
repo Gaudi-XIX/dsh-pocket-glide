@@ -238,6 +238,62 @@ test('bridge poll: a session parked on a question never completes, and its after
   }
 })
 
+test('bridge poll: a frozen lead whose subagent still runs never notifies a false completion', async () => {
+  // The report that started it (2026-10-08): the lead's own row goes running:false
+  // the moment it hands control to a child, so the old single-row sample read the
+  // fleet as idle and announced 任务已完成 while the child was still working. The
+  // poll path now samples the aggregated flag (applyDescendantRunning) the same
+  // projection feeds the phone pill, so the two can never disagree.
+  const sent = []
+  let clock = 3_000_000
+  let items = []
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname) =>
+        pathname === '/api/session/list' ? { ok: true, value: { items } } : undefined
+    },
+    bridgeOptions: { ...notifyBridgeOptions(sent), now: () => clock }
+  })
+  try {
+    const tick = async () => {
+      t.bridge._sessionListCache = undefined
+      await t.bridge.pollNotifyRunning()
+    }
+    items = [
+      { sessionId: 'lead', running: true, title: '编队', updatedAt: clock },
+      { sessionId: 'child', parentSessionId: 'lead', origin: 'subagent', running: true, updatedAt: clock }
+    ]
+    await tick()
+    // The lead hands off control: its own row freezes, the child keeps working.
+    items = [
+      { sessionId: 'lead', running: false, title: '编队', updatedAt: clock - 1_000 },
+      { sessionId: 'child', parentSessionId: 'lead', origin: 'subagent', running: true, updatedAt: clock }
+    ]
+    clock += 120_000
+    await tick()
+    assert.equal(sent.length, 0, 'a working child is not a completed lead')
+    // The child settles: the fleet is done. quiet counts from the lead's last
+    // activity (the handoff moment), so by now it already exceeds the grace
+    // window and the next poll announces completion — for the lead only.
+    // Before the subagent-row skip, the invisible child row judged its own
+    // long-busy settle and pushed a second notice with a fallback title.
+    items = [
+      { sessionId: 'lead', running: false, title: '编队', updatedAt: clock },
+      { sessionId: 'child', parentSessionId: 'lead', origin: 'subagent', running: false, updatedAt: clock }
+    ]
+    clock += 30_000
+    await tick()
+    assert.equal(sent.length, 1, 'the settle fires for the lead once the fleet is done')
+    assert.ok(sent[0].includes(encodeURIComponent('编队')), 'the notice names the lead, not the invisible child row')
+    clock += 91_000
+    await tick()
+    assert.equal(sent.length, 1, 'and never fires twice for the same settle')
+  } finally {
+    await t.stop()
+  }
+})
+
 test('bridge question push: one notice per question, identified by session title, silent when unconfigured', async () => {
   const sent = []
   const t = await startBridge({
