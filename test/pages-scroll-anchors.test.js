@@ -51,7 +51,7 @@ const scrollOrgans = (locale = 'zh') => {
   const names = ['transcriptDistance', 'isNearBottom', 'anchorVisibleState', 'markHistoryTail']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(`
-    const SCROLL_FOLLOW_PX=120,ANCHOR_LATEST_SCREENS=1.5,ANCHOR_PROMPT_SCREENS=1,CV_TAIL_KEEP=8;
+    const SCROLL_FOLLOW_PX=120,ANCHOR_LATEST_SCREENS=1.5,ANCHOR_LEAVE_SCREENS=1,ANCHOR_PROMPT_SCREENS=1,CV_TAIL_KEEP=8;
     ${body}
     return { transcriptDistance, isNearBottom, anchorVisibleState, markHistoryTail }
   `)()
@@ -65,20 +65,26 @@ test('the near-bottom band is the 120px follow threshold, measured from the bott
   assert.equal(isNearBottom({ scrollHeight: 800, scrollTop: 0, clientHeight: 800 }), true, 'a short transcript is always near bottom')
 })
 
-test('anchor visibility: ↓ wins past 1.5 screens, ↑ only when the question is more than a screen above the top, never both', () => {
+test('anchor visibility: nothing lights on the bottom screen, ↑ needs a screen of scrolling back, ↓ wins past 1.5 screens, never both', () => {
   const { anchorVisibleState } = scrollOrgans()
   const clientHeight = 800
-  // reading near the bottom, question far above → ↑
+  // (2026-10-09) The fix: within one screen of the bottom NOTHING may light, even
+  // when the last question hangs a screen above the viewport — that was the bug
+  // (↑ lit while the reader had not moved at all, at the foot of a long reply).
   let state = anchorVisibleState(300, clientHeight, 2000, 4000)
-  assert.deepEqual(state, { latest: false, prompt: true })
+  assert.deepEqual(state, { latest: false, prompt: false }, 'bottom screen: dark')
+  state = anchorVisibleState(800, clientHeight, 2000, 4000)
+  assert.deepEqual(state, { latest: false, prompt: false }, 'exactly one screen back: still dark')
+  state = anchorVisibleState(801, clientHeight, 2000, 4000)
+  assert.deepEqual(state, { latest: false, prompt: true }, 'past a screen of scrolling → ↑')
   // scrolled far up → ↓, and ↑ is suppressed even though the question is above
   state = anchorVisibleState(4000, clientHeight, 2000, 1000)
   assert.deepEqual(state, { latest: true, prompt: false })
   // question barely above the top edge (less than a screen) → neither
-  state = anchorVisibleState(300, clientHeight, 1500, 2000)
+  state = anchorVisibleState(900, clientHeight, 1500, 2000)
   assert.deepEqual(state, { latest: false, prompt: false })
   // question still on screen → neither
-  state = anchorVisibleState(300, clientHeight, 2500, 2000)
+  state = anchorVisibleState(900, clientHeight, 2500, 2000)
   assert.deepEqual(state, { latest: false, prompt: false })
   // at the exact 1.5-screen boundary the ↓ button stays quiet
   state = anchorVisibleState(1200, clientHeight, -500, 2000)
@@ -90,6 +96,20 @@ test('anchor visibility: ↓ wins past 1.5 screens, ↑ only when the question i
     const swept = anchorVisibleState(5000 - scrollTop - clientHeight, clientHeight, 2000, scrollTop)
     assert.ok(!(swept.latest && swept.prompt), `both anchors lit at scrollTop=${scrollTop}`)
   }
+})
+
+test('the reported bug: at the foot of a multi-screen reply the deck stays dark, however far above the question sits', () => {
+  const { anchorVisibleState } = scrollOrgans()
+  const clientHeight = 800
+  // A five-screen answer: the question sits 5000px above the viewport top while
+  // the reader has not scrolled at all (dist 0..800 = still the bottom screen).
+  // Old rule: ↑ lit (the question was "more than a screen above the top").
+  // New rule: nothing lights until a screen is actually travelled.
+  for (const dist of [0, 1, 119, 120, 400, 799, 800]) {
+    const state = anchorVisibleState(dist, clientHeight, 4000, 9000)
+    assert.deepEqual(state, { latest: false, prompt: false }, `dist=${dist} is still the bottom screen — nothing may light`)
+  }
+  assert.equal(anchorVisibleState(801, clientHeight, 4000, 9000).prompt, true, 'one screen travelled → ↑')
 })
 
 // --------------------------------------- 2. content-visibility tagging rules

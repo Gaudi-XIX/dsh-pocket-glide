@@ -680,7 +680,7 @@ async function scenarioScroll(host, port, failures) {
     // viewport top — which, in a long-reply transcript viewed from the bottom, is
     // the product's whole point (the question is off-screen above while you read
     // the answer).
-    n0(snap0.showPrompt === (snap0.anchorTop < -snap0.clientH), `↑ state must track the anchor position (anchorTop=${snap0.anchorTop}, clientH=${snap0.clientH}, show=${snap0.showPrompt})`);
+    n0(!snap0.showPrompt, 'at the bottom nothing may light (↑ also dark: the reader has not left yet)');
     n0(snap0.cvFirstClass, 'the first message must carry msg-hist');
     n0(!snap0.tailClass, 'the last 8 messages must stay untagged');
     n0(snap0.cvFirst === 'auto', `msg-hist must compute content-visibility:auto, got ${JSON.stringify(snap0.cvFirst)}`);
@@ -717,6 +717,17 @@ async function scenarioScroll(host, port, failures) {
     n3(home.showPrompt, `↑ must light when the question is far above the viewport (anchorTop=${home.anchorTop}, clientH=${home.clientH})`);
 
     // G5: ↑ brings the last question to the top edge (+ the 54px pad)
+    // G5.2 (2026-10-09): the whole point of the fix — the ↑ button must NOT rise
+    // the instant the follow unlocks. Unlocking is a hair's breadth (120px); the
+    // product's trigger is a screen of scrolling back through this turn.
+    const nudged = await (async () => {
+      await page.evaluate(`(() => { const b = document.getElementById('messages'); b.scrollTop = Math.max(0, b.scrollTop - 200) })()`);
+      await wait(250);
+      return page.evaluate(scrollSnapshot);
+    })();
+    const n4b = (cond, msg) => { if (!cond) failures.push(`G5-2(hysteresis): ${msg} — ${JSON.stringify(nudged)}`); };
+    n4b(!nudged.showPrompt, `↑ must stay dark after a 200px nudge off the bottom (the trigger is a screen, not the follow band), anchorTop=${nudged.anchorTop}`);
+
     await page.evaluate(`document.getElementById('jumpPrompt').click()`);
     await wait(600); // the settle re-aims against materialized cv layout
     const asked = await page.evaluate(scrollSnapshot);

@@ -652,6 +652,13 @@ test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
 // let-decl and the reset, the .goal-actions/.goal-bar.is-editing CSS, and the
 // modeHint per-view sync. 0.4.3 adds ~1.1 KB zh (fold tap-driver in bindOpenState,
 // REMOVE_SVG, resume-push comment): budget 252_000 → 253_000. Headroom left: ~0.7 KB zh / ~0.8 KB en.
+//
+// Receipt (2026-10-09 fix 0.4.4, anchor leave-band): no raise — one constant plus
+// one clause in anchorVisibleState and the comment explaining it; the shell lands
+// at zh 252848 / en 252768 against 253_000 (headroom left: ~0.15 KB zh /
+// ~0.23 KB en). WARNING: the headroom is nearly gone — the next addition must
+// either raise this number deliberately with a receipt of its own, or pay for
+// itself by removing bytes elsewhere.
 const ASSET_BUDGET_BYTES = 253_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
