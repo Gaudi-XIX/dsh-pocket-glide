@@ -203,6 +203,8 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = [] } =
       renderWorkspaces,
       pickFocusSession,
       visibleSessions,
+      taskState,
+      taskGlyph,
       get markup(){return container.innerHTML},
       rowIds(){return [...container.innerHTML.matchAll(/data-id="([^"]*)"/g)].map((m)=>m[1])},
     }
@@ -363,6 +365,55 @@ test('R1-audit follow-up blankRowVisible owns the freshness boundary', () => {
 });
 
 // ------------------------------------------------- R1.4 default-entry drift guard
+
+// ---- Status honesty (change 2026-10-08-feat-pocket-subagent-status-visibility, item 1) ----
+// The old taskState fell through to 'done' — a green check — for every row that was
+// merely not running. Two false signals came out of that: a lead whose child works on
+// (running:false on the parent row) and a row whose writer is held elsewhere
+// (agentAvailable:false, the wire's only "not routable" signal). The new chain shows
+// both explicitly, and the green check survives only where nothing says otherwise.
+
+test('STATUS-1 a held writer (agentAvailable:false) is unknown, not done', () => {
+  const sandbox = buildRenderSandbox();
+  assert.equal(sandbox.taskState({ running: false, agentAvailable: false }), 'unknown', 'the only honest reading: we cannot say done');
+  assert.ok(sandbox.taskGlyph('unknown').includes('?'), 'the glyph is a question mark, not a check');
+});
+
+test('STATUS-2 a frozen parent with a running child (descendantRunning) reads running', () => {
+  const sandbox = buildRenderSandbox();
+  assert.equal(sandbox.taskState({ running: false, descendantRunning: true }), 'running', 'the aggregation from the projection decides');
+  assert.ok(sandbox.taskGlyph('running').includes('spin'), 'and paints the spinner');
+});
+
+test('STATUS-3 a settled row with no adverse signal keeps the green check', () => {
+  const sandbox = buildRenderSandbox();
+  assert.equal(sandbox.taskState({ running: false }), 'done');
+  const glyph = sandbox.taskGlyph('done');
+  assert.ok(glyph.includes('m5.7 9.2 2.2 2.2 4.4-4.7'), 'the check-mark path is unchanged (green comes from CSS is-done)');
+  assert.ok(!glyph.includes('spin') && !glyph.includes('?'), 'and it is neither the spinner nor the unknown mark');
+});
+
+test('STATUS-4 priority: awaiting and error still outrank unknown, unknown outranks done', () => {
+  const sandbox = buildRenderSandbox();
+  assert.equal(sandbox.taskState({ awaitingQuestion: true, agentAvailable: false }), 'awaiting');
+  assert.equal(sandbox.taskState({ lastError: 'x', agentAvailable: false }), 'error');
+  assert.equal(sandbox.taskState({ running: true, descendantRunning: true }), 'running');
+  assert.equal(sandbox.taskState({ running: false, agentAvailable: undefined }), 'done', 'missing agentAvailable is not unknown');
+  assert.equal(sandbox.taskState({ blank: true }), 'blank');
+});
+
+test('STATUS-5 the workspace pill paints the unknown state end to end', () => {
+  const sandbox = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['held1'] }],
+    summaries: [{ sessionId: 'held1', updatedAt: Date.now(), running: false, agentAvailable: false }],
+  });
+  sandbox.renderWorkspaces();
+
+  assert.ok(sandbox.markup.includes('ws-last is-unknown'), 'the pill class carries the new state');
+  assert.ok(sandbox.markup.includes('task-row is-unknown'), 'and the row class does too');
+});
+
+// ------------------------------------------------- R1.4 default-entry drift guard (layout lock)
 
 test('R1.4 the default entry cannot pick up the DOM script — one-level glob, resolved by node:fs', () => {
   // WP-2 (test/dom/subagent-session-dom.mjs) needs a browser and must stay out of the
