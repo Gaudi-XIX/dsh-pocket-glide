@@ -371,6 +371,11 @@ node tools/render-stub.mjs                       # 渲染桩：真实页面资�
 
 ## 已知边界
 
+- **「工作步骤展示」的 detailed 档在手机上与 standard 等价（死档，2026-10-08 刀⑤批登记）**：宿主桌面端该设置
+  有四档（简洁/标准/详细/完全展开），pocket 继承该设置（`ui-chat` 命名空间 `chat.transcriptView`），但渲染层只有
+  `==='compact'`（推理块隐藏）与 `==='verbose'`（默认展开）两类比较——`detailed` 落进默认折叠分支，与 standard
+  行为相同，没有桌面端「详细」的中间档语义。维持现状的理由：手机屏幕上三档折叠密度收益有限；若要补齐，
+  需定义 detailed 在分段转录上的独立行为（候选：过程段默认开、推理块仍折）。
 - PWA：manifest 已挂——`<link rel="manifest">` → `/manifest.json`（配对门禁后可取，`renderManifestJson()`）。
   Service Worker 注册失败时本会话静默停用（sessionStorage 去重、下次访问重试），无用户可见提示。
 - 那个「假服务注册」已经删掉了：入口不再向宿主声明这枚 `pocket` 服务（它从来没被 `provide` 过，也没有任何
