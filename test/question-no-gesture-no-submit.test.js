@@ -46,6 +46,7 @@ const ADVANCE = slice(js, 'function advanceQuestion(', 'async function submitQue
 const SUBMIT = slice(js, 'async function submitQuestionAnswers(', 'async function cancelQuestionRequest(')
 const CANCEL = slice(js, 'async function cancelQuestionRequest(', "function taskState(")
 const HANDLER = slice(js, "$('questionComposer').onclick=", "$('questionComposer').oninput=")
+const KEYDOWN = slice(js, "$('questionComposer').onkeydown=", "document.addEventListener('click'")
 
 // The page-level state every one of those organs reads or writes. Names and initial values
 // are copied from the page's own declaration line so the sandbox cannot drift from it.
@@ -106,7 +107,8 @@ function build(setup) {
     ${SUBMIT}
     ${CANCEL}
     const handler=${HANDLER.replace("$('questionComposer').onclick=", '')}
-    return { handler, sync: syncPendingQuestion, advance: advanceQuestion, draft: questionDraft, sent,
+    const keydown=${KEYDOWN.replace("$('questionComposer').onkeydown=", '')}
+    return { handler, keydown, sync: syncPendingQuestion, advance: advanceQuestion, draft: questionDraft, sent,
       get busy(){return questionBusy}, get index(){return questionIndex}, get drafts(){return questionDrafts},
       get error(){return box.questionError.textContent}, get lastKey(){return lastHistoryKey},
     };
@@ -228,6 +230,29 @@ test('P-9 the rendered bar puts 跳过 directly against the submit button', () =
   const gap = bar.slice(bar.indexOf('</button>', skipAt) + '</button>'.length, contAt - '<button class="submit-answer" '.length)
   assert.equal(gap.trim(), '', `nothing may separate 跳过 from 提交; found: ${JSON.stringify(gap)}`)
   assert.ok(bar.includes('<span class="spacer"></span>'), 'the right-hand cluster sits after the spacer')
+})
+
+test('P-11 the phone needs a chord, not a bare Enter, to advance a question', () => {
+  // Added after the operator reported "I touched nothing and it skipped through all of them".
+  // That symptom is the DESKTOP card: dsh-client-ui-user-questions puts an onKeyDown on the
+  // answer field that fires continueFlow() on a bare Enter, AND auto-focuses that field when
+  // there is no countdown (i.e. in the legacy mode this build actually runs), AND pre-selects
+  // the recommended option into the draft — so repeated Enters page through and the last one
+  // submits without the operator ever aiming at a button.
+  // The phone deliberately requires Ctrl/Cmd+Enter for the same step. This pin exists so that
+  // nobody "aligns" the two by dropping the chord: on a handset an Enter that settles a
+  // question is a misfire waiting to happen under the soft keyboard.
+  assert.ok(KEYDOWN.includes("e.key==='Enter'"), 'the composer has its own key handler')
+  assert.match(KEYDOWN, /\(e\.metaKey\|\|e\.ctrlKey\)/, 'Enter must be gated behind a chord')
+})
+
+test('P-12 a bare Enter at the answer field settles nothing; the chord stops at the guard', () => {
+  const page = build({ ...ONE })
+  const at = { id: 'questionCustom', value: '' }
+  page.keydown({ target: at, key: 'Enter', ctrlKey: false, metaKey: false, isComposing: false, keyCode: 13, preventDefault() {} })
+  assert.equal(answersSent(page).length, 0, 'a bare Enter never settles a batch on the phone')
+  page.keydown({ target: at, key: 'Enter', ctrlKey: true, metaKey: false, isComposing: false, keyCode: 13, preventDefault() {} })
+  assert.equal(answersSent(page).length, 0, 'and even the chord halts at the choose-something guard')
 })
 
 test('P-10 nothing in the page settles a batch from a timer or a stream frame', () => {

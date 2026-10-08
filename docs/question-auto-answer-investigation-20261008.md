@@ -80,9 +80,37 @@ P-4/P-6/P-7 是正向断言（要求「真的发出去了」），因此 P-1/P-2
 
 ### 所以 17 次空答案是什么
 
-代码侧排除后，只剩一个解释：**每一次 `selected:[]` 都是一次真实的「跳过」点击**（多题全空 = 逐题点过）。这与 §3 的时长分布（10s…7h，无固定聚集）和 10-06 那次 1 秒内两次提交（第二次被宿主拒为 `no longer pending`）完全一致。
+> **本节归因已被用户补充观测推翻一半，见 §4b。** Pocket 侧「无手势不提交」仍然成立；但「每次都对应一次真实跳过点击」是错的——操作者根本没碰鼠标，碰的是**键盘**。
+
+代码侧排除后，Pocket 这一端的解释只剩一个：**每一次 `selected:[]` 都是一次真实的「跳过」点击**（多题全空 = 逐题点过）。这与 §3 的时长分布（10s…7h，无固定聚集）和 10-06 那次 1 秒内两次提交（第二次被宿主拒为 `no longer pending`）完全一致。
 
 用户「没看到」却又产生了跳过，物理成因在 P-9：手机上 `跳过` 与 `提交` 并排贴在一起、右端成簇，**语义相差一个指位**。操作者凭位置习惯性点右端时，落点是「跳过」。这不是提交逻辑的 bug，是**把「授权跳过」放在与「提交」同一命中簇里**的设计缺陷。
+
+## 4b. 用户补充观测：「进去啥都没点，就刷刷刷全部跳过了」→ 真凶在桌面卡片
+
+这条观测把范围从「Pocket 的鼠标」挪到**宿主桌面 GUI 的键盘**——而且 10-08 11:30 那次空答案提交时手机本就离线，**作答端一直是桌面**。本次实测的盲区正是桌面（只测了 Pocket），现补。
+
+`@deepseek-ai/dsh-client-ui-user-questions/lib/client.js`（宿主发布包原文，非推断）里四件事叠成一条免确认通路：
+
+| # | 代码位置 | 事实 |
+|---|---|---|
+| 1 | `initialDrafts` | 单选题带 `(Recommended)` 时，**推荐项被预置进草稿**：`selected: answer===void 0 && recommended!==void 0 ? [recommended] : …` |
+| 2 | `answered()` / `completed()` | 预置即视为**已答**：`answered = selected.length>0 \|\| custom.trim()!==""` |
+| 3 | `AnswerField` 的 `autoFocus` | `canSubmit && countdown === void 0 && !locked && !focused…`——**countdown 为空才聚焦，而现网正是 legacy 模式（无 deadline），所以每次必自动聚焦**到回答输入框 |
+| 4 | `continueFromCustom` | 该输入框 `onKeyDown` 上，**裸 Enter**（只排除 shiftKey 与输入法 composing）即 `continueFlow()`：已答就 `index+1` 前进，到最后一题就 `submitDrafts(drafts)` 提交 |
+
+于是：卡片出现 → 焦点自动落在回答框 → 每题都已预置成「已答」→ **用户照习惯按 Enter（以为在发下一条消息），一次翻页一题，末题那一下直接整批提交**。观感就是「我啥都没点，它刷刷刷全部跳过」，而 agent 收到的是**替你选的推荐项**——正好是最初那句「你就自己回答了」。
+
+选项按钮上还另有一条更短的：`onKeyDown: Enter → submitDrafts(drafts)`，焦点在选项上时 Enter **直接提交整批**，不经过 `continueFlow` 的翻页。
+
+**对照：Pocket 是安全的**。手机页同样的推进要求 **Ctrl/Cmd+Enter**（`e.key==='Enter'&&(e.metaKey||e.ctrlKey)`），裸 Enter 不推进——已补成 P-11/P-12 两条断言钉住，防止哪天有人把两端"对齐"成裸 Enter。
+
+`selected:[]` 这一形态仍需一次 `skipped` 才能产出（`submitDrafts` 里只有 `value.skipped` 分支输出空 selected），所以 17 次空答案是**键盘免确认提交**与**跳过**两种操作混在一起的产物；单靠读码到此为止，见 §6 的受控验证。
+
+## 4c. 处置边界
+
+这条通路在**宿主包里**，而工作区硬约束 7 明确「禁止再改宿主文件」。所以可动的只有三处：向 DSH 官方报问题、操作侧规避（提问卡片出现时先别按 Enter）、以及 Pocket 端保持并已证明的保守键盘策略。**不是 Pocket 的 bug，也不是能在本仓修掉的 bug。**
+
 
 
 ## 5. 建议（按影响排序）
