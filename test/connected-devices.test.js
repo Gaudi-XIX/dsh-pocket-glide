@@ -1,6 +1,11 @@
-// Coverage #7 connectedDevices seam (FULL-STACK over real HTTP) and the
+// coverage #7 connectedDevices seam (FULL-STACK over real HTTP) and the
 // pages.js device-label escaping (logic/render level). pages.js is plain ESM
 // and importable under Node without a DOM: renderers return strings.
+//
+// 2026-10-08 move-pocket-devices-into-mode-bar §10.4 R-7: the device list now
+// lives in the new device panel (client-rendered by deviceCardHtml), and the
+// revoke button carries a `class="is-danger"` marker. The anchors below are
+// re-anchored to what the renderer actually emits.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -50,71 +55,116 @@ test('desktop tunnel payload endpoint also includes connectedDevices', async () 
   }
 })
 
-test('HTML inside a connected device label is escaped in the desktop pairing page', () => {
+test('HTML inside a device card label is escaped', () => {
   const malicious = '<img src=x onerror=alert(1)>'
-  const html = renderDesktopPairingPage({
-    locale: 'zh',
-    connectedDevices: [
-      { label: malicious, remoteAddress: '127.0.0.1', issuedAt: Date.now(), expiresAt: Date.now() + 1000 },
-    ],
-    pairingUrl: 'http://127.0.0.1/pair?token=x',
-    qrSvg: '',
-  })
-  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/)
-  assert.ok(!html.includes(malicious), 'raw executable HTML must not appear')
+  const { deviceCardHtml } = extractDeviceRenderer()
+  const card = deviceCardHtml({ id: 'd1', label: malicious, remoteAddress: '127.0.0.1', permission: 'lan', online: true, issuedAt: Date.now(), expiresAt: Date.now() + 1000 })
+  assert.match(card, /&lt;img src=x onerror=alert\(1\)&gt;/)
+  assert.ok(!card.includes(malicious), 'raw executable HTML must not appear')
 })
 
 // ---------------------------------------------------------------------------
-// WP-1 #3a (change 2026-10-05-feat-pocket-mobile-ux-batch): every listed device
-// carries a revoke handle. The armed two-step interaction itself is DOM
-// behaviour and lives in I-3; here the rendered shape is pinned.
+// WP-1 #3a (change 2026-10-05-feat-pocket-mobile-ux-batch), re-anchored by
+// 2026-10-08-move-pocket-devices-into-mode-bar §10.4 R-7: the device list now
+// lives in the new device panel (client-rendered by deviceCardHtml), so the
+// rendered-shape pins move from the old row to the panel card renderer.
 // ---------------------------------------------------------------------------
 
-test('each connected device renders a revoke handle carrying its derived id', () => {
-  const html = renderDesktopPairingPage({
-    locale: 'zh',
-    connectedDevices: [
-      { id: 'dev-abc123', label: 'Pocket/1.0 · dev-abc123', remoteAddress: '127.0.0.1', issuedAt: Date.now(), expiresAt: Date.now() + 1000 },
-    ],
-    pairingUrl: 'http://127.0.0.1/pair?token=x',
-    qrSvg: '',
-  })
-  assert.match(html, /data-action="revoke-device" data-id="dev-abc123"/)
-  assert.match(html, /吊销/)
-  assert.match(html, /确认吊销/, 'the armed copy ships with the page')
-  assert.match(html, /吊销后该手机需重新配对/, 'the confirm warning ships as the button title')
-  assert.match(html, /revokeDevice\(/, 'the armed handler is in the page script')
-  assert.match(html, /desktop\/revoke/, 'the handler POSTs the revoke endpoint')
+function extractDeviceRenderer() {
+  // Pull the panel card renderer + its string helpers out of the pages.js
+  // source, with a T stub and small escHtml/formatTimestamp stand-ins. The
+  // rendered zh page is returned too so copy assertions pin what actually
+  // ships to the browser.
+  const page = renderDesktopPairingPage({ locale: 'zh', pairingUrl: 'http://127.0.0.1/pair?token=x', qrSvg: '' })
+  const names = [
+    'deviceState', 'devicePermBadge', 'devicePermLabel',
+    'deviceCredLabel', 'deviceFirstSeen', 'deviceLastSeen', 'deviceCardHtml',
+  ]
+  const body = names.map((name) => extractPageFunction(PAGES_SOURCE, name)).join('\n')
+  // B: the stub values below are read off lib/pages.js's real factory strings
+  // (2026-10-08 re-anchor). devicePermLabel returns the TARGET state, not the
+  // current one — if this stub ever drifts from the factory value the
+  // permission-direction watchdog in device-panel-exec.test.js goes blind.
+  const T = {
+    devOnline: '在线', devOffline: '离线',
+    devPermLan: '仅本地', devPermWan: '本地+公网',
+    devMakeLan: '切为仅本地', devMakeWan: '开启公网',
+    devCredExpired: '{d}（已过期）',
+    devFingerprint: '指纹', devFirstPaired: '首次配对',
+    devCredExpiry: '凭证到期', devLastSeen: '最后上线', devNeverSeen: '未记录',
+    devPermBadge: '通道权限：{v}',
+    devExtend: '延长30天',
+    revoke: '吊销',
+  }
+  const escHtml = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+  const formatTimestamp = (v) => {
+    const d = new Date(v); const p = (n) => String(n).padStart(2, '0')
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes())
+  }
+  const deviceCardHtml = new Function('T', 'escHtml', 'formatTimestamp', `${body}\nreturn deviceCardHtml`)(T, escHtml, formatTimestamp)
+  return { deviceCardHtml, page, T }
+}
+
+test('each connected device card renders a revoke handle carrying its derived id', () => {
+  const { deviceCardHtml, page } = extractDeviceRenderer()
+  const card = deviceCardHtml({ id: 'dev-abc123', label: 'Pocket/1.0 · dev-abc123', remoteAddress: '127.0.0.1', permission: 'lan', online: true, issuedAt: Date.now(), expiresAt: Date.now() + 1000 })
+  // The revoke button now carries the danger marker between data-action and
+  // data-id (the two-step armed contract is what makes it a danger action).
+  assert.match(card, /data-action="revoke-device" class="is-danger" data-id="dev-abc123"/,
+    'the revoke handle carries the danger marker next to its id')
+  assert.match(card, /吊销/)
+  assert.match(page, /确认吊销/, 'the armed copy ships with the page')
+  // There is no title attribute on the new card's revoke button; the armed
+  // consequence copy lives in the page script's T table (revokeConfirm) and is
+  // injected inline by revokeDevice(). This pins the payload string itself.
+  assert.match(page, /吊销后该手机需重新配对/, 'the armed consequence copy ships in the T payload')
+  assert.match(page, /revokeDevice\(/, 'the armed handler is in the page script')
+  assert.match(page, /desktop\/revoke/, 'the handler POSTs the revoke endpoint')
 })
 
-test('a hostile device id is escaped in the revoke handle and the initial row', () => {
+test('a hostile device id is escaped in the revoke handle and the card', () => {
+  const { deviceCardHtml } = extractDeviceRenderer()
   const hostileId = 'x" onmouseover="alert(1)'
-  const html = renderDesktopPairingPage({
-    locale: 'en',
-    connectedDevices: [
-      { id: hostileId, label: 'evil<label>', remoteAddress: '1.2.3.4', issuedAt: Date.now(), expiresAt: Date.now() + 1000 },
-    ],
-    pairingUrl: 'http://127.0.0.1/pair?token=x',
-    qrSvg: '',
-  })
-  assert.ok(!html.includes('onmouseover="alert(1)"'), 'the id must not survive unescaped')
-  assert.match(html, /data-id="x&quot; onmouseover=&quot;alert\(1\)"/)
-  assert.ok(!html.includes('<label>'), 'the label must be escaped too')
+  const card = deviceCardHtml({ id: hostileId, label: 'evil<label>', remoteAddress: '1.2.3.4', permission: 'lan', online: true, issuedAt: Date.now(), expiresAt: Date.now() + 1000 })
+  assert.ok(!card.includes('onmouseover="alert(1)"'), 'the id must not survive unescaped')
+  assert.match(card, /data-id="x&quot; onmouseover=&quot;alert\(1\)"/)
+  assert.ok(!card.includes('<label>'), 'the label must be escaped too')
 })
 
 test('a device without an id (old payload) renders without a revoke handle', () => {
-  const html = renderDesktopPairingPage({
+  const { deviceCardHtml } = extractDeviceRenderer()
+  const card = deviceCardHtml({ label: 'Pocket/1.0', remoteAddress: '127.0.0.1', permission: 'lan', online: true, issuedAt: Date.now(), expiresAt: Date.now() + 1000 })
+  assert.ok(!card.includes('data-action="revoke-device"'), 'no handle without a namable id')
+  assert.ok(!card.includes('data-action="device-extend"'), 'no action handle without a namable id')
+})
+
+test('the mode bar carries the third key: a mode-devices handle that stays enabled', () => {
+  const connected = renderDesktopPairingPage({
     locale: 'zh',
-    connectedDevices: [
-      { label: 'Pocket/1.0', remoteAddress: '127.0.0.1', issuedAt: Date.now(), expiresAt: Date.now() + 1000 },
-    ],
+    connected: true,
     pairingUrl: 'http://127.0.0.1/pair?token=x',
     qrSvg: '',
   })
-  // The handler source lives in the page script regardless; only the rendered
-  // markup before the script must stay handle-free.
-  const markup = html.slice(0, html.indexOf('<script'))
-  assert.ok(!markup.includes('data-action="revoke-device"'), 'no handle without a namable id')
+  assert.match(connected, /data-action="mode-devices"/, 'the third mode key ships with the page')
+  assert.match(connected, /连接设备管理/, 'the key copy is the agreed user wording')
+  const btnDevices = connected.match(/<button id="btnDevices"[^>]*>/)
+  assert.ok(btnDevices, 'the device key renders as its own button')
+  assert.ok(!btnDevices[0].includes('disabled'), 'the device key is not gated on the connection state')
+  // M-4: the old /device-view/ scan was true for any occurrence (CSS and JS
+  // both spell it). Read the actual body tag so the assertion has teeth.
+  const bodyTag = (connected.match(/<body class="([^"]*)"/) ?? [])[1]
+  assert.ok(bodyTag && bodyTag.split(/\s+/).includes('device-view'),
+    `the connected body carries the device-view class, got body class="${bodyTag}"`)
+  const disconnected = renderDesktopPairingPage({
+    locale: 'en',
+    pairingUrl: 'http://127.0.0.1/pair?token=x',
+    qrSvg: '',
+  })
+  const btnDevicesOff = disconnected.match(/<button id="btnDevices"[^>]*>/)
+  assert.ok(btnDevicesOff, 'the device key renders in every mode')
+  assert.ok(!btnDevicesOff[0].includes('active'), 'it is not the active view before pairing')
+  assert.match(disconnected, /class="mode-panel"/, 'the mode panel shell is intact')
+  assert.doesNotMatch(disconnected, /body class="[^"]*device-view/, 'only the connected page declares the device view')
 })
 
 test('desktop /desktop/status is forbidden without a desktop session', async () => {
@@ -283,12 +333,13 @@ test('M2: revoking the last device frees the connection mode switch', async () =
 })
 
 // ---------------------------------------------------------------------------
-// R1 reflux (change 2026-10-07-fix-pocket-r1-reflux-batch, item 1): the armed
-// two-step revoke must survive the 800ms status poll. renderConnectedDevices
-// used to repaint the device list unconditionally, and that repaint wiped the
-// armed handle — an implicit disarm the user never asked for. Extraction
-// recipe = the house pattern: pull the real function text out of the pages.js
-// module source and run it against stub document / connectedDeviceHtml organs.
+// R1 reflux (change 2026-10-07-fix-pocket-r1-reflux-batch, item 1) — re-anchored
+// by 2026-10-08-move-pocket-devices-into-mode-bar §10.4 R-7: the device list no
+// longer repaints on the 800ms status poll (the old row was deleted), it is
+// re-rendered only on demand via loadDevicePanel. So the armed two-step revoke
+// can no longer be wiped by background polling. The pin that survives is the
+// invariant that NOTHING in poll / applyTunnelPayload / the 1s tick touches
+// the device panel — the armed state has no repaint path to fight.
 // ---------------------------------------------------------------------------
 
 const PAGES_SOURCE = readFileSync(new URL('../lib/pages.js', import.meta.url), 'utf8')
@@ -308,41 +359,21 @@ function extractPageFunction(source, name) {
   throw new Error(`unbalanced braces after ${name}`)
 }
 
-function buildArmedDevicesSandbox(armed) {
-  const armedRow =
-    '<div class="url"><button class="device-revoke armed" data-id="d1">确认吊销</button><span data-revoke-note="1">吊销后该手机需重新配对</span></div>'
-  const host = {
-    innerHTML: armedRow,
-    hidden: false,
-    querySelector: (selector) => (armed && selector === '.device-revoke.armed' ? { className: 'device-revoke armed' } : null),
+test('AC1.1 the device panel has no poll-driven repaint path that can wipe an armed revoke', () => {
+  // poll() and applyTunnelPayload() are the two background writers; the armed
+  // handle on the new panel must survive because neither of them repaints it.
+  for (const name of ['poll', 'applyTunnelPayload']) {
+    const fn = extractPageFunction(PAGES_SOURCE, name)
+    assert.ok(!/deviceList|devicePanel|loadDevicePanel/.test(fn),
+      `${name} must not repaint the device panel (no path to wipe an armed revoke)`)
   }
-  const stubDocument = { getElementById: (id) => (id === 'connectedDevices' ? host : null) }
-  const stubRow = (device) => `<div class="url" data-id="${device.id}">${device.label}</div>`
-  const make = new Function(
-    'document',
-    'connectedDeviceHtml',
-    `${extractPageFunction(PAGES_SOURCE, 'renderConnectedDevices')};return renderConnectedDevices`,
-  )
-  return { render: make(stubDocument, stubRow), host, armedRow, stubRow }
-}
-
-test('AC1.1 an armed revoke survives the 800ms status poll repaint', () => {
-  const box = buildArmedDevicesSandbox(true)
-  box.render([{ id: 'd1', label: 'Pocket/1.0' }])
-  assert.equal(
-    box.host.innerHTML,
-    box.armedRow,
-    'the armed handle and its note marker must survive the poll paint verbatim',
-  )
 })
 
-test('AC1.2 a disarmed list repaints fresh on the next poll', () => {
-  const box = buildArmedDevicesSandbox(false)
-  box.render([{ id: 'd1', label: 'Pocket/1.0' }])
-  assert.equal(
-    box.host.innerHTML,
-    box.stubRow({ id: 'd1', label: 'Pocket/1.0' }),
-    'without an armed handle the repaint runs exactly as before',
-  )
-  assert.equal(box.host.hidden, false, 'a non-empty list stays visible')
+test('AC1.2 the device panel reparts only through loadDevicePanel', () => {
+  // The on-demand re-render is loadDevicePanel — the single writer of
+  // #deviceList contents.
+  const loader = extractPageFunction(PAGES_SOURCE, 'loadDevicePanel')
+  assert.match(loader, /deviceList/, 'loadDevicePanel owns the panel re-render')
+  const retrier = extractPageFunction(PAGES_SOURCE, 'retryLoadDevicePanel')
+  assert.match(retrier, /loadDevicePanel/, 'retry re-runs the panel load')
 })

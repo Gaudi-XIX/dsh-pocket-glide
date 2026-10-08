@@ -29,33 +29,6 @@ window.__ModuleLoader__.load({
         openFailed: '手机连接打开失败，请重启 DSH 后再试。',
         reactUnavailable: 'react 不可用：client 半区不注册 UI（请核对 package.json dsh.client.inject）',
         slotsUnavailable: 'slots 服务不可用：UI 未挂载（请核对 package.json dsh.client.inject）',
-        tabConnect: '连接',
-        tabDevices: '已配对设备',
-        devicesLoading: '正在读取设备列表…',
-        devicesEmpty: '还没有已配对的设备。',
-        devicesFailed: '设备列表读取失败。',
-        retry: '重试',
-        deviceOnline: '在线',
-        deviceOffline: '离线',
-        deviceFingerprint: '指纹',
-        firstPaired: '首次配对',
-        credExpiry: '凭证到期',
-        lastSeen: '最后上线',
-        neverSeen: '未记录',
-        permLan: '仅本地',
-        permLanWan: '本地+公网',
-        permBadge: '通道权限：{v}',
-        permMakeLan: '切为仅本地',
-        permMakeWan: '开启公网',
-        extend: '延长30天',
-        credExpiredFmt: '{d}（已过期）',
-        revoke: '吊销',
-        revokeArmed: '确认吊销',
-        revokeConfirm: '吊销后该设备需重新配对。确认吊销？',
-        extendDone: '已延长 30 天',
-        permDone: '权限已更新',
-        revokeDone: '已吊销',
-        actionFailed: '操作失败',
       },
       en: {
         label: 'pocket',
@@ -65,33 +38,6 @@ window.__ModuleLoader__.load({
         openFailed: 'Failed to open the phone connection. Restart DSH and try again.',
         reactUnavailable: 'react unavailable: the client half registers no UI (check dsh.client.inject in package.json)',
         slotsUnavailable: 'slots service unavailable: UI not mounted (check dsh.client.inject in package.json)',
-        tabConnect: 'Connect',
-        tabDevices: 'Paired devices',
-        devicesLoading: 'Loading the device list…',
-        devicesEmpty: 'No paired devices yet.',
-        devicesFailed: 'Failed to load the device list.',
-        retry: 'Retry',
-        deviceOnline: 'online',
-        deviceOffline: 'offline',
-        deviceFingerprint: 'Fingerprint',
-        firstPaired: 'First paired',
-        credExpiry: 'Credential expires',
-        lastSeen: 'Last seen',
-        neverSeen: 'never',
-        permLan: 'LAN only',
-        permLanWan: 'LAN + public',
-        permBadge: 'Access: {v}',
-        permMakeLan: 'Restrict to LAN',
-        permMakeWan: 'Allow public',
-        extend: 'Extend 30 days',
-        credExpiredFmt: '{d} (expired)',
-        revoke: 'Revoke',
-        revokeArmed: 'Confirm revoke',
-        revokeConfirm: 'This device must pair again after revocation. Revoke?',
-        extendDone: 'Extended by 30 days',
-        permDone: 'Access updated',
-        revokeDone: 'Revoked',
-        actionFailed: 'Action failed',
       },
     }
     var ctxRef = null /* apply(ctx) 到达后才有宿主服务；factory 期只能读 <html lang> */
@@ -177,44 +123,6 @@ window.__ModuleLoader__.load({
       '.dsh-pocket-close:hover { background: rgba(0,0,0,.12); }',
       '.dsh-pocket-status { display: grid; place-items: center; height: 100%; padding: 24px;',
       '  text-align: center; color: #81858c; font-size: 13px; }',
-      /* —— 已配对设备页签与设备卡（client 半区自绘，桥端只出 JSON）—— */
-      '.dsh-pocket-tabs { display: flex; gap: 4px; padding: 10px 12px 0; flex: none; }',
-      '.dsh-pocket-tab { appearance: none; border: 1px solid transparent; border-bottom: none;',
-      '  background: transparent; color: #6b6f76; font: inherit; font-size: 13px; line-height: 1;',
-      '  padding: 8px 14px; border-radius: 9px 9px 0 0; cursor: pointer; }',
-      '.dsh-pocket-tab:hover { background: rgba(0,0,0,.05); }',
-      '.dsh-pocket-tab[aria-selected="true"] { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.06));',
-      '  color: var(--dsw-alias-label-primary, #1f2329); font-weight: 600; }',
-      '.dsh-pocket-tab:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #4e6af2);',
-      '  outline-offset: -2px; }',
-      '.dsh-pocket-devices { overflow-y: auto; padding: 14px 16px 18px; display: grid;',
-      '  gap: 10px; align-content: start; }',
-      '.dsh-pocket-devices-note { color: #81858c; font-size: 13px; text-align: center; padding: 24px 0; }',
-      '.dsh-pocket-device { border: 1px solid rgba(0,0,0,.08); border-radius: 12px; padding: 10px 12px;',
-      '  display: grid; gap: 6px; font-size: 12.5px; color: #3d4148; background: #fff; }',
-      '.dsh-pocket-device.is-offline { opacity: .78; }',
-      '.dsh-pocket-device-head { display: flex; align-items: center; gap: 8px; min-width: 0; }',
-      '.dsh-pocket-device-name { font-weight: 600; font-size: 13.5px; color: #1f2329;',
-      '  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }',
-      '.dsh-pocket-badge { flex: none; font-size: 11px; line-height: 1; padding: 3px 7px;',
-      '  border-radius: 999px; border: 1px solid rgba(0,0,0,.1); color: #6b6f76; }',
-      '.dsh-pocket-badge.is-on { color: #0d7a3e; border-color: rgba(13,122,62,.35); background: rgba(13,122,62,.07); }',
-      '.dsh-pocket-badge.is-warn { color: #b3261e; border-color: rgba(179,38,30,.35); background: rgba(179,38,30,.06); }',
-      '.dsh-pocket-device-meta { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px;',
-      '  color: #6b6f76; }',
-      '.dsh-pocket-device-meta dt { margin: 0; }',
-      '.dsh-pocket-device-meta dd { margin: 0; color: #3d4148; overflow-wrap: anywhere; }',
-      '.dsh-pocket-device-meta dd.is-expired { color: #b3261e; }',
-      '.dsh-pocket-device-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }',
-      '.dsh-pocket-device-actions button { appearance: none; font: inherit; font-size: 12px; line-height: 1;',
-      '  padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(0,0,0,.12); background: #fff;',
-      '  color: #3d4148; cursor: pointer; }',
-      '.dsh-pocket-device-actions button:hover:not(:disabled) { background: rgba(0,0,0,.05); }',
-      '.dsh-pocket-device-actions button:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #4e6af2);',
-      '  outline-offset: -2px; }',
-      '.dsh-pocket-device-actions button:disabled { opacity: .55; cursor: default; }',
-      '.dsh-pocket-device-actions .is-danger { color: #b3261e; border-color: rgba(179,38,30,.4); }',
-      '.dsh-pocket-device-actions .is-danger.armed { background: #b3261e; color: #fff; font-weight: 600; }',
     ].join('\n')
 
     function ensureStyle() {
@@ -248,7 +156,7 @@ window.__ModuleLoader__.load({
 
     /* ---------------- 配对模态（原生 DOM，内部整页来自桥） ---------------- */
 
-    var modal = { open: false, overlay: null, body: null, panel: null, close: null, frame: null, statusKey: 'opening', tab: 'connect', tabs: null, devices: null }
+    var modal = { open: false, overlay: null, body: null, panel: null, close: null, frame: null, statusKey: 'opening' }
 
     function onKeydown(event) {
       if (event.key === 'Escape' && modal.open) closeModal()
@@ -276,186 +184,6 @@ window.__ModuleLoader__.load({
       modal.panel = null
       modal.close = null
       modal.frame = null
-      modal.tabs = null
-      modal.devices = null
-      modal.tab = 'connect'
-    }
-
-    /* ---------------- 已配对设备（client 半区管理页，桥端 /desktop/devices 出数据） ---------------- */
-
-    function localeTag() {
-      return locale === 'zh' ? 'zh-CN' : 'en-US'
-    }
-
-    /* 时间戳 → 本地短格式；0/缺值返回占位。 */
-    function formatTime(ts) {
-      if (typeof ts !== 'number' || ts <= 0) return t('neverSeen')
-      try {
-        return new Date(ts).toLocaleString(localeTag(), {
-          year: 'numeric', month: '2-digit', day: '2-digit',
-          hour: '2-digit', minute: '2-digit',
-        })
-      } catch (eTime) {
-        return String(ts)
-      }
-    }
-
-    function el(tag, className, textContent) {
-      var node = document.createElement(tag)
-      if (className) node.className = className
-      if (textContent !== undefined) node.textContent = textContent
-      return node
-    }
-
-    function deviceActionNote(card, key) {
-      var note = card.querySelector('.dsh-pocket-action-note')
-      if (!note) {
-        note = el('div', 'dsh-pocket-action-note')
-        note.style.cssText = 'font-size:12px;color:#0d7a3e;'
-        card.appendChild(note)
-      }
-      note.textContent = t(key)
-    }
-
-    async function postDeviceAction(path, payload, card, doneKey) {
-      try {
-        var res = await fetch(path, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) throw new Error(String(res.status))
-        if (card) deviceActionNote(card, doneKey)
-        await refreshDevices()
-      } catch (eAction) {
-        if (card) deviceActionNote(card, 'actionFailed')
-      }
-    }
-
-    function metaRow(dl, termKey, value, isExpired) {
-      dl.appendChild(el('dt', null, t(termKey)))
-      var dd = el('dd', isExpired ? 'is-expired' : null, value)
-      dl.appendChild(dd)
-      return dd
-    }
-
-    function formatWith(key, value) {
-      return t(key).replace('{v}', value).replace('{d}', value)
-    }
-
-    function deviceCard(device) {
-      var card = el('div', 'dsh-pocket-device' + (device.online ? '' : ' is-offline'))
-      card.dataset.deviceId = String(device.id || '')
-
-      var head = el('div', 'dsh-pocket-device-head')
-      head.appendChild(el('span', 'dsh-pocket-device-name', String(device.label || 'Phone')))
-      var badge = el('span', 'dsh-pocket-badge' + (device.online ? ' is-on' : ''), t(device.online ? 'deviceOnline' : 'deviceOffline'))
-      head.appendChild(badge)
-      card.appendChild(head)
-
-      var dl = el('dl', 'dsh-pocket-device-meta')
-      metaRow(dl, 'deviceFingerprint', String(device.fingerprint || device.id || ''))
-      metaRow(dl, 'firstPaired', formatTime(device.firstPairedAt))
-      var expired = typeof device.expiresAt === 'number' && device.expiresAt <= Date.now()
-      metaRow(dl, 'credExpiry', expired ? formatWith('credExpiredFmt', formatTime(device.expiresAt)) : formatTime(device.expiresAt), expired)
-      metaRow(dl, 'lastSeen', formatTime(device.lastSeenAt))
-      card.appendChild(dl)
-
-      var actions = el('div', 'dsh-pocket-device-actions')
-      /* 权限切换：按钮文案=点下去会变成的状态（现态在 meta 区已示）。 */
-      var isWan = device.permission === 'lan+wan'
-      var permBtn = el('button', null, t(isWan ? 'permMakeLan' : 'permMakeWan'))
-      permBtn.type = 'button'
-      var permBadge = el('span', 'dsh-pocket-badge' + (isWan ? ' is-on' : ' is-warn'), formatWith('permBadge', t(isWan ? 'permLanWan' : 'permLan')))
-      permBadge.style.marginRight = 'auto'
-      permBadge.style.alignSelf = 'center'
-      actions.appendChild(permBadge)
-      permBtn.addEventListener('click', function () {
-        permBtn.disabled = true
-        postDeviceAction('/desktop/device/permission', {
-          deviceId: device.id,
-          permission: isWan ? 'lan' : 'lan+wan',
-        }, card, 'permDone')
-      })
-      actions.appendChild(permBtn)
-
-      var extendBtn = el('button', null, t('extend'))
-      extendBtn.type = 'button'
-      extendBtn.addEventListener('click', function () {
-        extendBtn.disabled = true
-        postDeviceAction('/desktop/device/extend', { deviceId: device.id }, card, 'extendDone')
-      })
-      actions.appendChild(extendBtn)
-
-      var revokeBtn = el('button', 'is-danger', t('revoke'))
-      revokeBtn.type = 'button'
-      revokeBtn.title = t('revokeConfirm')
-      var revokeTimer = null
-      var disarmRevoke = function () {
-        if (revokeTimer !== null) { clearTimeout(revokeTimer); revokeTimer = null }
-        revokeBtn.classList.remove('armed')
-        revokeBtn.dataset.armed = ''
-        revokeBtn.textContent = t('revoke')
-        revokeBtn.title = t('revokeConfirm')
-      }
-      revokeBtn.addEventListener('click', function () {
-        if (revokeBtn.dataset.armed !== '1') {
-          revokeBtn.dataset.armed = '1'
-          revokeBtn.classList.add('armed')
-          revokeBtn.textContent = t('revokeArmed')
-          if (revokeTimer !== null) clearTimeout(revokeTimer)
-          revokeTimer = setTimeout(disarmRevoke, 3000)
-          return
-        }
-        if (revokeTimer !== null) { clearTimeout(revokeTimer); revokeTimer = null }
-        revokeBtn.disabled = true
-        postDeviceAction('/desktop/revoke', { deviceId: device.id }, card, 'revokeDone')
-      })
-      actions.appendChild(revokeBtn)
-      card.appendChild(actions)
-      return card
-    }
-
-    async function refreshDevices() {
-      if (!modal.devices || !modal.open) return
-      var host = modal.devices.querySelector('.dsh-pocket-device-list')
-      if (!host) return
-      try {
-        var res = await fetch('/desktop/devices', { headers: { 'content-type': 'application/json' } })
-        if (!res.ok) throw new Error(String(res.status))
-        var body = await res.json()
-        if (!modal.devices || !modal.open) return
-        host.textContent = ''
-        var list = Array.isArray(body && body.devices) ? body.devices : []
-        if (!list.length) {
-          host.appendChild(el('div', 'dsh-pocket-devices-note', t('devicesEmpty')))
-          return
-        }
-        for (var i = 0; i < list.length; i++) host.appendChild(deviceCard(list[i]))
-      } catch (eLoad) {
-        if (!modal.devices || !modal.open) return
-        host.textContent = ''
-        var note = el('div', 'dsh-pocket-devices-note', t('devicesFailed'))
-        var retry = el('button', null, t('retry'))
-        retry.type = 'button'
-        retry.addEventListener('click', function () { refreshDevices() })
-        note.appendChild(document.createElement('br'))
-        note.appendChild(retry)
-        host.appendChild(note)
-      }
-    }
-
-    function switchTab(tab) {
-      modal.tab = tab
-      if (modal.tabs) {
-        var buttons = modal.tabs.querySelectorAll('.dsh-pocket-tab')
-        for (var i = 0; i < buttons.length; i++) {
-          buttons[i].setAttribute('aria-selected', buttons[i].dataset.tab === tab ? 'true' : 'false')
-        }
-      }
-      if (modal.frame) modal.frame.style.display = tab === 'connect' ? 'block' : 'none'
-      if (modal.devices) modal.devices.style.display = tab === 'devices' ? 'grid' : 'none'
-      if (tab === 'devices') refreshDevices()
     }
 
     /* 语言切换时将已打开的模态外壳文案重解析（内嵌配对页自带中英，不受影响）。 */
@@ -463,19 +191,11 @@ window.__ModuleLoader__.load({
       if (!modal.open) return
       if (modal.panel) modal.panel.setAttribute('aria-label', t('label'))
       if (modal.close) modal.close.setAttribute('aria-label', t('close'))
-      if (modal.tabs) {
-        var buttons = modal.tabs.querySelectorAll('.dsh-pocket-tab')
-        for (var i = 0; i < buttons.length; i++) {
-          buttons[i].textContent = t(buttons[i].dataset.tab === 'devices' ? 'tabDevices' : 'tabConnect')
-        }
-      }
       if (modal.frame) modal.frame.setAttribute('title', t('frameTitle'))
       if (modal.body) {
         var shown = modal.body.querySelector('.dsh-pocket-status')
         if (shown) shown.textContent = t(modal.statusKey)
       }
-      /* 设备页签开着：整列表重拉，卡片文案跟语言走。 */
-      if (modal.tab === 'devices') refreshDevices()
     }
 
     /* 状态文案走键，语言切换后可重解析。 */
@@ -498,7 +218,6 @@ window.__ModuleLoader__.load({
       ensureStyle()
       modal.open = true
       modal.statusKey = 'opening'
-      modal.tab = 'connect'
 
       var overlay = document.createElement('div')
       overlay.className = 'dsh-pocket-overlay'
@@ -515,25 +234,6 @@ window.__ModuleLoader__.load({
       close.textContent = '✕'
       close.addEventListener('click', closeModal)
 
-      /* 页签：连接（桥端配对页 iframe）/ 已配对设备（本文件自绘管理页）。 */
-      var tabs = document.createElement('div')
-      tabs.className = 'dsh-pocket-tabs'
-      tabs.setAttribute('role', 'tablist')
-      var tabConnect = el('button', 'dsh-pocket-tab', t('tabConnect'))
-      tabConnect.type = 'button'
-      tabConnect.dataset.tab = 'connect'
-      tabConnect.setAttribute('role', 'tab')
-      tabConnect.setAttribute('aria-selected', 'true')
-      var tabDevices = el('button', 'dsh-pocket-tab', t('tabDevices'))
-      tabDevices.type = 'button'
-      tabDevices.dataset.tab = 'devices'
-      tabDevices.setAttribute('role', 'tab')
-      tabDevices.setAttribute('aria-selected', 'false')
-      tabConnect.addEventListener('click', function () { switchTab('connect') })
-      tabDevices.addEventListener('click', function () { switchTab('devices') })
-      tabs.appendChild(tabConnect)
-      tabs.appendChild(tabDevices)
-
       var body = document.createElement('div')
       body.style.cssText = 'flex:1;min-height:0;position:relative;'
 
@@ -545,31 +245,16 @@ window.__ModuleLoader__.load({
       var frame = document.createElement('iframe')
       frame.setAttribute('title', t('frameTitle'))
       frame.setAttribute('allow', 'clipboard-write')
-      frame.style.display = 'none'
       frame.addEventListener('load', function () {
         var node = body.querySelector('.dsh-pocket-status')
         if (node && node.parentNode) node.parentNode.removeChild(node)
-        // Only the connect tab owns the frame: a user who switched to the
-        // device list while the pairing page loaded must not have it painted
-        // back over their screen.
-        if (modal.tab === 'connect') frame.style.display = 'block'
+        frame.style.display = 'block'
       })
       frame.addEventListener('error', function () {
         setStatus('openFailed')
       })
       body.appendChild(frame)
 
-      /* 已配对设备页签的本体：数据由桥端 /desktop/devices 出，操作走既有
-       * /desktop/revoke 与新的 extend/permission 端点（宿主 webServer 前缀
-       * 代理 /desktop*，应用源内同源可达，桌面 cookie 由代理注入）。 */
-      var devices = el('div', 'dsh-pocket-devices')
-      devices.style.display = 'none'
-      var deviceList = el('div', 'dsh-pocket-device-list')
-      deviceList.appendChild(el('div', 'dsh-pocket-devices-note', t('devicesLoading')))
-      devices.appendChild(deviceList)
-      body.appendChild(devices)
-
-      panel.appendChild(tabs)
       panel.appendChild(body)
       panel.appendChild(close)
       overlay.appendChild(panel)
@@ -586,8 +271,6 @@ window.__ModuleLoader__.load({
       modal.panel = panel
       modal.close = close
       modal.frame = frame
-      modal.tabs = tabs
-      modal.devices = devices
       frame.src = PAIRING_PATH
     }
 

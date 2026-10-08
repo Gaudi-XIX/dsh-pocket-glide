@@ -58,6 +58,22 @@
 
 生效需要重启 DeepSeek Harness。测试基线 756→933（截至本笔 10-08 14:1x 复跑；并行线仍在追加，引用前先复刷）。
 
+### 修复（用户可见）
+
+- **配对设备页并入横向模式栏**（feat-pocket-devices-into-mode-bar）：桌面桥接页原本悬在 iframe 之上的那条
+  「已配对设备」页签（白底黑字、纯英文，与整页暗色/中英不搭）被**整条删除**，设备档案改由
+  `.mode-switch` 里与「WiFi连接模式/互联网连接模式」并列的第三键「连接设备管理」承载——三键互斥，
+  点它即整体替换二维码/链接内容为设备列表，且该键**不受连接状态禁用**（连着手机也能管设备，不倒退）。
+  设备档案八项能力（在线态/指纹/首次配对/凭证到期/最后上线/仅本地↔本地+公网/延长 30 天/两步确认吊销）
+  与旧页签完全等价，**无一处减配**；设备卡改用桥页 `var(--surface/--ink/--line/--danger)` 主题变量
+  （修掉原来白底黑字不合暗色的问题），中英文随桥页 locale 源走（修掉原来外壳页签全英文的问题）。
+  测试同步收紧：新增**执行级看门狗** `test/device-panel-exec.test.js`（把 `lib/pages.js` 真实函数体
+  splice 进 node:vm 沙箱、用 FakeNode/fetch 桩驱动真实 click/fetch 路径，非字符串断言——已用变异实验
+  证明删掉委托 case、抹掉 `data-target-perm`、反向注入 `devicePermLabel` 均会使其变红），另有
+  `tools/render-stub-desktop.mjs` 供目验 full/empty/failed/connected/tunnel 状态页。
+
+生效需要重启 DeepSeek Harness。测试基线 947→949（截至本笔 10-08 16:0x 复跑；并行线仍在追加，引用前先复刷）。
+
 ## 0.3.1 — 2026-10-07
 
 ### 新增（用户可见）

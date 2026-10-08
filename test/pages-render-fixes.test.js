@@ -421,9 +421,6 @@ test('T6 the QR countdown speaks minutes past 90s and never says 秒后刷新', 
 test('T6 the armed revoke states its consequence in the row, not only in title', () => {
   const html = renderDesktopPairingPage({
     locale: 'zh',
-    connectedDevices: [
-      { id: 'dev-1', label: 'Pocket/1.0', remoteAddress: '127.0.0.1', issuedAt: Date.now(), expiresAt: Date.now() + 60000 },
-    ],
     pairingUrl: 'http://127.0.0.1/pair?token=x',
     qrSvg: '',
   })
