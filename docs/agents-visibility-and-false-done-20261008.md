@@ -4,6 +4,9 @@
 > `F:\AgentData\work\20261008-pocket-agent-display-probe\HOST-FACTS.md`）的交叉验证，**据此改掉了第一版写错的字段名**
 > （`parentId` → 实为 `parentSessionId`），并把两条由取证带出的新事实升级成结论；另补 §6 第二条 bug（LEAD 第一版漏判）。
 > 两处冲突的处理都写在 §8。
+> **12:2x 第三次修订**：按用户提示接上昨晚那条 ZCode 线（卡 `2026-10-07-feat-pocket-process-render-overhaul`，合笔 `1eb9f1f`，已实测上线），
+> §7 据此把「没有任何 change 动过子代理显示」这句**判错了范围**的旧表述改成「动过，但只到语言层」，并在 §5-⑦ 补上
+> 「看齐 ZCode」里没做完的那一半（状态行 + 已工作时长）与其三条现成避坑教训。
 
 调研时间：2026-10-08 W4 11:47–12:2x（数据基准：`D:\DSH\resources\app.asar` 121,348,951 B，其内 `dsh/package.json`
 = `@deepseek-ai/dsh-desktop-runtime` **version 0.2.0-rc.2**；`~/.dsh/storages/session_projcache/sessions` 263 个投影全量扫描；
@@ -93,6 +96,22 @@ provisioning 与 running 成员用共享 ongoing loading，failed 红点），�
    `subagents.listChildren/listDescendants` **未标 @Remote**（第三方插件用不了，只能自己按 `parentSessionId` 组树）。
 6. **ACP 舰队台账（另议）**：哪家 CLI / 冷却 / 额度这类信息在 `dsh-acp-progress` 自己的运行态里，跨插件，成本远高于 1–2 项。
 
+### ⑦ 呈现配方：这条正是「看齐 ZCode 手机连接页」里**没做完的那一半**
+
+昨晚那批卡的立项语就是「交互模式对齐 ZCode」（planning-context 目标句 + 用户原话「ZCode 做得很好」）。ZCode 侧的底稿
+`F:\AgentData\work\20261007-pocket-copy-survey\WP1-ZCODE.md` §3.4「任务状态行 / 已工作时长」（`statusFormatting.ts`，Top10 第 6 条，估 1 天/中风险）
+**九卡批次里一张都没做它**。它的形态不是任务树，而是**状态行一句话 + 已工作时长** —— 恰好是本 bug 需要的东西，而且话已经造好了：
+
+- 现成件（`1eb9f1f` 已上线）：`toolClusterState()`、`renderToolCard`、`L.stepVerbs/stepDone` 里的 `subagents` 类动词
+  ⇒ 行摘要直接取「正在协调子智能体」，不必新写文案，也不必新造渲染器官。
+- **三个可省的坑（ZCode 已付过学费的生产事故，逐条照抄）**：
+  1. 计时起点**别用 `createdAt`/`updatedAt`** —— draft 模式下 `createdAt` 可能远早于 prompt，`updatedAt` 会被任意写盘刷新；
+     宿主侧对应物是 `subagentTiming.active{since,through}`，取 `since`。
+  2. **别用任务级聚合摘要**冒充本轮进度（会把历史轮次并进来）。
+  3. **别读最后一条消息**当「在干什么」—— 它可能正是用户自己发的 prompt；只取最近的 assistant / tool-call。
+- 诚实出口：父行取不到子行状态时（`agentAvailable===false` 或父目录未加载），显示「状态未知」而**不是** done——
+  这条是 §4 末尾限制的落地方式，也是本 bug 唯一能保证「不再骗人」的部分。
+
 ## 6. 顺带挖出的第二条 bug（独立，级别低）：权限预设下拉的当前值读错了源
 
 - **事实**：`agentPreset` 在宿主侧存在于 `SessionHeader`（可选）与投影 `SessionProjectionMap.agentPreset: string|null`，
@@ -114,7 +133,14 @@ provisioning 与 running 成员用共享 ongoing loading，failed 红点），�
 - 活跃卡与归档卡（`.agents/flow/changes/` 及 `archive/`、`rejected/`）里 pocket 相关 30+ 张，唯一沾 `subagent` 的是
   `2026-10-03-fix-pocket-boot-focus-subagent`（后续 `subagent-session-hiding` / `subagent-session-dom-assertions`），**方向相反**：
   把子代理会话从手机端隐藏并加断言（`CHANGELOG.md` 0.2.1：「子代理会话在手机端不可见」是被刻意锁定的行为）。
-- `2026-10-07-feat-pocket-process-render-overhaul` 只在**转录的工具簇动词**里认得 `subagent` 这个工具名（`clusterToolBlocks`），与运行态显示无关。
+- `2026-10-07-feat-pocket-process-render-overhaul`（昨晚 01:40 完成，今早 05:12 与另四卡合笔 `1eb9f1f`，0.4.0 定稿）
+  **确实动了「子代理的显示」，但只到语言层**：`lib/constants.js` 的 `toolActivityCategory()` 把 `subagent_*`/`task` 归入
+  `subagents` 类，动词表取宿主官方 `message.stepProcess.*`（zh：「正在协调子智能体 / 已协调子智能体」），
+  聚合规则明文 **questions/subagents 永不合并**（委派是事件不是批量活），目验项含「一轮里连续两次子代理各是独立卡」。
+  ⇒ 用户「记得有个 change 在做」**是准确的**；缺口在于**那句话只活在当轮的过程折叠里**（compact 态收起后只见「过程」一行），
+  既没上升到会话行，也没进完成推送判据——所以 §2 那三个症状一个都没被这张卡触及。
+  已实测上线：现网壳 `app.js?l=zh&h=61b2fbbe0e2d` 与磁盘树重算 `sha256(mobilePageAssets({locale:'zh'}).js)` 前 12 位一致。
+  ⚠️ 治理面未完：该卡目录只有 `planning-context.md` + `HANDOFF.md`，**缺 proposal/design/tasks**，且未 ship/归档（仍挂在活跃 `changes/`）。
 - 2026-10-07 可抄性调研只留一句方向结论（WP3：手机上看子代理照 LobeChat 折叠卡那种形态做），没落成卡。
 - `README.md`「已知边界」节没有这条 —— 当前文档把它当成不存在。本文件即为补账。
 
