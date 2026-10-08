@@ -338,6 +338,18 @@ deliberately literal, and each one carries a comment naming the sentence it prot
 
 ## Known limitations
 
+- **Tested and CI-verified on Windows only.** CI runs `windows-latest`. Six assertions in the
+  suite encode Windows behaviour rather than product behaviour and fail on a POSIX runner
+  (the first CI run showed `tests 927 / pass 919 / fail 6` on `ubuntu-latest`): two treat
+  `%LOCALAPPDATA%\dsh-pocket` as *the* data root, two force a rename to fail by holding the
+  target file open (Windows locks it, POSIX does not), and two build their vendor fixture
+  with a Windows PE header (`MZ`) while the resolver's plausibility check is per-platform —
+  `tools/fetch-cloudflared.mjs` accepts gzip for a `.tgz` asset, `MZ` on Windows and ELF on
+  Linux, because `linux-x64` pins a bare `cloudflared-linux-amd64` binary. The runtime
+  itself is platform-aware — `lib/pin-store.js` falls back
+  to `~/.dsh-pocket` off Windows and `lib/tunnel.js` picks `XDG_CACHE_HOME` and the bare
+  `cloudflared` binary — so this is a **test-suite gap, not a claim that Linux works**.
+  Running it on Linux or macOS today is untested; see the note in `.github/workflows/ci.yml`.
 - **A tunnel costs you real-time streaming.** Cloudflare's quick tunnel buffers SSE frames, so
   over a tunnel the phone falls back to incremental polling (from 1.5 s, adapting, and pulling
   immediately when the page returns to the foreground). On the LAN the stream is real time.

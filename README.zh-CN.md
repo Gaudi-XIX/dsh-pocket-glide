@@ -278,6 +278,16 @@ node tools/smoke-pairing.mjs    # 配对 → 设备 cookie → 设备可见性�
 
 ## 已知限制
 
+- **只在 Windows 上验证、CI 也只跑 Windows。** 测试里有 6 条断言钉的是 Windows 行为而非产品行为，
+  在 POSIX runner 上会红（首轮 CI 在 `ubuntu-latest` 上是 `tests 927 / pass 919 / fail 6`）：两条把
+  `%LOCALAPPDATA%\dsh-pocket` 当成唯一的数据根；两条靠"占住目标文件不让它 rename 成功"来构造失败
+  （Windows 会锁打开的文件，POSIX 不会）；两条把 vendor fixture 写成带 Windows PE 头（`MZ`）的
+  假文件，而解析器的"像不像可执行镜像"检查是分平台的——`tools/fetch-cloudflared.mjs` 对 `.tgz`
+  认 gzip 头、Windows 上认 `MZ`、Linux 上认 ELF，因为 `linux-x64` 钉的是裸二进制
+  `cloudflared-linux-amd64`。**运行时本身是分平台的**——`lib/pin-store.js` 在非 Windows
+  回落到 `~/.dsh-pocket`，`lib/tunnel.js` 认 `XDG_CACHE_HOME` 与不带 `.exe` 的 `cloudflared`。
+  所以这是**测试面的缺口，不是"Linux 能用"的承诺**；今天要在 Linux/macOS 上跑，属于未验证状态。
+  判据详见 `.github/workflows/ci.yml` 里的注释。
 - **走隧道就失去实时流。** Cloudflare quick tunnel 会缓冲 SSE 帧，所以隧道下手机降级为增量轮询
   （1.5 s 起自适应，回到前台立刻拉一次）。局域网是实时流。
 - **进入一条还没画出来的会话会多发一次头页请求。** 这是空转录唯一的自举路径，且有两道门挡住空转。行为有测试钉住。

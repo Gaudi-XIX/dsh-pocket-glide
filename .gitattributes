@@ -1,0 +1,9 @@
+# Line endings are pinned so that what a contributor checks out is byte-identical to
+# what CI checks out. The repository blobs are LF already; without this rule a
+# Windows contributor would get CRLF in the working tree while CI would get LF, and
+# this plugin's tests assert on rendered page bytes.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.woff binary
+*.woff2 binary

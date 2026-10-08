@@ -16,7 +16,35 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        # Windows only, deliberately. Six assertions encode Windows behaviour rather
+        # than product behaviour, so they fail on a POSIX runner (observed on the
+        # first CI run, 2026-10-08, ubuntu-latest: tests 927 / pass 919 / fail 6):
+        #   test/file-log.test.js  "no DSH_HOME: the password stays exactly where it
+        #                          is" and "a password written by an override run is
+        #                          still found once the override is gone" — both treat
+        #                          %LOCALAPPDATA%\dsh-pocket as *the* machine
+        #                          location. That location only exists on win32; on
+        #                          Linux the store resolves to ~/.dsh-pocket, so the
+        #                          expected and actual paths swap.
+        #   test/pin-store-width.test.js  "a failed rename leaves the stored password
+        #                          untouched and reports false" and "a write leaves no
+        #                          temporary file behind, successful or not" — both
+        #                          force the rename to fail by holding the target open
+        #                          with openSync(). Windows locks an open file; POSIX
+        #                          does not, so the rename succeeds and the write
+        #                          reports true, which the assertion reads as a defect.
+        #   test/tunnel.test.js:929,953   the vendor fixture is built with a Windows PE
+        #     header (`payload.write('MZ', 0)`), and the resolver's plausibility check is
+        #     per-platform — `tools/fetch-cloudflared.mjs` accepts gzip for a `.tgz`
+        #     asset, `MZ` on win32 and ELF on linux, because linux-x64's pinned asset is
+        #     a bare `cloudflared-linux-amd64` binary. So an MZ blob is correctly
+        #     rejected off Windows, and the fixture (plus its
+        #     `file: 'cloudflared-windows-amd64.exe'` manifest) is what is
+        #     Windows-specific.
+        # The plugin is distributed as a Windows desktop-host plugin today. Widening
+        # this matrix needs those six made platform-aware in the source tree — not a
+        # skip marker here.
+        os: [windows-latest]
         node: ['24.x']
     steps:
       - uses: actions/checkout@v4
