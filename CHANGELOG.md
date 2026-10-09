@@ -4,6 +4,27 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.4.8 — 2026-10-10
+
+### 修复（用户可见）
+
+- **「点了测试但好像没反应」的定位盲区**：iLink 的 sendmessage 成功时不报错也不落任何日志，
+  日志里「没有新行」一直被读成「没发出去」。现在成功也落一行
+  `notify sent: clawbot ok message_id=<服务端分配的消息号>`，日志沉默不再等于失败，
+  消息号可以直接和微信里那条消息对照。
+- **顺带坐实两个协议事实**（本机实测）：`to_user_id` 是**必填**——留空只靠 `context_token`
+  寻址会被服务端回 `ret:-2 invalid arguments`；成功响应体不是空体，而是
+  `{"message_id":<64 位整数>}`（此前按「空体 200」记，见 0.4.7 节，此处更正）。
+
+### 施工账
+
+- `lib/clawbot.js` 的 `sendTextMessage`：返回体新增 `messageId`，并且**从响应原文里用正则取
+  `message_id`，不走 `JSON.parse`** —— 它是 64 位整数（实测 7514407535056518664），JSON.parse
+  会在超过 `Number.MAX_SAFE_INTEGER` 时静默舍入（成 …519000），那样的号没法用来对账。
+- `lib/notify.js` 的 clawbot 分支：成功路径补一行 info 日志（带 message_id 时带上，纯数字才带）。
+- `test/clawbot.test.js` 补 2 条：`sendTextMessage` 回传未舍入的 message_id、
+  业务 `ret != 0`（如 `-14` 会话过期）仍判失败并透出 `errmsg`；notifySend 成功必须落 info 行。
+
 ## 0.4.7 — 2026-10-10
 
 ### 新增（用户可见）

@@ -155,7 +155,7 @@ test('clawbot: sendTextMessage posts formatted text payload', async () => {
     return {
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ ret: 0 })
+      text: async () => '{"ret":0,"message_id":7514407535056518664}'
     }
   }
   const res = await sendTextMessage('bot_tok', {
@@ -169,6 +169,23 @@ test('clawbot: sendTextMessage posts formatted text payload', async () => {
   assert.equal(outboundBody.msg.context_token, 'ctx_tok')
   assert.equal(outboundBody.msg.to_user_id, 'user_dest')
   assert.equal(outboundBody.msg.item_list[0].text_item.text, 'Hello WeChat!')
+  // iLink answers an accepted sendmessage with a server-assigned message_id.
+  assert.equal(res.messageId, '7514407535056518664')
+})
+
+test('clawbot: sendTextMessage surfaces business ret as failure', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ ret: -14, errmsg: 'session expired' })
+  })
+  const res = await sendTextMessage('bot_tok', {
+    contextToken: 'ctx_tok',
+    toUserId: 'user_dest',
+    text: 'Hi'
+  }, { fetchImpl })
+  assert.equal(res.ok, false)
+  if (!res.ok) assert.equal(res.error, 'session expired')
 })
 
 test('notifySend with clawbot: checks contextToken and sends notification', async () => {
@@ -179,7 +196,7 @@ test('notifySend with clawbot: checks contextToken and sends notification', asyn
     return {
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ ret: 0 })
+      text: async () => '{"ret":0,"message_id":7514407535056518664}'
     }
   }
 
@@ -211,6 +228,9 @@ test('notifySend with clawbot: checks contextToken and sends notification', asyn
   })
   assert.equal(resWithCtx, true)
   assert.equal(sent, true)
+  // 本机实测：成功发送原先零日志，「日志无新行」被误读为没发出去，故成功侧也落一行。
+  assert.ok(logs.some(l => l.lvl === 'info' && l.msg.includes('message_id=7514407535056518664')),
+    `expected success line with message_id, got ${JSON.stringify(logs)}`)
 })
 
 test('settings store: preserves and sanitizes clawbot configuration', () => {
