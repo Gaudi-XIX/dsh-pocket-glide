@@ -659,7 +659,17 @@ test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
 // ~0.23 KB en). WARNING: the headroom is nearly gone — the next addition must
 // either raise this number deliberately with a receipt of its own, or pay for
 // itself by removing bytes elsewhere.
-const ASSET_BUDGET_BYTES = 253_000
+//
+// Receipt (2026-10-09, pull-hint + the second ending): budget raised 253_000
+// -> 256_000 — the shell grew ~2.0 KB (zh 252848 -> 254895, en 252768 -> 254819):
+// the #pullHint overlay above #messages (#chatView{position:relative}, the
+// markup, and its visible/armed/loading rules, which reuse .older-spin rather
+// than shipping a second spinner class), hintText() wired into the drag IIFE
+// (touchstart/touchmove/end/settle), three new i18n pairs (olderExhausted,
+// pullHint, pullRelease), the olderExhausted term in olderButtonHtml's canAsk
+// and its fourth label, and #pullHint in the reduced-motion transition list.
+// Headroom left: ~1.1 KB zh / ~1.2 KB en.
+const ASSET_BUDGET_BYTES = 256_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

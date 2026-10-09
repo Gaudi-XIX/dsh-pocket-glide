@@ -258,7 +258,7 @@ function buildPaintSandbox(state = {}) {
   const make = new Function('box', `
     let activeSession=${JSON.stringify(state.activeSession ?? null)}
     let streamEvents=[],olderEvents=[],olderHasMore=${JSON.stringify(state.olderHasMore ?? false)}
-    let olderBusy=false,olderRunBusy=false,sessionBlank=${JSON.stringify(state.sessionBlank ?? true)}
+    let olderBusy=false,olderRunBusy=false,olderExhausted=${JSON.stringify(state.olderExhausted ?? false)},sessionBlank=${JSON.stringify(state.sessionBlank ?? true)}
     let agentRunning=false,pendingQuestion=null
     const turnOpenState=new Map()
     const L=${JSON.stringify(L)}

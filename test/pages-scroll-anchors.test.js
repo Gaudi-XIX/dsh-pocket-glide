@@ -187,7 +187,7 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
   const make = new Function('box', `
     let activeSession='s1'
     let streamEvents=[],olderEvents=[],olderHasMore=false
-    let olderBusy=false,olderRunBusy=false,sessionBlank=false
+    let olderBusy=false,olderRunBusy=false,olderExhausted=false,sessionBlank=false
     let agentRunning=false,pendingQuestion=null
     let followStream=true
     const turnOpenState=new Map()
@@ -241,7 +241,7 @@ test('paintMessages tags the history tail through the real markHistoryTail', () 
   const make = new Function('box', `
     let activeSession='s1'
     let streamEvents=[],olderEvents=[],olderHasMore=false
-    let olderBusy=false,olderRunBusy=false,sessionBlank=false
+    let olderBusy=false,olderRunBusy=false,olderExhausted=false,sessionBlank=false
     let agentRunning=false,pendingQuestion=null
     const turnOpenState=new Map()
     const L={}

@@ -313,6 +313,34 @@ test('the list follows the finger and springs back without the old ring', () => 
   assert.ok(js.includes("if(!active)box.classList.remove('animating')},320)"), 'the resting class is dropped even when no transition frame arrives')
   assert.ok(!js.includes('pullIndicator'), 'the second spinner stays deleted')
   assert.ok(!js.includes('pull-ring'), 'the ring stays deleted')
+  // The replacement for the ring is a sentence, not an animation: it names what
+  // releasing will do, so the gesture is acknowledged before the finger leaves.
+  assert.ok(html.includes('id="pullHint" class="pull-hint" role="status" aria-live="polite"'), 'the hint is a live region above the list')
+  assert.ok(html.includes('#chatView{position:relative}'), 'the hint has a positioning ancestor')
+  assert.ok(js.includes("hint=$('pullHint')"), 'the drag IIFE owns the hint')
+  assert.ok(js.includes("hintText(ready?'armed':'idle')"), 'the hint flips at the threshold, not before')
+  assert.ok(js.includes("hintText('loading');void loadOlder()"), 'and it stays talking while the page is in flight')
+  assert.ok(html.includes('#pullHint.visible{opacity:1'), 'the hint only paints while the drag owns it')
+  assert.ok(html.includes('#pullHint.armed{color:var(--brand)}'), 'armed reads as armed, not as the idle sentence')
+})
+
+// The hint must never promise a release that fetches nothing: once the host has
+// refused an older page, the same row names that end state instead.
+test('the pull hint names the end state instead of arming a dead release', () => {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const hint = betweenA3('function hintText(state)', 'function setPull(px)', js)
+  assert.ok(
+    hint.includes('const inert=!olderHasMore&&(transcriptHasContent()||olderExhausted)'),
+    'inert is the same question the older row asks, not a copy of one branch of it',
+  )
+  assert.ok(
+    hint.includes('inert?transcriptHasContent()?L.olderStart:L.olderExhausted'),
+    'and it splits the two endings the row splits',
+  )
+  assert.ok(
+    hint.includes('busy=state===\'loading\'&&!inert,armed=!inert&&state===\'armed\''),
+    'so neither the armed colour nor the spinner can claim work that will not happen',
+  )
 })
 
 test('one back action always leaves the chat view', () => {
@@ -786,7 +814,7 @@ function buildRowSandbox(state) {
   const body = ['olderButtonHtml', 'transcriptHasContent'].map((name) => extractFunction(js, name)).join('\n')
   return new Function('L', `
     const esc=v=>String(v==null?'':v)
-    let activeSession='s1',olderHasMore=${String(state.olderHasMore ?? false)},olderBusy=false,olderRunBusy=false
+    let activeSession='s1',olderHasMore=${String(state.olderHasMore ?? false)},olderBusy=false,olderRunBusy=false,olderExhausted=${String(state.olderExhausted ?? false)}
     let streamEvents=${JSON.stringify(state.streamEvents ?? [])},olderEvents=${JSON.stringify(state.olderEvents ?? [])}
     ${body}
     return olderButtonHtml
@@ -842,6 +870,18 @@ test('J-1 an exhausted conversation with pages already pulled goes back to being
   const html = buildRowSandbox({ olderHasMore: false, streamEvents: [{ event: { seq: 4 } }], olderEvents: [{ event: { seq: 1 } }] })()
   assert.ok(html.includes('disabled'), 'nothing older is left to ask for')
   assert.ok(html.includes(pageLabels('zh').olderStart), 'and the row says so')
+})
+
+// The other ending, which used to borrow the promise above: the host refused an
+// older page and nothing was ever painted, so there is no first message to be at
+// and no tap left to make. Saying "load more" here was the dead button.
+test('J-1 a refused page over an empty transcript says there is nothing more, not more', () => {
+  const html = buildRowSandbox({ olderHasMore: false, olderExhausted: true })()
+  assert.match(html, /data-older="1"/, 'the row still reports itself')
+  assert.ok(html.includes('disabled'), 'and it is not a tappable promise any more')
+  assert.ok(html.includes(pageLabels('zh').olderExhausted), 'it says nothing more, in its own words')
+  assert.ok(!html.includes(pageLabels('zh').olderMore), 'and never the wording that promised more')
+  assert.ok(!html.includes(pageLabels('zh').olderStart), 'nor a start of a conversation nothing was painted of')
 })
 
 test('J-1 every layer of the pull agrees on the same emptiness test', () => {
