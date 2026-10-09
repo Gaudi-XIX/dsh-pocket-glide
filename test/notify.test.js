@@ -96,10 +96,15 @@ test('notify channels: serverchan query, bark path segments, wxpusher body', asy
   const ok = (text = '{}') => ({ ok: true, text: async () => text })
   const fetchImpl = async (url, init) => {
     seen.push({ url: String(url), init })
-    // WxPusher answers business results in the body: a success is code 1000.
-    return String(url).includes('wxpusher')
-      ? ok('{"code":1000,"msg":"处理成功","data":{}}')
-      : ok()
+    // Business results ride the body for BOTH code-checking channels: WxPusher
+    // success is code 1000, Server酱 success is code 0. An HTTP 200 alone never
+    // counts as delivered (serverchan used to be the exception that lied).
+    const u = String(url)
+    if (u.includes('wxpusher')) return ok('{"code":1000,"msg":"处理成功","data":{}}')
+    if (u.includes('sctapi')) {
+      return ok('{"code":0,"message":"","data":{"pushid":"1","readkey":"r","error":"SUCCESS","errno":0}}')
+    }
+    return ok()
   }
   const log = []
   const logger = (level, message) => log.push(`${level} ${message}`)
