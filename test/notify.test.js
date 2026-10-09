@@ -393,7 +393,13 @@ test('desktop notify endpoints: masked readback, guarded writes, delivered flag'
     const desktop = await t.pairDesktop()
     // Fresh state: off, nothing masked.
     const fresh = await httpFetch(`${t.base}/desktop/notify`, { headers: { Cookie: desktop } })
-    assert.deepEqual(await fresh.json(), { ok: true, channel: 'off', enabled: false, keyMasked: '' })
+    assert.deepEqual(await fresh.json(), {
+      ok: true,
+      channel: 'off',
+      enabled: false,
+      keyMasked: '',
+      clawbot: { bound: false, hasContext: false, userIdMasked: '' }
+    })
     // Save a real channel; the readback is masked and only the mask.
     const save = await httpFetch(`${t.base}/desktop/notify`, {
       method: 'POST',
@@ -401,7 +407,10 @@ test('desktop notify endpoints: masked readback, guarded writes, delivered flag'
       body: JSON.stringify({ channel: 'bark', key: REAL_KEY, enabled: true }),
     })
     assert.equal(save.status, 200)
-    assert.deepEqual(await save.json(), { ok: true, channel: 'bark', enabled: true, keyMasked: 'SE…90AB' })
+    const savedView = await save.json()
+    assert.equal(savedView.channel, 'bark')
+    assert.equal(savedView.enabled, true)
+    assert.equal(savedView.keyMasked, 'SE…90AB')
     const readback = await httpFetch(`${t.base}/desktop/notify`, { headers: { Cookie: desktop } })
     const readbackBody = await readback.json()
     assert.equal(readbackBody.keyMasked.includes(REAL_KEY), false)

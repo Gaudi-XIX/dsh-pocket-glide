@@ -328,7 +328,10 @@ function initHarness(modeView) {
   const sandbox = { document: doc, T, fetch: fetchStub, deviceCardHtml: cardHtml.deviceCardHtml,
     loadDevicePanel: cardHtml.loadDevicePanel,
     renderPendingPairings: () => {}, syncModeControls: () => {}, pollBusy: false, modeSwitching: false,
-    pendingPairings: [], modeView, poll: () => {}, setInterval: () => 0, calls }
+    pendingPairings: [], modeView, poll: () => {}, setInterval: () => 0, calls,
+    // The init tail also repaints the ClawBot binding panel (lib/pages.js);
+    // this harness only cares about the device-list kick, so it gets a stub.
+    renderClawbotView: () => {} }
   vm.createContext(sandbox)
   // The init snippet is async (it awaits loadDevicePanel), so run it via an
   // async IIFE that assigns the promise to a global we can await.

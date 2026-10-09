@@ -4,6 +4,40 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.4.7 — 2026-10-10
+
+### 新增（用户可见）
+
+- **通知可以直连微信了（ClawBot / 微信 iLink 机器人协议）**：通知通道新增 **微信 ClawBot** 一项。
+  此前三类消息（任务完成、等待审批、连接地址变更）只能借道 Server酱 / Bark / WxPusher 这类第三方
+  中转；现在 pocket 自己说微信的 iLink bot 协议，端到端只有你和微信两台机器。
+  **绑定方式**：桌面配对页 → 设备视图 → 通知 → 通道选「微信 ClawBot」→ 点「扫码绑定微信」→
+  手机微信扫码并在手机上点确认 → **在微信里给这个机器人随便发一条消息**（这一步不可省）。
+- **为什么还要发一句话**：iLink 协议里，机器人要给你推消息必须持有 `context_token`，而这个令牌
+  **只能从你发来的消息里换出来**，没有任何「凭空主动推」的接口。所以授权成功后的第一句话是你在微信里发，
+  pocket 收到后回你一条「通道已就绪」，并把令牌落盘；从这一刻起才推得动。
+- **令牌持久化与自动重连**：`context_token` 与 bot token 一起写进设置档（0600），桥起来就自动续上，
+  不用每次重启重新扫码。协议层会话超时（errcode -14）需要重新扫码，届时页面会回到未绑定态。
+- **解绑**：面板上「解除绑定」清掉令牌并停掉轮询，通道回到 off。
+- **已知平台限制**：微信侧对机器人主动发消息有自己的频控（ClawBot 官方口径「10 条 / 24h 需回一句续期」），
+  自建 bot 同样受约束，宽严只能实测。
+
+### 协议实现要点（施工账，防重查）
+
+- 端点：`get_bot_qrcode?bot_type=3` / `get_qrcode_status` / `msg/notifystart` / `getupdates` /
+  `sendmessage`，base = `https://ilinkai.weixin.qq.com`。**只有 notifystart 带 `/msg/` 段**，
+  sendmessage 不带（写错即 404 级失败）。
+- 认证五头缺一即超时：`AuthorizationType: ilink_bot_token`、`Authorization: Bearer <token>`、
+  `X-WECHAT-UIN: base64(random_uint32)`、`iLink-App-Id: bot`、`iLink-App-ClientVersion: 132102`。
+- 出站 `msg`：`message_type:2` / `message_state:2` / `from_user_id:""`（必须空串）/ `client_id` 唯一 /
+  `item_list:[{item_type:1,text_item:{text}}]`。sendmessage 成功判据是**空体 200**；有体时按 `ret` 判。
+- 新增 `lib/clawbot.js`（协议客户端，统一 `{ok,error}` 返回、不抛异常）+ 三个桌面端点
+  （`/desktop/notify/clawbot/{qr,status,reset}`，均过桌面 cookie 与同源校验）+ `CLAWBOT_IDLE_POLL_MS`
+  空批地板（防桩端点或降级端点把事件循环打满）。
+- 新增 11 条测试（`test/clawbot.test.js`）：头构造、二维码解析与失败、三态轮询、notifystart、
+  getupdates、sendmessage、notifySend clawbot 分支（缺 context_token 不得发）、设置档持久化与
+  「未提 clawbot 的保存不得清掉已获令牌」、三个端点 E2E。
+
 ## 0.4.6 — 2026-10-09
 
 ### 性能（用户可见）
