@@ -146,33 +146,36 @@ test('notify channels: serverchan query, bark path segments, wxpusher body', asy
 // WxPusher verdict (2026-10-07-fix-pocket-wxpusher-simple-push): the old bug
 // was judging `response.ok` only while WxPusher reports business failures as
 // HTTP 200 with body `{code, msg}` — code 1000 is the only delivered.
-test('notify wxpusher: an spt. key routes to simple-push and summary is capped at 100', async () => {
+test('notify wxpusher: an SPT_ key routes to simple-push and summary is capped at 100', async () => {
   const seen = []
   const fetchImpl = async (url, init) => {
     seen.push({ url: String(url), init })
     return { ok: true, text: async () => '{"code":1000,"msg":"处理成功"}' }
   }
   const longTitle = '长'.repeat(120)
+  // Real-world personal tokens are `SPT_…` with an underscore (live hit
+  // 2026-10-09: a dot-regex misrouted one to the classic API → 1001
+  // `appToken不正确`), so the underscore shape is the primary fixture.
   assert.equal(
-    await notifySend({ channel: 'wxpusher', key: 'spt.ABCDEFGHIJKLMNOPQRSTUVWXYZ' }, longTitle, '正文', { fetchImpl }),
+    await notifySend({ channel: 'wxpusher', key: 'SPT_ABCDEFGHIJKLMNOPQRSTUVWXYZ' }, longTitle, '正文', { fetchImpl }),
     true
   )
   assert.equal(seen[0].url, 'https://wxpusher.zjiecode.com/api/send/message/simple-push')
   const sent = JSON.parse(seen[0].init.body)
-  assert.equal(sent.spt, 'spt.ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+  assert.equal(sent.spt, 'SPT_ABCDEFGHIJKLMNOPQRSTUVWXYZ')
   assert.equal(sent.appToken, undefined, 'spt mode never sends the classic appToken field')
   assert.equal(sent.summary.length, 100, 'summary is truncated to the banner cap')
   assert.equal(sent.content, '正文')
   assert.equal(sent.contentType, 1)
-  // The documented prefix is lowercase `spt.`; the uppercase shape routes the
-  // same way (case-insensitive on purpose).
-  await notifySend({ channel: 'wxpusher', key: 'SPT.abcdefghijklmnop' }, 't', 'b', { fetchImpl })
-  assert.ok(seen[1].url.endsWith('/simple-push'), 'an SPT.-prefixed key is still a personal token')
+  // The docs' prose once showed a lowercase `spt.` (dot) shape; both prefixes
+  // reach the same simple-push API, so the dot shape routes the same way.
+  await notifySend({ channel: 'wxpusher', key: 'spt.abcdefghijklmnop' }, 't', 'b', { fetchImpl })
+  assert.ok(seen[1].url.endsWith('/simple-push'), 'an spt.-prefixed key is still a personal token')
 })
 
 test('notify wxpusher: HTTP 200 with a business failure answers false, peer msg logged with the key masked', async () => {
   const log = []
-  const key = 'spt.TOPSECRET123456'
+  const key = 'SPT_TOPSECRET123456'
   const delivered = await notifySend(
     { channel: 'wxpusher', key },
     't',
@@ -212,12 +215,12 @@ test('notify wxpusher: HTTP 200 with a business failure answers false, peer msg 
 test('notify wxpusher: a network-level failure keeps the class-name-only note', async () => {
   const log = []
   const delivered = await notifySend(
-    { channel: 'wxpusher', key: 'spt.ABCDEFGHIJK' },
+    { channel: 'wxpusher', key: 'SPT_ABCDEFGHIJK' },
     't',
     'b',
     {
       fetchImpl: async () => {
-        const error = new Error('connect EHOSTUNREACH spt.ABCDEFGHIJK')
+        const error = new Error('connect EHOSTUNREACH SPT_ABCDEFGHIJK')
         error.name = 'TypeError'
         throw error
       },
