@@ -153,8 +153,29 @@ test('装信：只有一件时保持原样，多件才有汇总；理由相同�
     ],
     { titleMax: 80, listMax: 8 }
   )
-  assert.equal(many.title, '2 个会话已完成')
+  assert.equal(many.title, '2 个会话已完成：写周报、部署', 'A 问：名字要在标题里，微信只显示第一行')
   assert.equal(many.body, '· 写周报\n· 部署', '标题已经说了「已完成」，正文每行就不用再重复')
+})
+
+test('装信：标题里的名字装不下就不硬塞，装了名字又没列全就补「等」', () => {
+  const tight = sealOrdinaryMail(
+    [
+      { title: '很长的会话名称一', body: '已完成' },
+      { title: '很长的会话名称二', body: '已完成' }
+    ],
+    { titleMax: 10, listMax: 8 }
+  )
+  assert.equal(tight.title, '2 个会话已完成', '一个名字都塞不进 ⇒ 退回原形状，不砍半个名字')
+
+  const partial = sealOrdinaryMail(
+    [
+      { title: '会话0', body: '已完成' },
+      { title: '会话1', body: '已完成' },
+      { title: '会话2', body: '已完成' }
+    ],
+    { titleMax: 14, listMax: 8 }
+  )
+  assert.equal(partial.title, '3 个会话已完成：会话0等', '只列下第一个 ⇒ 说「等」，不假装列全')
 })
 
 test('装信：理由不一样时不许含糊成同一个理由', () => {
@@ -165,7 +186,7 @@ test('装信：理由不一样时不许含糊成同一个理由', () => {
     ],
     { titleMax: 80, listMax: 8 }
   )
-  assert.equal(mixed.title, '2 个会话有进展', '混在一起只能说笼统的「有进展」')
+  assert.equal(mixed.title, '2 个会话有进展：A、B', '混在一起标题只能说笼统的「有进展」，但名字照样要带上')
   assert.ok(mixed.body.includes('· A：已完成'))
   assert.ok(mixed.body.includes('· B：已停止'), '各自理由逐行带上')
 })
@@ -174,7 +195,11 @@ test('装信：一封装不下的数量写在信里，标题报的是总数不�
   const letters = []
   for (let i = 0; i < 20; i++) letters.push({ title: `会话${i}`, body: '已完成' })
   const merged = sealOrdinaryMail(letters, { titleMax: 80, listMax: 8 })
-  assert.equal(merged.title, '20 个会话已完成', '标题是 20 件，不是列出来的 8 件')
+  assert.equal(
+    merged.title,
+    '20 个会话已完成：会话0、会话1、会话2、会话3、会话4、会话5、会话6、会话7等',
+    '标题报的是总数，名字列到装不下为止，剩下的说「等」'
+  )
   assert.equal(merged.body.split('\n').length, 9, '八行名字 + 一行「另有几个」')
   assert.ok(merged.body.includes('另有 12 个'), '折掉了多少必须说出来')
 })
