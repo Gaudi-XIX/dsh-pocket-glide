@@ -41,6 +41,9 @@
   `flushNotifyEnvelope(reason)` 发车、`quotaBody()` 保证「第 N/10 条」不被截断、
   `markClawbotQuotaSpent()` 与服务端定性联动；完成点改为入信封，提问点改为失败可重试，
   轮询末尾判班，入站后续期＋冲刷＋顺路。
+  **换通道时解除「额度已尽」的挂起**：清掉那个标志的唯一事件是 clawbot 的入站消息，
+  一旦用户改去 Server酱／Bark（它们没有额度这回事）就不再会有入站，
+  留着会把信封永久停在站上——所以发车前先按当前通道解除。
 - `lib/notify.js`：ClawBot 分支新增 `hooks.onQuota` —— 只有服务端说
   `prepare failed`／`invalid arguments`／`ret -2` 才算「额度已尽」；网络抖动不算，
   免得一次代理超时把推送无故停到下次入站（同 hermes-agent #80125 的教训：那句 errmsg 被误当限频过）。

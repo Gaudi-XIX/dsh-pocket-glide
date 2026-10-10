@@ -73,6 +73,12 @@ function makeFixture(behaviour = {}) {
       const payload = { ret: 0, msgs: msg ? [msg] : [], get_updates_buf: 'buf_1' }
       return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) }
     }
+    if (u.includes('api.day.app')) {
+      // Bark puts the notice in the path: /key/<title>/<body>. Decoded here so a
+      // channel-switch test can read what actually left the process.
+      sent.push({ text: decodeURIComponent(u), token: '', refused: false })
+      return { ok: true, status: 200, json: async () => ({}), text: async () => '{}' }
+    }
     return { ok: true, status: 200, json: async () => ({ ret: 0 }), text: async () => '{"ret":0}' }
   }
   const bridgePromise = startBridge({
@@ -254,6 +260,32 @@ test('batch lane: 桌面「测试」是 T1，按下去就发，并顺路把攒�
     assert.ok(fx.sent[0].text.includes('通知测试'))
     assert.ok(fx.sent[1].text.includes('攒着的'))
     assert.ok(fx.sent[1].text.includes('（第 2/10 条）'), 'the two sends count as two slots')
+  } finally {
+    await t.stop()
+    fs.rmSync(fx.dir, { recursive: true, force: true })
+  }
+})
+
+test('batch lane: 换到没有额度的通道时，「额度已尽」的挂起必须解除（否则信封永远停在站上）', async () => {
+  const fx = makeFixture({ refuse: true })
+  const t = await fx.bridgePromise
+  try {
+    await runThenSettle(t, fx, [{ sessionId: 'a', title: '甲' }])
+    await rideLastBus(t, fx)
+    assert.equal(t.bridge.clawbotQuotaSpent, true, '被服务端拒过一次')
+    assert.equal(t.bridge.notifyEnvelope.batchCount, 1, '新闻留在信封里等续期')
+
+    // 用户改去 Bark（它没有 10 条这回事）。清掉那个标志的入站消息只可能来自
+    // clawbot，clawbot 已经不跑了，所以换道时必须自己解除。
+    t.bridge.notifyConfig = { ...t.bridge.notifyConfig, channel: 'bark', key: 'bark_key_x' }
+    await t.bridge.flushNotifyEnvelope('tick')
+    assert.equal(t.bridge.clawbotQuotaSpent, false, '换道即解除挂起')
+    assert.equal(fx.sent.length, 1, '解除挂起不等于插队发车：这一班还没到点')
+    fx.state.at += B.batchQuietMs + 1
+    await t.bridge.flushNotifyEnvelope('tick')
+    assert.equal(fx.sent.length, 2, '到点后攒着的那条照发车')
+    assert.ok(fx.sent[1].text.includes('甲'), '其它通道也享受合并后的同一条新闻')
+    assert.ok(!fx.sent[1].text.includes('第 '), '非 clawbot 通道不加额度计数')
   } finally {
     await t.stop()
     fs.rmSync(fx.dir, { recursive: true, force: true })
