@@ -30,9 +30,17 @@ function makeBridge(overrides = {}) {
   return bridge
 }
 
-async function render(bridge, url = '/?warm=123') {
+async function render(bridge, url = '/?warm=123', request = null) {
   const response = { headers: {}, setHeader(name, value) { this.headers[name] = value } }
-  const markup = await bridge.renderMobilePage({ url }, response)
+  // The router always hands a real IncomingMessage here. A bare `{url}` used to be
+  // enough, but the payload now carries the transport the phone opens its first
+  // realtime channel with, and that read wants `socket` + `headers` — under-specified
+  // fixtures made the whole boot branch throw into its own catch, so the document
+  // silently lost its payload and no test noticed.
+  const markup = await bridge.renderMobilePage(
+    request ?? { url, socket: { remoteAddress: '127.0.0.1' }, headers: { host: '127.0.0.1:43127' } },
+    response,
+  )
   return { markup, response }
 }
 
@@ -160,6 +168,55 @@ test('an unavailable boot payload still opens in the chat view', async () => {
   assert.match(markup, /<body class="chat-open">/)
   assert.match(bridge.logs.join('\n'), /initialChat=true/)
   assert.match(bridge.logs.join('\n'), /candidate=none/)
+})
+
+// The phone picks its realtime transport on the FIRST openSession, before any
+// /api/status reply can reach it. `connectionMode` on the page starts as 'lan',
+// so a tunnel document used to open an EventSource a quick tunnel cannot carry,
+// sit on it until the ~30s teardown (visible in pocket.log as
+// `session stream closed … reason=client-close ms=30xxx`), and paint from the
+// 900ms history fallback instead. The document therefore has to say which
+// transport it was served over.
+test('the boot payload names the transport, so the first stream is the right one', async () => {
+  const bridge = makeBridge({ items: candidate })
+  const { markup } = await render(bridge)
+  assert.match(markup, /"mode":"lan"/, 'a loopback document with a loopback transport is lan')
+
+  const tunneled = await render(bridge, '/?warm=123', {
+    url: '/?warm=123',
+    socket: { remoteAddress: '127.0.0.1' },
+    headers: { host: 'ribbon-recommends-drums-treated.trycloudflare.com' },
+  })
+  assert.match(tunneled.markup, /"mode":"tunnel"/, 'the cloudflared host header is what the router itself reads')
+
+  const lanHost = await render(bridge, '/?warm=123', {
+    url: '/?warm=123',
+    socket: { remoteAddress: '192.168.1.40' },
+    headers: { host: '192.168.1.40:43127' },
+  })
+  assert.match(lanHost.markup, /"mode":"lan"/, 'a phone on the LAN never boots into the poller')
+})
+
+// The app document used to inline the 96px icon as base64 THREE times (favicon,
+// apple-touch-icon, header <img>) — 31.7 KB on a `no-store` document that is
+// re-downloaded on every cold open, for a glyph that renders at 22px. The doc is
+// only ever rendered for a paired phone, so it names the cached route instead.
+// The recovery/PIN pages keep inlining: an unpaired phone cannot read a gated
+// route, and test/reconnect-icon.test.js K-1 pins that.
+test('the app document names the icon route instead of inlining it three times', async () => {
+  const bridge = makeBridge({ items: candidate })
+  bridge.iconUiBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47])
+  const { markup } = await render(bridge)
+
+  assert.equal((markup.match(/data:image\/png/g) ?? []).length, 0, 'no base64 icon in the document')
+  assert.equal((markup.match(/\/app-icon\?ui=1/g) ?? []).length, 3, 'all three icon slots point at the cached small form')
+
+  // With no small bytes in hand (no icon configured, or pngjs unavailable), the
+  // document must not invent a route that 404s differently than before.
+  const bare = makeBridge({ items: candidate })
+  const { markup: fallbackMarkup } = await render(bare)
+  assert.match(fallbackMarkup, /href="\/app-icon"/, 'no icon in hand falls back to the plain route')
+  assert.doesNotMatch(fallbackMarkup, /\?ui=1/, 'and does not claim a variant it cannot serve')
 })
 
 test('the app document is never cacheable', async () => {

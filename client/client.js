@@ -19,23 +19,23 @@ window.__ModuleLoader__.load({
      * client 半区同机制），服务缺席时退回 <html lang>；判定式 /^zh/i 与 pages 侧统一，
      * 未知语言一律回落 en。
      * 字面配对齐 lib/pages.js 桌面配对页既有中英：入口名 pocket（手机端页面
-     * 指引里指代本按钮的同一称呼），内嵌页标题 Connect Mobile Device（= text.title）。 */
+     * 指引里指代本按钮的同一称呼），内嵌页标题 Pocket（= text.title）。 */
     var I18N = {
       zh: {
         label: 'pocket',
         close: '关闭',
-        opening: '正在打开手机连接…',
-        frameTitle: '连接移动设备',
-        openFailed: '手机连接打开失败，请重启 DSH 后再试。',
+        opening: '正在打开 Pocket…',
+        frameTitle: 'Pocket',
+        openFailed: 'Pocket 打开失败，请重启 DSH 后再试。',
         reactUnavailable: 'react 不可用：client 半区不注册 UI（请核对 package.json dsh.client.inject）',
         slotsUnavailable: 'slots 服务不可用：UI 未挂载（请核对 package.json dsh.client.inject）',
       },
       en: {
         label: 'pocket',
         close: 'Close',
-        opening: 'Opening phone connection…',
-        frameTitle: 'Connect Mobile Device',
-        openFailed: 'Failed to open the phone connection. Restart DSH and try again.',
+        opening: 'Opening Pocket…',
+        frameTitle: 'Pocket',
+        openFailed: 'Failed to open Pocket. Restart DSH and try again.',
         reactUnavailable: 'react unavailable: the client half registers no UI (check dsh.client.inject in package.json)',
         slotsUnavailable: 'slots service unavailable: UI not mounted (check dsh.client.inject in package.json)',
       },

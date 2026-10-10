@@ -100,6 +100,12 @@ export async function startBridge(opts = {}) {
     port: 0,
     pairingPinStore: { load: () => ({}), save: () => true },
     tunnelLog: () => {},
+    // Empty polls answer at once under test. Production holds them (EVENT_HOLD_MS)
+    // so a tunnel phone hears about new work immediately; leaving that on here would
+    // make every "this cursor is at the tip, answer empty" assertion wait out the
+    // ceiling instead of asserting on it. A test that wants the hold opts in with
+    // `bridgeOptions: { eventHoldMs: … }`.
+    eventHoldMs: 0,
     ...(opts.bridgeOptions ?? {}),
     log: (level, message) => {
       logs.push({ level, message })

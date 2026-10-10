@@ -19,7 +19,9 @@ import crypto from 'node:crypto'
 import {
   parseSessionFollowEnvelope,
   EVENTS_BUFFER_MAX_ENTRIES,
+  EVENT_HOLD_MS,
 } from '../lib/session-stream.js'
+import { mobilePageAssets } from '../lib/pages.js'
 import { startBridge, httpFetch } from './helpers.js'
 
 // ---------------------------------------------------------------------------
@@ -482,4 +484,116 @@ test('events: bridge stop tears every collector down with it', async () => {
   await t.stop()
   assert.equal(t.bridge.sessionEventCollectors.size, 0, 'stop() stops and clears the collectors')
   await harness.stop()
+})
+
+// ---------------------------------------------------------------------------
+// HOLD (2026-10-10) — an empty poll waits for the frame instead of forcing the
+// phone back onto its 1.5–6 s ladder. `startBridge` defaults eventHoldMs to 0 so
+// every suite above keeps its answer-at-once timing; these opt in.
+// ---------------------------------------------------------------------------
+
+/** Wait for the collector's follow without spending HTTP polls that may be held. */
+async function waitFollowOpen(harness, timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs
+  while (harness.opens() < 1) {
+    if (Date.now() > deadline) throw new Error('the follow never opened')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+const eventsPoll = (base, cookie, sessionId, sinceSeq) =>
+  httpFetch(`${base}/api/session/events?sessionId=${encodeURIComponent(sessionId)}&sinceSeq=${sinceSeq}`, { headers: { cookie } })
+
+test('hold: the ceiling is safely under the phone’s own abandonment timer', () => {
+  // The page races every poll against EVENTS_FETCH_TIMEOUT_MS and counts a lost
+  // race as a transport failure. A hold longer than that is not a wait, it is an
+  // outage — so the relation between the two numbers is the contract.
+  const ceiling = Number(mobilePageAssets({ locale: 'zh' }).js.match(/EVENTS_FETCH_TIMEOUT_MS=(\d+)/)[1])
+  assert.ok(EVENT_HOLD_MS < ceiling, `EVENT_HOLD_MS (${EVENT_HOLD_MS}) must stay under the phone's ${ceiling} ms ceiling`)
+  assert.ok(EVENT_HOLD_MS * 2 >= ceiling, 'and a hold that short would re-issue often enough to defeat the point')
+})
+
+test('hold: the arriving frame answers the held poll, not the ceiling', async () => {
+  const harness = await startFollowHarness()
+  const t = await startBridge({ bridgeOptions: { harnessUrl: () => harness.url, eventHoldMs: 15_000 } })
+  try {
+    const cookie = await t.pairMobile('PocketEvents/1.0')
+    await eventsPoll(t.base, cookie, 's1', -1)
+    await waitFollowOpen(harness)
+
+    const started = Date.now()
+    const held = eventsPoll(t.base, cookie, 's1', 0)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    harness.push({ type: 'user/message', seq: 3, data: { text: 'now' } })
+    const body = await (await held).json()
+
+    assert.equal(body.events.length, 1, 'the poll was still open when the frame landed, and the frame answered it')
+    assert.equal(body.held, true, 'it says it came out of a wait, so the phone stops backing off')
+    const elapsed = Date.now() - started
+    assert.ok(elapsed < 5000, `delivered by the frame (${elapsed} ms), not by a 15 s ceiling`)
+  } finally {
+    await t.stop()
+    await harness.stop()
+  }
+})
+
+test('hold: nothing to say means the ceiling answers, honestly empty', async () => {
+  const harness = await startFollowHarness()
+  const t = await startBridge({ bridgeOptions: { harnessUrl: () => harness.url, eventHoldMs: 300 } })
+  try {
+    const cookie = await t.pairMobile('PocketEvents/1.0')
+    await eventsPoll(t.base, cookie, 's2', -1)
+    await waitFollowOpen(harness)
+
+    const started = Date.now()
+    const body = await (await eventsPoll(t.base, cookie, 's2', 0)).json()
+    const elapsed = Date.now() - started
+    assert.equal(body.events.length, 0, 'an idle conversation stays idle')
+    assert.equal(body.held, true, 'and still reports the wait, so the next poll starts at once')
+    assert.ok(elapsed >= 200, `it waited rather than answering at once (${elapsed} ms)`)
+  } finally {
+    await t.stop()
+    await harness.stop()
+  }
+})
+
+test('hold: an outage is never held — the phone gets the bad news immediately', async () => {
+  // The default harness URL is a dead port: the follow can never open, so
+  // `connected:false` IS the answer. Holding that would hide the outage for the
+  // length of the ceiling — the one case where a fast empty answer matters most.
+  const t = await startBridge({ bridgeOptions: { eventHoldMs: 15_000 } })
+  try {
+    const cookie = await t.pairMobile('PocketEvents/1.0')
+    const started = Date.now()
+    const body = await (await eventsPoll(t.base, cookie, 's3', -1)).json()
+    assert.equal(body.connected, false, 'the follow is down')
+    assert.notEqual(body.held, true, 'and the answer was not a wait')
+    assert.ok(Date.now() - started < 1000, `answered at once (${Date.now() - started} ms)`)
+  } finally {
+    await t.stop()
+  }
+})
+
+test('hold: stop() releases every open holder instead of leaving it hanging', async () => {
+  const harness = await startFollowHarness()
+  const t = await startBridge({ bridgeOptions: { harnessUrl: () => harness.url, eventHoldMs: 60_000 } })
+  try {
+    const cookie = await t.pairMobile('PocketEvents/1.0')
+    await eventsPoll(t.base, cookie, 's4', -1)
+    await waitFollowOpen(harness)
+    const held = eventsPoll(t.base, cookie, 's4', 0)
+    held.catch(() => {}) // the bridge may die mid-response: settling is the assertion, not the status
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    assert.equal(t.bridge.eventHolds.size, 1, 'the poll is registered as a holder')
+
+    await t.stop()
+    const outcome = await Promise.race([
+      held.then(() => 'settled', () => 'settled'),
+      new Promise((resolve) => setTimeout(() => resolve('hanging'), 2000)),
+    ])
+    assert.equal(outcome, 'settled', 'a held poll does not outlive the bridge it was waiting on')
+    assert.equal(t.bridge.eventHolds.size, 0, 'and the table is drained, not leaked')
+  } finally {
+    await harness.stop()
+  }
 })

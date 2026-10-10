@@ -469,19 +469,27 @@ test('T6 the permission row description speaks plain language', () => {
 test('T6 the named-tunnel panel hints where ingress must point', () => {
   const zhHtml = renderDesktopPairingPage({ locale: 'zh', pairingUrl: 'http://x', qrSvg: '' })
   const enHtml = renderDesktopPairingPage({ locale: 'en', pairingUrl: 'http://x', qrSvg: '' })
+  // The tunnel panel is the last block of #deviceExtras, so the next thing the
+  // page emits after it is the inline <script>. Slicing on a sibling div used to
+  // work while the panels sat inside .pairing-content; they now follow it.
   const panelStart = zhHtml.indexOf('<div id="tunnelConfigPanel"')
-  const panelEnd = zhHtml.indexOf('<div id="pendingPairings"', panelStart)
+  const panelEnd = zhHtml.indexOf('<script', panelStart)
   assert.notEqual(panelStart, -1)
   assert.notEqual(panelEnd, -1)
   const panel = zhHtml.slice(panelStart, panelEnd)
   const hostAt = panel.indexOf('id="tunnelHostname"')
   const saveAt = panel.indexOf('data-action="tunnel-config-save"')
   assert.notEqual(hostAt, -1)
-  const hintAt = panel.indexOf('Zero Trust 面板 ingress 须指向 http://127.0.0.1:&lt;桥端口&gt;')
-  assert.notEqual(hintAt, -1, 'the zh hint renders inside the tunnel panel (escaped placeholder)')
+  // The hint ships the Cloudflare console as a real link (2026-10-10): the
+  // operator should click through, not copy a URL out of a sentence. The
+  // bridge port stays a placeholder because it is only known at runtime.
+  const hintAt = panel.indexOf('one.dash.cloudflare.com')
+  assert.notEqual(hintAt, -1, 'the zh hint links into the Cloudflare console')
   assert.ok(hintAt > hostAt, 'the hint sits after the hostname input')
   assert.ok(hintAt < saveAt, 'and before the save actions')
-  const enPanel = enHtml.slice(enHtml.indexOf('<div id="tunnelConfigPanel"'), enHtml.indexOf('<div id="pendingPairings"'))
-  assert.match(enPanel, /ingress must point at http:\/\/127\.0\.0\.1:&lt;bridge-port&gt;/, 'en hint ships too')
+  assert.match(panel, /<a href="https:\/\/one\.dash\.cloudflare\.com\/"[^>]*>Cloudflare Zero Trust<\/a>/, 'the link is an anchor, not escaped text')
+  assert.match(panel, /127\.0\.0\.1/, 'the loopback target is still named')
+  const enPanel = enHtml.slice(enHtml.indexOf('<div id="tunnelConfigPanel"'), enHtml.indexOf('<script', enHtml.indexOf('<div id="tunnelConfigPanel"')))
+  assert.match(enPanel, /<a href="https:\/\/one\.dash\.cloudflare\.com\/"[^>]*>Cloudflare Zero Trust<\/a>/, 'en hint links too')
   assert.doesNotMatch(zhHtml, /127\.0\.0\.1:\d{2,5}</, 'no hardcoded bridge port in the rendered page')
 })

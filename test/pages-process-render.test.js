@@ -467,6 +467,81 @@ test('a pending question still hides while its composer owns the floor', () => {
 
 // ------------------------------------------------------- 8. stylesheet
 
+// A-档 (2026-10-11): the phone fold shows the CATEGORY plus a count and nothing
+// else — no file names, no commands, no diff rows, no raw JSON — unless the
+// reader opts into 'verbose'. The data is still fetched; only the paint is thin.
+function briefSandbox(locale, view) {
+  const js = assets[locale].js
+  const names = [
+    'toolActivityCategory', 'diffLineSplit', 'toolSummaryLine', 'clusterToolBlocks', 'stepTitleFor',
+    'renderBlock', 'toolClusterState', 'toolArgsOf', 'diffRowsHtml', 'renderToolDiff',
+    'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'pretty',
+  ]
+  const body = names.map((name) => extractFunction(js, name)).join('\n')
+  return new Function(
+    'L', 'STEP', 'transcriptView', 'activeSession',
+    `${body};
+     const esc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+     const markdown=text=>String(text||'')
+     function activityIcon(){return '<i class="icon"></i>'}
+     function activityChevron(){return '<c></c>'}
+     function reasoningSummary(){return ''}
+     const turnOpenState=new Map()
+     const pendingQuestion=null
+     return { renderTurnProcess, renderToolCard }`,
+  )(labels(locale), STEP_TABLE(locale), view, 's1')
+}
+
+test('A-tier: the card paints a count, never the subjects it touched', () => {
+  const html = briefSandbox('zh', 'standard').renderTurnProcess({
+    turnKey: 'A1',
+    streaming: false,
+    blocks: [
+      tool('read', 'done', { file_path: '/secret/project/src/salary-ledger.ts' }, 'ledger body'),
+      tool('read', 'done', { file_path: '/secret/project/src/payroll.sql' }),
+      tool('read', 'done', { file_path: '/secret/project/src/tax-grid.ts' }),
+    ],
+  })
+  assert.ok(html.includes('已读取文件'), 'the category still names what happened')
+  assert.ok(html.includes('3 次'), 'and how many times it happened')
+  for (const leak of ['salary-ledger.ts', 'payroll.sql', 'tax-grid.ts', 'secret', 'ledger body', 'file_path']) {
+    assert.ok(!html.includes(leak), `the ${leak} never reaches the phone screen`)
+  }
+  assert.ok(!html.includes('diff-line'), 'no diff rows are computed for the fold')
+  assert.ok(!html.includes('tool-raw'), 'neither does the raw JSON fold')
+})
+
+test('A-tier: the tool name and its arguments stay off a single-call card too', () => {
+  const html = briefSandbox('zh', 'standard').renderTurnProcess({
+    turnKey: 'A2',
+    streaming: false,
+    blocks: [tool('bash', 'done', { command: 'rm -rf /Users/toast/private' }, 'removed')],
+  })
+  assert.ok(html.includes('执行了命令'), 'the category names the action')
+  assert.ok(!html.includes('rm -rf'), 'the command itself is not painted')
+  assert.ok(!html.includes('private'), 'neither is what it pointed at')
+})
+
+test('A-tier: a failed card still says it failed', () => {
+  const html = briefSandbox('zh', 'standard').renderTurnProcess({
+    turnKey: 'A3',
+    streaming: false,
+    blocks: [tool('edit', 'error', { file_path: '/w/a.ts', old_string: 'x', new_string: 'y' })],
+  })
+  assert.ok(html.includes('失败'), 'failure is still legible without the body')
+  assert.ok(!html.includes('a.ts'), 'but the failing file stays unnamed')
+})
+
+test('A-tier: verbose is the opt-in that puts the detail back', () => {
+  const blocks = [tool('read', 'done', { file_path: '/w/a.ts' }, 'file body')]
+  const brief = briefSandbox('zh', 'standard').renderTurnProcess({ turnKey: 'A4', streaming: false, blocks })
+  const verbose = briefSandbox('zh', 'verbose').renderTurnProcess({ turnKey: 'A4', streaming: false, blocks })
+  assert.ok(!brief.includes('a.ts'), 'standard hides it')
+  assert.ok(verbose.includes('a.ts'), 'verbose shows it again')
+  assert.ok(verbose.includes('file body'), 'result text included')
+  assert.ok(verbose.includes('tool-raw'), 'and the technical-details fold returns')
+})
+
 test('the stylesheet carries the new organs with token-only colors', () => {
   const { css } = assets.zh
   assert.ok(css.includes('.change-cluster'), 'the cluster card class exists')

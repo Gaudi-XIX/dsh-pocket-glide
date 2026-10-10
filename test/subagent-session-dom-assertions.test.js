@@ -65,6 +65,9 @@ function pageLabels(source) {
 
 const L = pageLabels(js);
 const HISTORY_IDLE_CAP = Number(js.match(/HISTORY_POLL_IDLE_CAP_MS=(\d+)/)[1]);
+// renderWorkspaces caps the rows it builds per expanded workspace; the sandbox must
+// carry the same ceiling or the cap under test is the test's own, not the page's.
+const LIST_ROWS_MAX = Number(js.match(/LIST_ROWS_MAX=(\d+)/)[1]);
 
 // loadHistory's catch reads the errorCode off whatever its rpc rejected with, so the
 // sandbox below hands it a hand-written `rpc` stub that throws the Error this file
@@ -109,7 +112,7 @@ function buildHistorySandbox({ rpcThrows = null, streamConnected = false } = {})
     let activeSession='s1',historyBusy=false,streamRevision=0,streamConnected=${streamConnected}
     let agentRunning=false,pendingQuestion=null,idlePollMs=750
     let streamEvents=[],olderEvents=[],olderHasMore=false
-    let importantErrorActive=false
+    let importantErrorActive=false,openPrefetch=null
     const HISTORY_POLL_IDLE_CAP_MS=${HISTORY_IDLE_CAP}
     const L=${JSON.stringify(L)}
     const $=(id)=>containers[id]
@@ -178,16 +181,23 @@ test('R1.1 the control: an ordinary failure still paints the retry row', async (
 // per-workspace shell, each carrying sessionIds) and `sessionSummaries` (the PROJECTED
 // rows). The whole no-ghost-row guarantee lives in the mismatch between them, so the
 // sandbox owns both and lets the real render run.
-function buildRenderSandbox({ workspaces = [], summaries = [], expanded = [] } = {}) {
+// `expanded` defaults to EVERY workspace: these tests are about which sessions
+// become rows, and since 2026-10-10 the page builds rows only for expanded
+// workspaces (a collapsed card renders its rows on the next tap, so 469 hidden
+// rows stop costing a phone 300 KB of markup per refresh). A test that wants the
+// collapsed behaviour must say so — `expanded: []`.
+function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, revealed = null } = {}) {
   const host = fakeElement();
   const make = new Function(
     'workspaces',
     'sessionSummaries',
     'expandedWsIds',
+    'revealedLists',
     'container',
     `
     const L=${JSON.stringify(L)}
     const BLANK_ROW_VISIBLE_MS=${BLANK_ROW_VISIBLE_MS}
+    const LIST_ROWS_MAX=${LIST_ROWS_MAX}
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'visibleSessions')}
@@ -210,7 +220,7 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = [] } =
     }
   `,
   );
-  const sandbox = make(workspaces, summaries, new Set(expanded), host);
+  const sandbox = make(workspaces, summaries, new Set(expanded ?? workspaces.map((w) => w.workspaceId)), new Set(revealed ?? []), host);
   sandbox.host = host;
   return sandbox;
 }
@@ -533,4 +543,67 @@ test('R1.4 the default entry cannot pick up the DOM script — one-level glob, r
     !deep.some((name) => name.startsWith('dom/') && name.endsWith('.test.js')),
     'and no .test.js hides under test/dom/, which is what would pull the browser in',
   );
+});
+
+// ---------------------------------------------------------------------------
+// ROWS (2026-10-10) — the list builds rows only for what the reader can see.
+//
+// A collapsed card used to emit its entire session list into hidden markup and a
+// busy workspace emitted all ~436 rows: measured at the live scale (436 + 266
+// sessions), one refresh produced 319 KB of HTML and 712 inline <svg> nodes for a
+// phone that shows a dozen rows — and it did that on cold open, on back-nav, on
+// every expand/collapse, and on every return from the background.
+// ---------------------------------------------------------------------------
+
+const manyRows = (n, prefix = 's') => Array.from({ length: n }, (_, i) => WS_ROW(`${prefix}${i}`));
+
+test('ROWS-1 a collapsed workspace builds no rows at all', () => {
+  const rows = manyRows(3, 'a');
+  const sandbox = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: rows.map((r) => r.sessionId) }],
+    summaries: rows,
+    expanded: [],
+  });
+  sandbox.renderWorkspaces();
+
+  assert.deepEqual(sandbox.rowIds(), [], 'hidden rows are not built, not merely hidden by CSS');
+  assert.ok(sandbox.markup.includes('data-ws="w1"'), 'the card itself stays on screen');
+  assert.doesNotMatch(sandbox.markup, /ws-empty/, 'and a workspace WITH chats is never labelled empty');
+});
+
+test('ROWS-2 an expanded workspace caps its rows and names what it left out', () => {
+  const hidden = 7;
+  const rows = manyRows(LIST_ROWS_MAX + hidden, 'b');
+  const sandbox = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: rows.map((r) => r.sessionId) }],
+    summaries: rows,
+  });
+  sandbox.renderWorkspaces();
+
+  assert.equal(sandbox.rowIds().length, LIST_ROWS_MAX, 'exactly the ceiling is built');
+  const markup = sandbox.markup;
+  assert.ok(markup.includes('>' + L.moreRows.replace('{n}', String(hidden)) + '<'), 'the remainder is counted, never silently dropped');
+  assert.match(markup, /data-action="more"/, 'and offered as a tap, not as text');
+});
+
+test('ROWS-3 revealing one workspace lifts its cap without touching another', () => {
+  const big = manyRows(LIST_ROWS_MAX + 3, 'b');
+  const small = manyRows(LIST_ROWS_MAX + 2, 'c');
+  const sandbox = buildRenderSandbox({
+    workspaces: [
+      { workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: big.map((r) => r.sessionId) },
+      { workspaceId: 'w2', title: 'other', path: 'F:/x', sessionIds: small.map((r) => r.sessionId) },
+    ],
+    summaries: [...big, ...small],
+    revealed: ['w1'],
+  });
+  sandbox.renderWorkspaces();
+
+  const markup = sandbox.markup;
+  const w1 = markup.slice(markup.indexOf('data-ws="w1"'), markup.indexOf('data-ws="w2"'));
+  const w2 = markup.slice(markup.indexOf('data-ws="w2"'));
+  assert.equal((w1.match(/data-id="/g) ?? []).length, LIST_ROWS_MAX + 3, 'the revealed card shows everything');
+  assert.doesNotMatch(w1, /data-action="more"/, 'and stops offering more');
+  assert.equal((w2.match(/data-id="/g) ?? []).length, LIST_ROWS_MAX, 'the other card keeps its own cap');
+  assert.match(w2, /data-action="more"/, 'and still offers its rest');
 });

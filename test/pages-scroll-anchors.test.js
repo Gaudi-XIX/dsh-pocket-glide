@@ -319,9 +319,10 @@ const workspaceSandbox = ({ storage = {}, activeSession = null } = {}) => {
     .join('\n')
   const host = { innerHTML: '' }
   const make = new Function(
-    'workspaces', 'sessionSummaries', 'expandedWsIds', 'activeSession', 'container', 'localStorage', `
-    const L=${JSON.stringify({ noWorkspaces: 'none', noTasksHint: 'hint', newChat: 'new', untitled: 'untitled', justNow: 'now', minute: 'm', hour: 'h', day: 'd' })}
+    'workspaces', 'sessionSummaries', 'expandedWsIds', 'revealedLists', 'activeSession', 'container', 'localStorage', `
+    const L=${JSON.stringify({ noWorkspaces: 'none', noTasksHint: 'hint', newChat: 'new', untitled: 'untitled', justNow: 'now', minute: 'm', hour: 'h', day: 'd', moreRows: '{n} more' })}
     const BLANK_ROW_VISIBLE_MS=${24 * 60 * 60 * 1000}
+    const LIST_ROWS_MAX=${25}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -340,6 +341,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null } = {}) => {
       { sessionId: 'blank1', updatedAt: 9000, blank: true },
     ],
     new Set(['w1']),
+    new Set(),
     activeSession,
     host,
     {

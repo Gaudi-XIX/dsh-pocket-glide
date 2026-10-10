@@ -167,6 +167,46 @@ test('the mode bar carries the third key: a mode-devices handle that stays enabl
   assert.doesNotMatch(disconnected, /body class="[^"]*device-view/, 'only the connected page declares the device view')
 })
 
+// 2026-10-10: the task-notification panel used to be emitted INSIDE
+// `.pairing-content`, and `.phone-connected .pairing-content{display:none}`
+// hides that container outright — so on a paired desktop (the everyday state)
+// the notification block was in the DOM but never visible. The panel has to be
+// a sibling of `.pairing-content`, not a descendant.
+function ancestorChainOf(html, id) {
+  const at = html.indexOf(`id="${id}"`)
+  assert.notEqual(at, -1, `#${id} is rendered`)
+  const stack = []
+  const re = /<(\/?)(div|body)\b([^>]*)>/g
+  let m
+  while ((m = re.exec(html.slice(0, at)))) {
+    const [full, slash, tag, attrs] = m
+    if (full.endsWith('/>')) continue
+    if (!slash) {
+      stack.push(`${tag}${(attrs.match(/class="([^"]*)"/) ?? [, ''])[1] ? '.' + (attrs.match(/class="([^"]*)"/) ?? [, ''])[1].split(' ')[0] : ''}`)
+    } else {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i].startsWith(tag)) { stack.length = i; break }
+      }
+    }
+  }
+  return stack
+}
+
+test('the notification panel is not a descendant of the pairing container', () => {
+  for (const connected of [true, false]) {
+    const page = renderDesktopPairingPage({
+      locale: 'zh',
+      connected,
+      pairingUrl: 'http://127.0.0.1/pair?token=x',
+      qrSvg: '',
+    })
+    const chain = ancestorChainOf(page, 'notifyPanel')
+    assert.ok(!chain.includes('div.pairing-content'),
+      `connected=${connected}: #notifyPanel must not live under .pairing-content (${chain.join(' > ')})`)
+    assert.ok(chain.includes('div.wrap'), `#notifyPanel stays inside .wrap (${chain.join(' > ')})`)
+  }
+})
+
 test('desktop /desktop/status is forbidden without a desktop session', async () => {
   const t = await startBridge()
   try {

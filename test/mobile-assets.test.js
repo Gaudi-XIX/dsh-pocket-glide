@@ -735,7 +735,33 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 // (.setting-pick / .setting-list / .setting-opt / .setting-group), which retires the
 // select-only CSS, syncEffortOptions and selectedModelEntry with it. Headroom left:
 // ~1.7 KB zh / ~1.8 KB en.
-const ASSET_BUDGET_BYTES = 261_000
+//
+// Receipt (0.4.17, 2026-10-10, the navigation smoothness batch the user asked for —
+// "返回会话列表好像又要重新加载一次…我不知道怎么说"): budget raised
+// 261_000 -> 263_000 — zh 260122 -> 261996, en 260049 -> 261917 (+1874 / +1868,
+// baseline measured by materialising HEAD 505d254's lib/pages.js, not from the
+// number this comment used to quote). Four purchases:
+//   · A/B/C nav reload (+380 B) — back-navigation stopped re-pulling the whole
+//     session catalogue unconditionally, and a cache-hit transcript stopped being
+//     repainted by an identical history fetch;
+//   · the row cap (+391 B) — renderWorkspaces() used to build EVERY session of
+//     EVERY workspace into hidden markup on every refresh. At the live scale
+//     (436 + 266 sessions) that measured 319 KB of HTML and 712 inline <svg>
+//     nodes; it is now 14.8 KB / 25 rows on the default open, and the rest of a
+//     workspace is built only when the reader taps "还有 N 条";
+//   · press-to-prefetch (+888 B, of which ~200 B is the comment explaining it —
+//     kept on purpose) — the tunnel round trip for a transcript now starts under
+//     the finger instead of after the tap lands;
+//   · the long-poll client half (+65 B) — one line: `held` from the bridge resets
+//     the backoff ladder. The server half (lib/session-stream.js, lib/bridge.js)
+//     costs the shell nothing.
+// Why this is the right trade against a size ceiling: the shell is content-hashed
+// and served `private, max-age=604800` plus the service worker, so these bytes are
+// paid once per installed version. What they buy is paid back on every single
+// open: 31.7 KB less document (the icon is no longer inlined three times), ~300 KB
+// less list markup per refresh, and no re-paint of a transcript that did not
+// change. Headroom left: ~1.0 KB zh / ~1.1 KB en.
+const ASSET_BUDGET_BYTES = 263_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

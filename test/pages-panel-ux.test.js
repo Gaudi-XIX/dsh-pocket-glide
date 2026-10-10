@@ -129,7 +129,7 @@ test('the desktop page renders the named-tunnel section from the tunnelConfig co
     tunnelConfig: { tokenMasked: 'cf…token', hostname: 'pocket.example.com' },
   })
   assert.match(html, /data-action="tunnel-config-save"/)
-  assert.match(html, /固定域名（命名隧道）/)
+  assert.match(html, /固定域名/)
   assert.match(html, /placeholder="cf…token"/, 'the token is injected as a masked placeholder only')
   assert.match(html, /id="tunnelHostname"[^>]*value="pocket\.example\.com"/)
 })
