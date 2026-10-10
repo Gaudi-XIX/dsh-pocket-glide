@@ -14,7 +14,7 @@ import { startBridge, httpFetch } from './helpers.js'
 import { createSettingsStore } from '../lib/settings-store.js'
 import { createMailbagStore, mailbagPath } from '../lib/mailbag-store.js'
 import { POST_REGISTERED } from '../lib/mailbag.js'
-import { NOTIFY_JUDGE_THRESHOLDS, NOTIFY_MAILBAG } from '../lib/bridge.js'
+import { NOTIFY_JUDGE_THRESHOLDS, NOTIFY_MAILBAG, NOTIFY_MAIL_LIST_MAX } from '../lib/bridge.js'
 
 const B = NOTIFY_MAILBAG
 const J = NOTIFY_JUDGE_THRESHOLDS
@@ -61,10 +61,17 @@ function makeFixture(behaviour = {}) {
     const u = String(url)
     if (u.includes('/sendmessage')) {
       const body = JSON.parse(options.body)
+      const text = body.msg.item_list[0].text_item.text
       sent.push({
-        text: body.msg.item_list[0].text_item.text,
+        text,
         token: body.msg.context_token,
-        refused: state.refuse
+        refused: state.refuse,
+        // 入站的隧道地址交接不是通知：它一条入站只交接一次（地址变了才说），
+        // 不计入通知额度、也不参与「这一班寄了几封」的计数。所以额外标一个 kind，
+        // 让按业务计数的断言能把它排除掉（同样的事也发生在生产：它不走 clawbotQuotaTail）。
+        kind: text.startsWith('Pocket 已打开') || text.startsWith('Pocket 隧道没打开')
+          ? 'door'
+          : 'notice'
       })
       const payload = state.refuse
         ? { ret: -2, errmsg: 'prepare failed' }
@@ -104,10 +111,23 @@ function makeFixture(behaviour = {}) {
       settingsStore: store,
       notifyFetchImpl,
       now: () => state.at,
+      // 入站会让桥去确保公网隧道在跑（「在微信说一句就能拿到能打开的地址」）。必须打桩：
+      // 不打桩会真的 ensureCloudflared，下载 54MB 真二进制并写进本机共享缓存，把同批跑的
+      // tunnel.test.js 全档带红（实测 mailbag-post + tunnel 连跑必红 11 档，单独跑全绿）。
+      // 这几档测的是邮包，不是隧道。
+      createCloudflareTunnel: async () => ({
+        url: 'https://mailbag-test.trycloudflare.com',
+        provider: 'cloudflare',
+        stop: async () => {},
+        process: { once: () => {} }
+      }),
       ...(behaviour.mailbagStore ? { mailbagStore: behaviour.mailbagStore } : {})
     }
   })
-  return { dir, sent, state, store, bridgePromise }
+  // notices ＝ 只看通知（排除入站那条隧道地址交接）。按业务计数的断言用这个，
+  // 免得把「顺路搭的一句话」算成「寄了一封信」。
+  const notices = () => sent.filter((s) => s.kind !== 'door')
+  return { dir, sent, notices, state, store, bridgePromise }
 }
 
 const tick = async (t) => {
@@ -129,9 +149,9 @@ async function runThenSettle(t, fx, rows) {
   await tick(t)
 }
 
-/** 把时钟推过末班车并再走一轮。 */
+/** 把时钟推过封顶时间（15 分钟）并再走一轮。 */
 async function rideTheBus(t, fx) {
-  fx.state.at += B.rideMs + 1
+  fx.state.at += B.holdMs + 1
   await tick(t)
 }
 
@@ -144,22 +164,25 @@ const settleFor = async (what, limitMs = 9000) => {
   }
 }
 
-test('一批会话同时跑完只发一封：装满一封的量立刻走，列不下的说出来', async () => {
+test('一批会话同时跑完只发一封：一封摘要列不下的要说出来', async () => {
   const fx = makeFixture()
   const t = await fx.bridgePromise
   try {
-    // 比一封信的容量多一个，正好把「装满就走」和「折行要说明」两件事一起测了。
-    const names = Array.from({ length: B.lettersMax + 1 }, (_, i) => `任务${i + 1}`)
+    // 比一封摘要列得下的行数多一个，正好把「折行要说明」测了。
+    // 0.4.17 起发车只看时间（最早一件满 15 分钟），所以这里靠 rideTheBus 推时钟，
+    // 不再靠「装满就走」——名字的条数现在只影响信里列几行。
+    const names = Array.from({ length: NOTIFY_MAIL_LIST_MAX + 1 }, (_, i) => `任务${i + 1}`)
     const rows = names.map((title, i) => ({ sessionId: `s${i}`, title }))
     await runThenSettle(t, fx, rows)
+    await rideTheBus(t, fx)
 
-    assert.equal(fx.sent.length, 1, '一趟就发完了，不是九趟')
-    assert.ok(fx.sent[0].text.includes(`${names.length} 个会话已完成`), fx.sent[0].text)
-    for (const name of names.slice(0, B.lettersMax)) {
-      assert.ok(fx.sent[0].text.includes(name), `列出来的名字要在：${name}`)
+    assert.equal(fx.notices().length, 1, '一趟就发完了，不是九趟')
+    assert.ok(fx.notices()[0].text.includes(`${names.length} 个会话已完成`), fx.notices()[0].text)
+    for (const name of names.slice(0, NOTIFY_MAIL_LIST_MAX)) {
+      assert.ok(fx.notices()[0].text.includes(name), `列出来的名字要在：${name}`)
     }
-    assert.ok(fx.sent[0].text.includes(`另有 1 个就不列了`), '折掉的数量要说出来')
-    assert.ok(fx.sent[0].text.includes('（第 1/10 条）'), '九件事只花掉一条额度')
+    assert.ok(fx.notices()[0].text.includes(`另有 1 个就不列了`), '折掉的数量要说出来')
+    assert.ok(fx.notices()[0].text.includes('（第 1/10 条）'), '九件事只花掉一条额度')
     assert.equal(t.bridge.mailbag.ordinaryCount, 0, '发完包就空了')
   } finally {
     await t.stop()
@@ -211,11 +234,11 @@ test('服务端说没额度时信留在包里，下一次入站（哪怕令牌�
     // 用户在微信回一句。令牌照旧是同一个字符串——续期照样发生。
     fx.state.refuse = false
     fx.state.inbound = { context_token: CTX, from_user_id: 'user_mb' }
-    await settleFor(() => fx.sent.length >= 2)
+    await settleFor(() => fx.notices().length >= 2)
 
-    assert.equal(fx.sent.length, 2, '一次入站补发一封（同令牌不走「首次绑定」那封回执）')
+    assert.equal(fx.notices().length, 2, '一次入站补发一封（同令牌不走「首次绑定」那封回执）')
     assert.equal(t.bridge.clawbotQuotaSpent, false)
-    const last = fx.sent[1].text
+    const last = fx.notices()[1].text
     assert.ok(last.includes('3 个会话已完成'), last)
     for (const name of ['甲', '乙', '丙']) assert.ok(last.includes(name))
     assert.ok(last.includes('（第 1/10 条）'), '续期后从第 1 条重新数')
@@ -239,7 +262,11 @@ test('「通道已就绪」只在首次绑定发，之后每轮回话不再白�
     fx.state.inbound = { context_token: `${CTX}_2`, from_user_id: 'user_mb' }
     await settleFor(() => t.bridge.notifyConfig.clawbot.contextToken === `${CTX}_2`)
     fx.state.at += 3_000
-    assert.equal(fx.sent.length, 1, '续期不再发回执 ⇒ 那一条额度留给真正的消息')
+    // 这一档问的是「续期还发不发那封『通道已就绪』回执」，所以按**回执**数，不按总条数：
+    // 入站现在还会捎一条隧道地址（2026-10-10 用户要的「说一句就能拿到能打开的地址」），
+    // 那是另一件事、且只在新地址时发一次，拿总条数当替身会把两件事混算。
+    const receipts = fx.sent.filter((s) => s.text.includes('通道已就绪'))
+    assert.equal(receipts.length, 1, '续期不再发回执 ⇒ 那一条额度留给真正的消息')
   } finally {
     await t.stop()
     fs.rmSync(fx.dir, { recursive: true, force: true })

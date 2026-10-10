@@ -192,7 +192,7 @@ test('bridge poll: a quiet settle fires once through the real poll path', async 
     clock += 91_000
     await tick()
     assert.equal(sent.length, 0, '90s of silence settles — into the envelope, not onto the wire')
-    clock += B.rideMs
+    clock += B.holdMs
     await tick()
     assert.equal(sent.length, 1, 'the last bus departs and the settle is announced')
     assert.ok(sent[0].includes(encodeURIComponent('部署')))
@@ -240,7 +240,7 @@ test('bridge poll: a session parked on a question never completes, and its after
     clock += 30_000
     await tick()
     assert.equal(sent.length, 0, 'the aftermath settles into the envelope')
-    clock += B.rideMs
+    clock += B.holdMs
     await tick()
     assert.equal(sent.length, 1, 'the stop is announced once the question is gone')
   } finally {
@@ -295,7 +295,7 @@ test('bridge poll: a frozen lead whose subagent still runs never notifies a fals
     clock += 30_000
     await tick()
     assert.equal(sent.length, 0, 'the fleet settle is judged — and batched, not fired')
-    clock += B.rideMs
+    clock += B.holdMs
     await tick()
     assert.equal(sent.length, 1, 'the settle fires for the lead once the fleet is done')
     assert.ok(sent[0].includes(encodeURIComponent('编队')), 'the notice names the lead, not the invisible child row')

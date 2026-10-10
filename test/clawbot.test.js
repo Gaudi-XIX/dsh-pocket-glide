@@ -425,7 +425,23 @@ test('clawbot quota: 计数真的进了发给微信的那段文字，入站一�
     }
     return { ok: true, status: 200, json: async () => ({ ret: 0 }) }
   }
-  const t = await startBridge({ bridgeOptions: { settingsStore: store, notifyFetchImpl } })
+  // 入站现在还会让桥去确保公网隧道在跑（2026-10-10 用户要的「在微信说一句就能拿到
+  // 能打开的地址」）。隧道必须**打桩**：不打桩就会真的去 ensureCloudflared，那是下载
+  // 54MB 的真二进制、还会写进本机共享缓存，把同批跑的 tunnel.test.js 全档带红
+  // （实测：clawbot 之后跑 tunnel 必红 11 档，单独跑 tunnel 全绿）。
+  // 这档测的是额度计数，不是隧道，所以给个假的实例就够。
+  const t = await startBridge({
+    bridgeOptions: {
+      settingsStore: store,
+      notifyFetchImpl,
+      createCloudflareTunnel: async () => ({
+        url: 'https://quota-test.trycloudflare.com',
+        provider: 'cloudflare',
+        stop: async () => {},
+        process: { once: () => {} }
+      })
+    }
+  })
   try {
     const desktop = await t.pairDesktop()
     const headers = { Cookie: desktop }
@@ -449,17 +465,24 @@ test('clawbot quota: 计数真的进了发给微信的那段文字，入站一�
       httpFetch(`${t.base}/desktop/notify/test`, { method: 'POST', headers }).then((r) => r.json())
     await push()
     await push()
-    assert.ok(sent[1].text.includes('（第 2/10 条）'), sent[1].text)
-    assert.ok(sent[2].text.includes('（第 3/10 条）'), sent[2].text)
-    assert.ok(sent[2].text.includes('这是一条测试通知'), '计数是尾巴，不是替换正文')
+    // 入站现在还会捎一条隧道地址（2026-10-10 用户要的「说一句就能拿到能打开的地址」）。
+    // 隧道是异步拉起来的（cloudflared 冷启动要下载），它什么时候落到 sent[] 里不保证，
+    // 所以这里按**测试推送**取，不按下标——按下标会被地址那条挤位。
+    const pushAt = (n) => sent.filter((s) => s.text.includes('这是一条测试通知'))[n]
+    assert.ok(pushAt(0).text.includes('（第 2/10 条）'), pushAt(0).text)
+    assert.ok(pushAt(1).text.includes('（第 3/10 条）'), pushAt(1).text)
+    assert.ok(pushAt(1).text.includes('这是一条测试通知'), '计数是尾巴，不是替换正文')
 
     // 再来一条入站，令牌字符串与存档**相同**（isNew 为假、不进回执分支），
     // 计数照样必须归零——这正是「落盘时间不能当判据」那条铁律的代码侧版本。
     inbound = { context_token: 'ctx_fresh', from_user_id: 'user_quota' }
     await wait(() => t.bridge.clawbotQuotaUsed === 0)
     await push()
-    assert.equal(sent.length, 4)
-    assert.ok(sent[3].text.includes('（第 1/10 条）'), '同令牌重复入站也算续期：重新从第 1 条数')
+    // 按**测试推送**数，不按总条数：入站现在还会捎一条隧道地址（2026-10-10 用户要的
+    // 「说一句就能拿到能打开的地址」），那是另一条线，拿总条数当替身会把它算进来。
+    const pushes = sent.filter((s) => s.text.includes('这是一条测试通知'))
+    assert.equal(pushes.length, 3)
+    assert.ok(pushes[2].text.includes('（第 1/10 条）'), '同令牌重复入站也算续期：重新从第 1 条数')
   } finally {
     await t.stop()
     fs.rmSync(dir, { recursive: true, force: true })

@@ -1,4 +1,5 @@
-// 邮包的班次规则（0.4.12）：平邮攒成一封寄、什么时候发车、挂号信不排队、压太久作废。
+// 邮包的班次规则（0.4.12）：平邮攒成一封寄、什么时候发车、挂号信不排队。
+// （「压太久作废」那条已在 0.4.15 取消，见下面那一档。）
 // 这只包不读时钟也不碰磁盘，`now` 从参数进来，所以整套规则能用一个手工时钟测完；
 // 桥那边的接线（含落盘）在 test/mailbag-post.test.js。
 import { test } from 'node:test'
@@ -18,73 +19,88 @@ function bag(limits = M) {
   return createMailbag(limits)
 }
 
-test('平邮：刚投进来不发车，这一波安静够了才走（末班车看最后一次投递）', () => {
+test('平邮：最早一件压满 15 分钟才发——唯一的时间尺度', () => {
   const b = bag()
   const t0 = 1_000_000
   assert.equal(b.post(POST_ORDINARY, { key: 's1', title: '写周报', body: '已完成' }, t0), true)
-  assert.equal(b.due(t0), false, '刚投进来，还没到末班')
-  assert.equal(b.due(t0 + M.rideMs - 1), false, '差一毫秒')
-  assert.equal(b.due(t0 + M.rideMs), true, '这一波安静够了 ⇒ 走')
+  assert.equal(b.due(t0), false, '刚投进来，还没到点')
+  assert.equal(b.due(t0 + M.holdMs - 1), false, '差一毫秒')
+  assert.equal(b.due(t0 + M.holdMs), true, '最早那件压满 ⇒ 走')
 
-  const taken = b.take(t0 + M.rideMs)
+  const taken = b.take(t0 + M.holdMs)
   assert.equal(taken.ordinary.length, 1)
   assert.equal(taken.ordinary[0].title, '写周报')
   assert.equal(b.ordinaryCount, 0, 'take 就是取走')
-  assert.equal(b.due(t0 + M.rideMs * 2), false, '空包永远不该「到点」')
+  assert.equal(b.due(t0 + M.holdMs * 2), false, '空包永远不该「到点」')
 })
 
-test('平邮：一直有新信进来会把末班车一直推迟，所以封顶时间兜住最早那一封', () => {
-  // 「末班车」单独用是有洞的：只要一直有新信进来，就永远等不到安静（rideMs 不满足）。
-  // 这一档测的就是那个兜底，也是「15 分钟和 30 分钟到底啥区别」的机械化证明：
-  // 每隔 rideMs-1 分钟来一封 ⇒ 回回都差一分钟不够安静，直到最早那封压过 holdMs。
-  // lettersMax 从 8 降到 5 不改变这一档的成立：循环最多攒 4 封，够不到「装满」。
+test('平邮：后面一直有新信进来，也拦不住最早那封到点（看的是最早，不是最后一封）', () => {
+  // 这一档钉的是 0.4.17 把「末班车」砍掉之后的行为变化：原来 rideMs 看的是**最后一件**
+  // 进来的时间，所以一直有新信就会把发车一直往后推；现在只看**最早那件**，
+  // 它到 15 分钟就走，后来者跟着这一班一起走（用户原话：「最早一条满 15 分钟打包发一条摘要」）。
   const b = bag()
   const t0 = 2_000_000
   b.post(POST_ORDINARY, { key: 's1', title: '第一封', body: '已完成' }, t0)
-  const gap = M.rideMs - 60_000
-  let now = t0
-  for (let i = 2; i <= 3; i++) {
-    now += gap
-    b.post(POST_ORDINARY, { key: `s${i}`, title: `第${i}封`, body: '已完成' }, now)
-    assert.equal(b.due(now), false, `第 ${i} 封进来时：既没装满也没安静 ⇒ 不走`)
-  }
-  now += gap
-  b.post(POST_ORDINARY, { key: 's4', title: '第4封', body: '已完成' }, now)
-  assert.ok(b.pressureMs(now) > M.holdMs, '最早那封已经压过封顶时间')
-  assert.equal(b.due(now), true, '封顶了就走，不管后面还有没有信来')
+  // 每 5 分钟来一封新的：第一封到 15 分钟时，后面已经又进来两封。
+  b.post(POST_ORDINARY, { key: 's2', title: '第二封', body: '已完成' }, t0 + 5 * 60_000)
+  b.post(POST_ORDINARY, { key: 's3', title: '第三封', body: '已完成' }, t0 + 10 * 60_000)
+  assert.equal(b.due(t0 + 15 * 60_000 - 1), false, '最早那件还差一毫秒')
+  assert.equal(b.due(t0 + 15 * 60_000), true, '最早那件到点 ⇒ 走，不管最后一件才进来 5 分钟')
+  const taken = b.take(t0 + 15 * 60_000)
+  assert.deepEqual(
+    taken.ordinary.map((l) => l.title),
+    ['第一封', '第二封', '第三封'],
+    '一封摘要带走这一班里的全部'
+  )
 })
 
-test('平邮：攒满一封装不下那么多就立刻走，不等安静不等封顶', () => {
+test('平邮：进手机端就重置计时——人放下手机之后才重新数 15 分钟', () => {
+  // 用户 2026-10-10 22:33：「你进手机端立即重置待发送，打个时间戳啥的」。
   const b = bag()
   const t0 = 3_000_000
-  for (let i = 0; i < M.lettersMax - 1; i++) {
-    b.post(POST_ORDINARY, { key: `s${i}`, title: `会话${i}`, body: '已完成' }, t0)
-  }
-  assert.equal(b.due(t0), false, '还差一封')
-  b.post(POST_ORDINARY, { key: 'last', title: '收尾', body: '已完成' }, t0)
-  assert.equal(b.due(t0), true, '装满立刻走')
+  b.post(POST_ORDINARY, { key: 's1', title: '会话一', body: '已完成' }, t0)
+  b.post(POST_ORDINARY, { key: 's2', title: '会话二', body: '已完成' }, t0)
+
+  // 压了 14 分钟，眼看就要发了 —— 这时人在手机页面前台露了一面。
+  const seenAt = t0 + 14 * 60_000
+  assert.equal(b.notePresence(seenAt), 2, '两件都被重新计时')
+  assert.equal(b.ordinaryCount, 2, '只动时间戳：不取走、不丢弃')
+  assert.equal(b.due(seenAt), false, '刚露面不该马上发')
+  assert.equal(b.due(seenAt + M.holdMs - 1), false, '从「露面那一刻」重新数')
+  assert.equal(b.due(seenAt + M.holdMs), true, '露面之后满 15 分钟才走')
+
+  // 空包时什么都不做：没有东西需要重新计时。
+  assert.equal(b.take(seenAt + M.holdMs).ordinary.length, 2)
+  assert.equal(b.notePresence(seenAt + M.holdMs), 0, '空包 ⇒ 0 件被计时')
 })
 
-test('平邮按会话去重：同一件事办完两次只说一次，说最新那次', () => {
+test('平邮：同一会话只占一个位置，标题取最新那次', () => {
   const b = bag()
   const t0 = 4_000_000
   b.post(POST_ORDINARY, { key: 's1', title: '旧标题', body: '已完成' }, t0)
   b.post(POST_ORDINARY, { key: 's1', title: '新标题', body: '已完成' }, t0 + 1000)
   assert.equal(b.ordinaryCount, 1, '同一个会话不占两个位置')
-  const taken = b.take(t0 + 1000 + M.rideMs)
+  const taken = b.take(t0 + 1000 + M.holdMs)
   assert.equal(taken.ordinary.length, 1)
   assert.equal(taken.ordinary[0].title, '新标题')
   assert.equal(taken.ordinary[0].key, 's1', 'take 之后 key 还在，寄失败时还能放回原位')
 })
 
-test('平邮压太久就作废，而且说得出作废了几封（不静默吞）', () => {
+test('包里没有「放太久就作废」：压多久都还在，发车时一封不丢', () => {
+  // 用户 2026-10-10 20:55 拍掉的规矩。原来有个 ttlMs（2 小时）会在发车那一刻把旧信扔掉，
+  // 理由是「隔半天再通知昨晚跑完了是噪音」。但额度死掉、信发不出去时正是最不该丢信的场合：
+  // 微信卡了一早上，通了就该一次全发过来。所以现在 take 只取不筛。
   const b = bag({ ...M, ttlMs: 60_000 })
   const t0 = 5_000_000
-  b.post(POST_ORDINARY, { key: 'old', title: '昨天的', body: '已完成' }, t0)
+  b.post(POST_ORDINARY, { key: 'old', title: '很久以前的', body: '已完成' }, t0)
   b.post(POST_ORDINARY, { key: 'new', title: '刚跑完的', body: '已完成' }, t0 + 50_000)
   const taken = b.take(t0 + 90_000)
-  assert.deepEqual(taken.ordinary.map((letter) => letter.title), ['刚跑完的'], '过期那封不寄')
-  assert.equal(taken.voided, 1, '但要在日志里说清楚丢了几封')
+  assert.deepEqual(
+    taken.ordinary.map((letter) => letter.title),
+    ['很久以前的', '刚跑完的'],
+    '过了 ttlMs 也照发——作废判据已整条取消'
+  )
+  assert.equal('voided' in taken, false, 'take 的返回值里不该再有 voided')
 })
 
 test('挂号信：不排队、不合并，也不替邮包提前发车', () => {
@@ -168,17 +184,17 @@ test('装信：没东西可说就是空信，不是一封空白邮件', () => {
 })
 
 test('班次表就是定出来的那张表（改数要连带改注释与 CHANGELOG）', () => {
-  // 2026-10-10 用户重定：15/30/5。三个是**并排的 OR 触发**不是接力 —— 见 lib/bridge.js
-  // 的 NOTIFY_MAILBAG 注释（那里记了「15 和 30 有啥区别」的答案）。
-  // lettersMax 5 ＝ 一封信列得下的名字数（也是信的可读长度上限）；
-  // rideMs 15 分钟 ＝ 这一波安静够了（只在「用户停手了」时满足）；
-  // holdMs 30 分钟 ＝ 最早那件压到封顶（任务一直不停时唯一的兜底）；
-  // registeredMax 8 ＝ 等补投的挂号信上限；ttlMs 2 小时之后的完成消息不值得再寄。
+  // 2026-10-10 22:33 用户亲自砍到这个程度：「只有特殊消息立即发；你进手机端立即重置待发送，
+  // 打个时间戳啥的；否则最早一条满 15 分钟打包发一条摘要。就这么简单」。
+  // 见 lib/bridge.js 的 NOTIFY_MAILBAG 注释（那里记了砍掉 rideMs/lettersMax 的理由）。
+  // holdMs 15 分钟 ＝ **唯一**的时间尺度：最早那件压满就走；
+  // registeredMax 8 ＝ 等补投的挂号信上限。
+  // **表里不该再出现 rideMs／lettersMax**：一个时间尺度，不再有「安静够了才走」和「装满就走」。
+  // **表里不该再出现 ttlMs**：作废判据 2026-10-10 20:55 已被用户整条取消。
   assert.deepEqual({ ...M }, {
-    lettersMax: 5,
-    rideMs: 15 * 60_000,
-    holdMs: 30 * 60_000,
-    registeredMax: 8,
-    ttlMs: 2 * 60 * 60_000
+    holdMs: 15 * 60_000,
+    registeredMax: 8
   })
+  assert.equal('rideMs' in M, false, '末班车已砍：发车只看最早那件')
+  assert.equal('lettersMax' in M, false, '装满就走已砍：它是同一个时间尺度的另一种量度')
 })
