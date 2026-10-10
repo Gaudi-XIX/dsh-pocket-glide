@@ -537,12 +537,17 @@ test('A15 renderMessage stays one line and appends the footer inside the message
   assert.ok(line.includes("role==='turn-error'"), 'the error bubble must still branch out first')
 })
 
-test('A19c the clock is gated by the running flag, not always stamped', () => {
+test('A19c the clock is gated per bubble, not by the whole-turn running flag', () => {
   const tail = between('function renderMessageTail(', 'function syncPromptUi(')
-  assert.ok(tail.includes('!agentRunning&&message.messageTime'),
-    'the clock must be suppressed while the session is running')
+  // 2026-10-10, user: 「AI 发出来的每一条消息下面不是一块一块的吗，每一块都该放一个时间」.
+  // The old rule hid every clock while the session ran; the bubble that is still being
+  // streamed is the only one that should not have one yet.
+  assert.ok(tail.includes('message.messageTime&&!message.streaming'),
+    'a bubble owns its clock, and only a still-streaming one waits')
+  assert.ok(!tail.includes('!agentRunning&&message.messageTime'),
+    'the whole-turn suppression must stay gone')
   assert.ok(!tail.includes('message.messageTime?formatMessageClock'),
-    'the unguarded clock form must stay gone')
+    'and the unguarded clock form must stay gone too')
 })
 
 test('A15 the projection keeps eventTime and normalizeUsage nested, not top level', () => {
@@ -584,10 +589,13 @@ test('A16 a turn whose records carry no seq still shows exactly one usage pill',
   const html = renderAll(project(events)).join('')
   const pills = html.match(/<span class="usage-pill"/g) || []
   assert.equal(pills.length, 1, `only the turn's last text message carries the pill, saw ${pills.length}`)
-  // one clock exactly: only the turn-final text item rides the last-item gate,
-  // and the unstamped user event grows no clock.
+  // FLIPPED 2026-10-10, user's 甲 ruling (「AI 发出来的每一条消息下面不是一块一块的吗，
+  // 每一块都应该放一个时间」): every landed assistant bubble stamps itself. The old
+  // contract stamped exactly one clock per turn, on the turn-final text item. The
+  // usage pill deliberately stays ONE per turn — it is a turn number, not a block one,
+  // and is the part of this test that must NOT be "fixed" alongside the clocks.
   const clocks = html.match(/<span class="msg-clock">/g) || []
-  assert.equal(clocks.length, 1, `exactly one clock on the turn-final text item, saw ${clocks.length}`)
+  assert.equal(clocks.length, 2, `one clock per landed bubble, saw ${clocks.length}`)
 })
 
 // ---------------------------------------------- A18 one pill per message, not per block
@@ -620,11 +628,11 @@ test('A18 one assistant message with several text blocks shows exactly one usage
     const html = renderAll(project(events)).join('')
     const pills = html.match(/<span class="usage-pill"/g) || []
     assert.equal(pills.length, 1, `${count} text blocks in one message must still print one pill, saw ${pills.length}`)
-    // one clock on the single user bubble + one on the turn-final assistant
-    // bubble; the per-block clocks are retired — the clock rides the same
-    // last-item gate as the pill.
+    // 甲 ruling 2026-10-10: one clock on the user bubble plus one on EVERY assistant
+    // text bubble (the phone draws one bubble per text block, so a message of `count`
+    // blocks carries `count` clocks). The pill stays at one.
     const clocks = html.match(/<span class="msg-clock">/g) || []
-    assert.equal(clocks.length, 2, '用户气泡 1 枚 + 回合末 assistant 气泡 1 枚，每块一钟已废（时钟与药丸同门）')
+    assert.equal(clocks.length, 1 + count, `用户气泡 1 枚 + 每个 assistant 气泡各 1 枚（每块一钟，见 2026-10-10 甲案）`)
   }
 })
 
@@ -684,12 +692,14 @@ test('A17 a total that contradicts both declared cache buckets shows no pill', (
 // The footer clock must not be stamped while the session is still running, or the
 // phone shows "finish time" on a message the user has not finished reading yet.
 // `renderMessageTail` reads the closure `agentRunning` (set by `updateRunning`).
-test('A20 no clock is stamped while the assistant is still running', () => {
+test('A20 a finished bubble keeps its clock while the assistant is still running', () => {
   const sandbox = messageSandbox('zh')
   sandbox.setAgentRunning(true)
   const html = assistantHtml({ time: LOCAL(26, 3, 12, 9, 5) })
-  // a clock would normally be present; the running guard must suppress it
-  assert.equal(clockText(html), null, 'no clock while agentRunning')
+  // Flipped 2026-10-10 by the user's per-bubble rule: the clock used to disappear for the
+  // whole session during a turn, which read as "the times are gone again". The fixture
+  // stamps a past date, so the formatter prefixes it — assert the clock, not its width.
+  assert.match(clockText(html) || '', /\d{1,2}:\d{2}/, 'each landed bubble stamps itself, running turn or not')
   sandbox.setAgentRunning(false)
 })
 

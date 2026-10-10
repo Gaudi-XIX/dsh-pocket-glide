@@ -189,10 +189,11 @@ test('T1 a two-turn transcript gives each turn its own pill on its own last text
 
 test('T1 a two-turn transcript stamps one clock per turn on its final text message', () => {
   const htmls = project(TWO_TURNS).map((message) => renderOne(message))
-  // htmls[1] is turn 1's mid-turn step: the clock rides the same last-item gate
-  // as the pill, so a mid-turn step carries neither — no footer at all.
-  assert.equal(clockText(htmls[1]), null, 'a mid-turn step must not carry a clock')
-  assert.ok(!htmls[1].includes('msg-tail'), 'a mid-turn step must not render a footer at all')
+  // FLIPPED 2026-10-10 (甲案: 每个 AI 气泡各带一个时间). A mid-turn step used to be
+  // clock-free because the clock shared the turn-final pill gate; now any landed bubble
+  // stamps itself. The pill is still turn-final only (asserted above and in T2).
+  assert.ok(clockText(htmls[1]), 'a mid-turn step carries its own clock now')
+  assert.ok(htmls[1].includes('msg-tail'), 'so it renders a footer too')
   for (const idx of [0, 2, 3, 4]) assert.ok(clockText(htmls[idx]), `message ${idx} must still carry its clock`)
   // Same stamp -> same rendering; different turn -> different rendering.
   assert.equal(clockText(htmls[0]), clockText(htmls[2]), 'the question and its answer share one stamp')

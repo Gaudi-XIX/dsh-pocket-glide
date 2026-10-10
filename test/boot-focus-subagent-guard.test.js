@@ -302,12 +302,17 @@ test('AC-10 the straight-through focus is gone', () => {
   )
 })
 
-test('AC-11 the list projection and its four landing points are untouched', () => {
+test('AC-11 the list projection and its landing points are untouched', () => {
   const sites = [
     ['refreshActiveSessionSummary', 'sessionSummaries=visibleSessions(value.items)'],
-    ['openSessionSettings', 'sessionSummaries=visibleSessions(sessions.items)'],
     ['applyBootData', 'sessionSummaries=visibleSessions(sessInput.items)'],
   ]
+  // openSessionSettings used to be a third landing point: it pulled the WHOLE session list
+  // (469 rows / ~195 KB over the tunnel) just to read one agentPreset, which is what made
+  // the settings panel take 1-2 seconds to open (user report 2026-10-10). It now reads the
+  // summary the page already holds, so it no longer loads a list to project.
+  assert.ok(!extractFunction(js, 'openSessionSettings').includes("rpc('session.list'"),
+    'opening the settings panel must not pay for the session list again')
   for (const [name, needle] of sites) {
     assert.ok(extractFunction(js, name).includes(needle), `${name} must still project its answer`)
   }

@@ -65,54 +65,37 @@ test('the near-bottom band is the 120px follow threshold, measured from the bott
   assert.equal(isNearBottom({ scrollHeight: 800, scrollTop: 0, clientHeight: 800 }), true, 'a short transcript is always near bottom')
 })
 
-test('anchor visibility: nothing lights on the bottom screen, ↑ needs a question above the fold, ↓ joins past 1.5 screens, and neither takes the other away', () => {
+test('anchor visibility: ONE gate for both buttons — they open together past the follow band, and ↑ never vanishes mid-climb', () => {
   const { anchorVisibleState } = scrollOrgans()
-  const clientHeight = 800
-  // (2026-10-09) Within one screen of the bottom NOTHING may light, even with a
-  // question above the fold — that was the bug (↑ lit while the reader had not moved
-  // at all, at the foot of a long reply).
-  let state = anchorVisibleState(300, clientHeight, true)
-  assert.deepEqual(state, { latest: false, prompt: false }, 'bottom screen: dark')
-  state = anchorVisibleState(800, clientHeight, true)
-  assert.deepEqual(state, { latest: false, prompt: false }, 'exactly one screen back: still dark')
-  state = anchorVisibleState(801, clientHeight, true)
-  assert.deepEqual(state, { latest: false, prompt: true }, 'past a screen, with a question above → ↑')
-  state = anchorVisibleState(801, clientHeight, false)
-  assert.deepEqual(state, { latest: false, prompt: false }, 'nothing above the fold → nothing to jump up to')
-  // (2026-10-10 round two) What this replaces: ↑ used to demand the question sit a
-  // FULL screen above the viewport, so the moment the reader climbed past his last
-  // question it switched off — mid-climb, with older questions still above him. The
-  // machine now only asks whether userAnchorEl found one above the fold, and that one
-  // is the nearest, so ↑ also steps back through the history.
-  state = anchorVisibleState(4000, clientHeight, true)
-  assert.deepEqual(state, { latest: true, prompt: true }, 'deep in history: both targets off-screen, both buttons')
-  state = anchorVisibleState(1200, clientHeight, true)
-  assert.deepEqual(state, { latest: false, prompt: true }, 'the 1.5-screen boundary keeps ↓ quiet while ↑ stays')
-  state = anchorVisibleState(1201, clientHeight, true)
-  assert.equal(state.latest, true, 'past it ↓ joins')
-  assert.equal(state.prompt, true, 'and ↑ is still there — no tile changes identity under the finger')
-  // Monotone over a climb: neither button switches off while its own target holds.
-  let latestBefore = false
+  // 2026-10-10, unified on the user's instruction (「别搞这么复杂了…统一时间逻辑」): the deck
+  // opens the moment the reader leaves the 120px follow band and closes when they return to
+  // it. ↓ = back to the bottom; ↑ = the nearest question above the fold, and pressing it
+  // again walks to the one above that. Retired here: mutual exclusion, the 1.5-screen ↓
+  // lead-in, and the full-screen separation ↑ used to demand (the clause that kept making
+  // ↑ blink out mid-climb).
+  assert.deepEqual(anchorVisibleState(0, true), { latest: false, prompt: false }, 'sat on the bottom: dark')
+  assert.deepEqual(anchorVisibleState(120, true), { latest: false, prompt: false }, 'inside the follow band: dark')
+  assert.deepEqual(anchorVisibleState(121, true), { latest: true, prompt: true }, 'one pixel out: BOTH appear, at the same moment')
+  assert.deepEqual(anchorVisibleState(121, false), { latest: true, prompt: false }, 'no question above → only ↓, nothing to walk back to')
+  assert.deepEqual(anchorVisibleState(6000, true), { latest: true, prompt: true }, 'deep in history: both still there, ↑ never blinked out')
+  let latest = false
   for (let dist = 0; dist <= 6000; dist += 37) {
-    const swept = anchorVisibleState(dist, clientHeight, true)
-    if (latestBefore) assert.equal(swept.latest, true, `↓ vanished at dist=${dist}`)
-    latestBefore = swept.latest
-    assert.equal(swept.prompt, dist > clientHeight, `↑ flickered at dist=${dist}`)
+    const swept = anchorVisibleState(dist, true)
+    if (latest) assert.equal(swept.latest, true, `↓ vanished at dist=${dist}`)
+    latest = swept.latest
+    assert.equal(swept.prompt, dist > 120, `↑ flickered at dist=${dist}`)
   }
 })
 
-test('the reported bug: at the foot of a multi-screen reply the deck stays dark, however far above the question sits', () => {
+test('the 0.4.4 guard survives the unification: at the foot of a long reply, nothing lights however far above the question sits', () => {
   const { anchorVisibleState } = scrollOrgans()
-  const clientHeight = 800
-  // A five-screen answer: the question sits 5000px above the viewport top while
-  // the reader has not scrolled at all (dist 0..800 = still the bottom screen).
-  // Old rule: ↑ lit (the question was "more than a screen above the top").
-  // New rule: nothing lights until a screen is actually travelled.
-  for (const dist of [0, 1, 119, 120, 400, 799, 800]) {
-    const state = anchorVisibleState(dist, clientHeight, 4000, 9000)
-    assert.deepEqual(state, { latest: false, prompt: false }, `dist=${dist} is still the bottom screen — nothing may light`)
+  // The bug this still blocks: ↑ lighting while the reader had not moved at all, at the
+  // bottom of a multi-screen answer. Distance from the bottom is still the only gate.
+  for (const dist of [0, 1, 60, 119, 120]) {
+    assert.deepEqual(anchorVisibleState(dist, true), { latest: false, prompt: false },
+      `dist=${dist} is inside the follow band — nothing may light`)
   }
-  assert.equal(anchorVisibleState(801, clientHeight, 4000, 9000).prompt, true, 'one screen travelled → ↑')
+  assert.equal(anchorVisibleState(121, true).prompt, true, 'leaving the band is the only thing it takes')
 })
 
 // --------------------------------------- 2. content-visibility tagging rules
