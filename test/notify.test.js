@@ -337,16 +337,16 @@ test('notify trigger: a running→done edge pushes exactly one completion notice
     // 0.4.12：完成通知不再逐条直发，它进信封等一趟车——一条入站只换 10 条额度，
     // 逐个会话直发会在一个繁忙分钟里把额度烧穿（实测 09:34:23 一秒 13 发 12 拒）。
     assert.equal(sent.length, 0, 'the settle queues a notice instead of pushing it')
-    assert.equal(t.bridge.notifyEnvelope.batchCount, 1, 'one passenger waiting')
+    assert.equal(t.bridge.mailbag.ordinaryCount, 1, 'one passenger waiting')
     // A session that stays done does not notify twice.
     await t.bridge.pollNotifyRunning()
-    assert.equal(t.bridge.notifyEnvelope.batchCount, 1, 'the same settle never queues twice')
-    await t.bridge.flushNotifyEnvelope('refill')
+    assert.equal(t.bridge.mailbag.ordinaryCount, 1, 'the same settle never queues twice')
+    await t.bridge.sendMail('inbound')
     assert.equal(sent.length, 1)
     assert.ok(sent[0].startsWith('https://api.day.app/'))
     assert.ok(sent[0].includes(encodeURIComponent('写周报')), 'the session title names the notice')
     await t.bridge.pollNotifyRunning()
-    await t.bridge.flushNotifyEnvelope('hitchhike')
+    await t.bridge.sendMail('hitchhike')
     assert.equal(sent.length, 1, 'and nothing departs twice')
     assert.equal(
       t.logs.some(({ message }) => message.includes(REAL_KEY)),

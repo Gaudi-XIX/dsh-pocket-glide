@@ -401,7 +401,8 @@ test('clawbot quota: 计数真的进了发给微信的那段文字，入站一�
       channel: 'clawbot',
       key: 'bot_token_quota',
       enabled: true,
-      clawbot: { botToken: 'bot_token_quota', userId: 'user_quota', contextToken: 'ctx_seed' }
+      // 存档里还没有令牌 ⇒ 这就是「刚扫完码」的首绑状态，才会发那封就绪回执。
+      clawbot: { botToken: 'bot_token_quota', userId: 'user_quota', contextToken: '' }
     }
   })
   const sent = []

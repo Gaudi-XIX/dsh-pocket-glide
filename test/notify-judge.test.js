@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  NOTIFY_BATCH,
+  NOTIFY_MAILBAG,
   NOTIFY_JUDGE_THRESHOLDS,
   judgeSessionCompletion,
   sessionActivityAt,
@@ -18,7 +18,7 @@ import { startBridge } from './helpers.js'
 const T = NOTIFY_JUDGE_THRESHOLDS
 // 完成通知自 0.4.12 走合并车道：判到 settle 只进信封，发车由「凑满／末班车／封顶」
 // 三条件决定。下面的桥测因此要显式把时钟推过末班车，而不是指望同一 tick 就出站。
-const B = NOTIFY_BATCH
+const B = NOTIFY_MAILBAG
 const REAL_KEY = 'SECRETKET1234567890AB'
 
 /** Run one session through a list of [dtMs, sample] steps, collecting fires. */
@@ -192,7 +192,7 @@ test('bridge poll: a quiet settle fires once through the real poll path', async 
     clock += 91_000
     await tick()
     assert.equal(sent.length, 0, '90s of silence settles — into the envelope, not onto the wire')
-    clock += B.batchQuietMs
+    clock += B.rideMs
     await tick()
     assert.equal(sent.length, 1, 'the last bus departs and the settle is announced')
     assert.ok(sent[0].includes(encodeURIComponent('部署')))
@@ -240,7 +240,7 @@ test('bridge poll: a session parked on a question never completes, and its after
     clock += 30_000
     await tick()
     assert.equal(sent.length, 0, 'the aftermath settles into the envelope')
-    clock += B.batchQuietMs
+    clock += B.rideMs
     await tick()
     assert.equal(sent.length, 1, 'the stop is announced once the question is gone')
   } finally {
@@ -295,7 +295,7 @@ test('bridge poll: a frozen lead whose subagent still runs never notifies a fals
     clock += 30_000
     await tick()
     assert.equal(sent.length, 0, 'the fleet settle is judged — and batched, not fired')
-    clock += B.batchQuietMs
+    clock += B.rideMs
     await tick()
     assert.equal(sent.length, 1, 'the settle fires for the lead once the fleet is done')
     assert.ok(sent[0].includes(encodeURIComponent('编队')), 'the notice names the lead, not the invisible child row')
