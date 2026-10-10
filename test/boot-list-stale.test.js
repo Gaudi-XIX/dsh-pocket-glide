@@ -116,11 +116,20 @@ test('a forced read ignores the stand-in, the way the missing-session lookup nee
     'force means force: a freshly created session must be findable')
 })
 
-test('the boot path is the caller that asked for staleness', () => {
-  // Source-level guard: exactly one call site opts in, and it is the document
-  // build. If someone opts the list view in too, the reader would scroll stale rows.
+test('the stale opt-in has exactly two owners: the boot build and the prewarm', () => {
+  // Source-level guard. Two readers may stand in with the last good catalogue:
+  // the cold-open document build, and — since 2026-10-10, the "content is already
+  // loading when the connect page opens" requirement — prewarmMobileBoot, which
+  // fires the same read ahead of the phone for free. If the list-view RPC ever
+  // opts in here, the reader scrolls stale rows without having asked for speed.
+  const bodyOf = (start) => {
+    const at = bridgeSource.indexOf(start)
+    assert.ok(at >= 0, `${start} is gone from the bridge`)
+    return bridgeSource.slice(at, bridgeSource.indexOf('\n  }', at))
+  }
   const opted = bridgeSource.split('\n').filter((line) => line.includes('staleOk: true'))
-  assert.equal(opted.length, 1, 'one and only one caller may serve stale')
-  assert.match(opted[0], /cachedSessionList\(false, \{ staleOk: true \}\)/)
-  assert.match(opted[0], /this\.cachedSessionList/, 'inside the boot build, not some other route')
+  assert.equal(opted.length, 2, 'the boot build and the prewarm are the only stale readers')
+  assert.equal(bodyOf('async buildMobileBoot(').split('staleOk: true').length - 1, 1, 'the document asks once')
+  assert.equal(bodyOf('prewarmMobileBoot(trigger').split('staleOk: true').length - 1, 1, 'and so does the prewarm')
+  assert.doesNotMatch(bodyOf("if (method === 'session.list')"), /staleOk/, 'the list view still waits for the truth')
 })

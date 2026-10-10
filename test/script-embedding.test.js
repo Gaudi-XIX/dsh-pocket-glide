@@ -16,7 +16,7 @@ const SHARED_ORGANS = [
   'function withTimeout(promise,ms){',
   'function pinError(message){',
   'const rpc=async(method,payload={})=>{',
-  'const stageRunner=(setStep)=>async(index,work)=>{',
+  'const stageRunner=(setStep)=>{',
   'async function verifyPin(pin){',
   'async function showPinOnDesktop(){'
 ]

@@ -5,6 +5,7 @@
 // return strings.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   renderConsentPage,
   renderDesktopPairingPage,
@@ -205,4 +206,37 @@ test('the new panel i18n keys exist in both locales side by side', () => {
   assert.match(en, /Allow/)
   assert.match(zh, /吊销/)
   assert.match(en, /Revoke/)
+})
+
+// ---------------------------------------------------------------------------
+// 「进页面就把内容预先加载好」 (2026-10-10). The phone lands on a connection page
+// (PIN or reconnect) and then waits. Everything that can start without the
+// PIN must start at page load instead, and the reads that cannot must go out
+// together rather than one tunnel round trip at a time.
+// ---------------------------------------------------------------------------
+
+test('both connection pages warm the shell the moment they load', () => {
+  const pin = renderPairingPinPage('zh', null)
+  const reconnect = renderMobileReconnectPage('zh', 'tunnel')
+  for (const [name, html] of [['pairing', pin], ['reconnect', reconnect]]) {
+    assert.match(html, /const shellReady=\(async\(\)=>/, `${name} starts the shell download at page level`)
+    assert.ok(!html.includes('const prefetch='), `${name} no longer defers the warm-up into the handoff`)
+    assert.match(html, /Promise\.all\(\[shellReady/, `${name} waits on that page-level warm-up, not a second copy`)
+  }
+})
+
+test('the handoff reads go out in one batch, and the ladder only ever climbs', () => {
+  const pin = renderPairingPinPage('zh', null)
+  const reconnect = renderMobileReconnectPage('zh', 'tunnel')
+  // workspace + session list + boot are independent, and the bridge dedupes the
+  // catalogue itself: three serial round trips become one.
+  assert.match(pin, /await Promise\.all\(\[stage\(1,\(\)=>rpc\('workspace\.list'\)\),stage\(2,\(\)=>rpc\('session\.list'/, 'the PIN page batches its three reads')
+  assert.match(reconnect, /await Promise\.all\(\[stage\(0,\(\)=>rpc\('workspace\.list'\)\),stage\(1,\(\)=>rpc\('session\.list'/, 'and so does the reconnect page')
+  // Rows may now finish out of order, so a late answer for an earlier row must
+  // never rewind the ladder.
+  for (const [name, html] of [['pairing', pin], ['reconnect', reconnect]]) {
+    assert.match(html, /if\(index\+1>high\)\{high=index\+1;setStep\(index\+1\)\}/, `${name} stageRunner only advances`)
+  }
+  const source = readFileSync(new URL('../lib/pages.js', import.meta.url), 'utf8')
+  assert.equal(source.split('const stageRunner=(setStep)=>{').length - 1, 1, 'one copy of the stage runner, shared')
 })

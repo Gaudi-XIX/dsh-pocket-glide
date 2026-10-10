@@ -403,7 +403,7 @@ test('AC-UI1 every control the audit measured small now clears the 44px floor', 
     '.plus-search-open{display:flex;align-items:center;gap:7px;width:100%;height:44px;',
     '.plus-filter{width:100%;height:44px;',
     '.todo-header{width:100%;height:44px;',
-    '.setting-field select{width:100%;height:44px;',
+    '.setting-field select{width:100%;height:46px;',
     '.chat-toolbar{position:absolute;inset:0 0 auto;z-index:2;min-height:44px;',
     '.plus-search-cancel{flex:none;min-width:44px;min-height:44px;',
     '.plus-back{display:inline-flex;align-items:center;gap:4px;min-height:44px;',
@@ -584,6 +584,34 @@ test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
 })
 
 // ---------------------------------------------------------------------------
+// AC-UI9 (2026-10-10, live report "选择模型那个下拉口子太粗糙"): the session-settings
+// field is a designed control, not a native <select> left at the sheet defaults.
+// The native arrow is what produced the double gap in front of the value, so the
+// rule must take appearance off and paint its own chevron; the catalogue's own
+// labels are collapsed and trimmed because a padded name reads as an indent.
+// ---------------------------------------------------------------------------
+
+test('AC-UI9 the settings field reads as a field, and a padded catalogue name cannot', () => {
+  const css = assets.css
+  assert.match(
+    css,
+    /\.setting-field select\{width:100%;height:46px;padding:0 34px 0 13px;[^}]*appearance:none;-webkit-appearance:none\}/,
+    'the native arrow is off and the value sits at one declared padding, not two',
+  )
+  assert.match(css, /\.setting-field select\{[^}]*font-size:15px;font-weight:550/, 'the value reads at body size in ink, not small grey')
+  assert.ok(css.includes('background:var(--surface);color:var(--ink)'), 'and on the surface token, ink typed')
+  assert.match(css, /\.setting-field::after\{content:"";[^}]*rotate\(45deg\);pointer-events:none\}/, 'one CSS-drawn chevron, no image bytes')
+  assert.match(css, /\.setting-field\{position:relative;/, 'the field owns its own coordinate system')
+  assert.match(css, /\.setting-field option,\.setting-field optgroup\{color:var\(--ink\);font-size:15px\}/, 'the opened list keeps the same type')
+
+  const fieldText = new Function(`${slice(assets.js, 'function fieldText(', 'function renderSessionSettings(')};return fieldText`)()
+  assert.equal(fieldText('  DeepSeek V3.2  ', 'ds'), 'DeepSeek V3.2', 'leading and trailing pad is gone')
+  assert.equal(fieldText('A\u3000 B', 'a'), 'A B', 'a full-width space collapses with the rest')
+  assert.equal(fieldText('  ', 'fallback-id'), 'fallback-id', 'a blank name never renders an empty row')
+  assert.equal(fieldText(null, undefined), '', 'and nothing here throws on a missing label')
+})
+
+// ---------------------------------------------------------------------------
 // WP1 (change 2026-10-04-fix-pocket-r1-audit-batch, item 3): the shell has a
 // size ceiling. This is an arrival-green guard — it does not fail on the code
 // as inherited — so its red state is self-proven by temporarily setting
@@ -669,7 +697,20 @@ test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
 // pullHint, pullRelease), the olderExhausted term in olderButtonHtml's canAsk
 // and its fourth label, and #pullHint in the reduced-motion transition list.
 // Headroom left: ~1.1 KB zh / ~1.2 KB en.
-const ASSET_BUDGET_BYTES = 256_000
+//
+// Receipt (2026-10-10, dual-anchor + pull robustness + settings field): budget
+// raised 256_000 -> 258_000 — the shell grew ~2.4 KB (zh 254895 -> 257331, en
+// 254819 -> 257255). Three user reports, one line each:
+//  · anchors: `!latest` gone from anchorVisibleState and from the DOM toggle (↑ is
+//    never replaced by ↓ any more), plus the rewritten decision comment;
+//  · pull: THRESHOLD 72 -> 26 with a one-way `if(pulled>=THRESHOLD)ready=true`, and
+//    the new topEdgePull organ + its rAF wiring, so a fling that lands on the top
+//    edge loads a page by itself;
+//  · settings: the .setting-field block (positioned label, 46px field at 15px/550
+//    ink with a CSS-only chevron replacing the native arrow, focus ring, option and
+//    optgroup type) and fieldText(), the collapse+trim guard for padded catalogue
+//    names. Headroom left: ~0.67 KB zh / ~0.75 KB en.
+const ASSET_BUDGET_BYTES = 258_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

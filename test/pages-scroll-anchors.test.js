@@ -65,10 +65,10 @@ test('the near-bottom band is the 120px follow threshold, measured from the bott
   assert.equal(isNearBottom({ scrollHeight: 800, scrollTop: 0, clientHeight: 800 }), true, 'a short transcript is always near bottom')
 })
 
-test('anchor visibility: nothing lights on the bottom screen, ↑ needs a screen of scrolling back, ↓ wins past 1.5 screens, never both', () => {
+test('anchor visibility: nothing lights on the bottom screen, ↑ needs a screen of scrolling back, ↓ joins past 1.5 screens, and neither one takes the other away', () => {
   const { anchorVisibleState } = scrollOrgans()
   const clientHeight = 800
-  // (2026-10-09) The fix: within one screen of the bottom NOTHING may light, even
+  // (2026-10-09) Within one screen of the bottom NOTHING may light, even
   // when the last question hangs a screen above the viewport — that was the bug
   // (↑ lit while the reader had not moved at all, at the foot of a long reply).
   let state = anchorVisibleState(300, clientHeight, 2000, 4000)
@@ -77,9 +77,13 @@ test('anchor visibility: nothing lights on the bottom screen, ↑ needs a screen
   assert.deepEqual(state, { latest: false, prompt: false }, 'exactly one screen back: still dark')
   state = anchorVisibleState(801, clientHeight, 2000, 4000)
   assert.deepEqual(state, { latest: false, prompt: true }, 'past a screen of scrolling → ↑')
-  // scrolled far up → ↓, and ↑ is suppressed even though the question is above
-  state = anchorVisibleState(4000, clientHeight, 2000, 1000)
-  assert.deepEqual(state, { latest: true, prompt: false })
+  // (2026-10-10) The other half of the report: far up, ↓ must JOIN, not REPLACE.
+  // The reader climbing through history still wants ↑; the old mutual exclusion
+  // changed the identity of the tile under the finger. Here the last question is a
+  // screen and a half ABOVE the reader while the bottom is nearly three screens
+  // below them — both targets are off-screen, so both buttons belong.
+  state = anchorVisibleState(2200, clientHeight, 2000, 3000)
+  assert.deepEqual(state, { latest: true, prompt: true }, 'both targets off-screen → both buttons')
   // question barely above the top edge (less than a screen) → neither
   state = anchorVisibleState(900, clientHeight, 1500, 2000)
   assert.deepEqual(state, { latest: false, prompt: false })
@@ -91,11 +95,18 @@ test('anchor visibility: nothing lights on the bottom screen, ↑ needs a screen
   assert.deepEqual(state, { latest: false, prompt: false })
   state = anchorVisibleState(1201, clientHeight, -500, 2000)
   assert.equal(state.latest, true)
-  // mutual exclusion over a sweep of scroll positions
-  for (let scrollTop = 0; scrollTop <= 5000; scrollTop += 37) {
+  // A reader who keeps going up never loses the ↓ that was already there, and the
+  // exact moment ↓ lights does not put ↑ out (the old rule swapped one for the
+  // other in the same tile).
+  let previous = { latest: false, prompt: false }
+  for (let scrollTop = 5000; scrollTop >= 0; scrollTop -= 37) {
     const swept = anchorVisibleState(5000 - scrollTop - clientHeight, clientHeight, 2000, scrollTop)
-    assert.ok(!(swept.latest && swept.prompt), `both anchors lit at scrollTop=${scrollTop}`)
+    if (previous.latest) assert.equal(swept.latest, true, `↓ vanished at scrollTop=${scrollTop}`)
+    previous = swept
   }
+  // dist 1201 with the question two screens above the viewport: both are wanted.
+  assert.deepEqual(anchorVisibleState(1201, clientHeight, 2000, 3400), { latest: true, prompt: true },
+    'where ↓ first lights, ↑ is still there')
 })
 
 test('the reported bug: at the foot of a multi-screen reply the deck stays dark, however far above the question sits', () => {
@@ -384,7 +395,10 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   assert.match(js, /followStream=isNearBottom\(live\)/, 'the scroll handler re-decides the follow from the live band')
   assert.match(js, /activeSession=id;const summary=sessionSummaries\.find\(item=>item\.sessionId===id\);sessionBlank=summary\?\.blank\?\?true;noteSessionOpened\(id\);followStream=true;/, 'openSession stamps the ledger and re-arms the follow')
   assert.match(js, /poll=null;if\(activeSession\)noteSessionOpened\(activeSession\);/, 'leaving to the list stamps the ledger (activity seen live is read)')
-  assert.match(js, /latest\.classList\.toggle\('show',state\.latest\);prompt\.classList\.toggle\('show',!state\.latest&&state\.prompt\)/, 'the anchor buttons are mutually exclusive in the DOM too')
+  assert.match(js, /latest\.classList\.toggle\('show',state\.latest\);prompt\.classList\.toggle\('show',state\.prompt\)/, 'each anchor button is wired to its OWN state — no mutual exclusion in the DOM either')
+  assert.match(js, /followStream=isNearBottom\(live\);syncScrollAnchors\(\);topEdgePull\(live\)/, 'the same rAF tick re-decides the anchors and the top edge')
+  assert.match(js, /function topEdgePull\(box\)\{if\(box\.scrollTop>0\)\{topEdgeArmed=false;return\}if\(topEdgeArmed\)return;topEdgeArmed=true;/, 'the top-edge load is edge-triggered, one page per arrival')
+  assert.match(js, /if\(!activeSession\|\|!olderHasMore\|\|olderBusy\|\|olderRunBusy\)return;void loadOlder\(\)/, 'and it obeys every lock the deliberate pull obeys')
   assert.match(js, /if\(typeof followStream==='undefined'\|\|followStream\)box\.scrollTop=box\.scrollHeight/, 'patchLastStreamMessage gates the stick on followStream')
   assert.match(assets.zh.document, /id="scrollAnchors"/, 'the anchor deck ships in the document')
   assert.match(js, /anchor-fab/, 'the fab styling ships')
