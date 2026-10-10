@@ -16,6 +16,7 @@ import {
   ILINK_CLIENT_VERSION
 } from '../lib/clawbot.js'
 import { notifySend, maskKey } from '../lib/notify.js'
+import { CLAWBOT_QUOTA_LIMIT } from '../lib/constants.js'
 import { createSettingsStore } from '../lib/settings-store.js'
 import { startBridge, httpFetch } from './helpers.js'
 
@@ -356,6 +357,108 @@ test('desktop endpoints: /desktop/notify/clawbot/qr and /status work end-to-end'
     const resetJson = JSON.parse(await resetRes.text())
     assert.equal(resetJson.channel, 'off')
     assert.equal(resetJson.clawbot.bound, false)
+  } finally {
+    await t.stop()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// 额度计数（用户 2026-10-10 提的要求：推送上给个计数）。一条入站消息换 10 条出站——
+// 本机 11:00 受控实验实测（就绪回执 + 9 条推送全成功，第 11 条起 ret=-2 prepare failed），
+// 所以正文尾巴上的「第 N/10 条」就是用户唯一的可见刻度：看到 10 就知道该回一句了。
+test('clawbot quota: 计数预占、第 10 条之后改说已超、别的通道一个字都不加', async () => {
+  const dir = makeTempDir('dsh-pocket-quota-note-')
+  const t = await startBridge({
+    bridgeOptions: {
+      settingsStore: createSettingsStore(dir),
+      notifyFetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ ret: 0 }) })
+    }
+  })
+  try {
+    const clawbot = { channel: 'clawbot' }
+    assert.equal(t.bridge.clawbotQuotaTail(clawbot), '（第 1/10 条）')
+    let tail = ''
+    for (let i = 0; i < CLAWBOT_QUOTA_LIMIT - 1; i++) tail = t.bridge.clawbotQuotaTail(clawbot)
+    assert.equal(tail, `（第 ${CLAWBOT_QUOTA_LIMIT}/${CLAWBOT_QUOTA_LIMIT} 条）`, '第 10 条仍是序号')
+    tail = t.bridge.clawbotQuotaTail(clawbot)
+    assert.ok(tail.includes('已超') && tail.includes('在微信回一句'), '超出的说法要给出下一步动作')
+    assert.equal(t.bridge.clawbotQuotaTail({ channel: 'bark' }), '', '其它渠道没有这份额度')
+    assert.equal(t.bridge.clawbotQuotaTail({ channel: 'off' }), '')
+    assert.equal(t.bridge.clawbotQuotaUsed, CLAWBOT_QUOTA_LIMIT + 1, '别的通道不能占计数')
+    t.bridge.refillClawbotQuota()
+    assert.equal(t.bridge.clawbotQuotaTail(clawbot), '（第 1/10 条）', '续期后从头数')
+  } finally {
+    await t.stop()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('clawbot quota: 计数真的进了发给微信的那段文字，入站一条就归零', async () => {
+  const dir = makeTempDir('dsh-pocket-quota-wire-')
+  const store = createSettingsStore(dir)
+  store.save({
+    notify: {
+      channel: 'clawbot',
+      key: 'bot_token_quota',
+      enabled: true,
+      clawbot: { botToken: 'bot_token_quota', userId: 'user_quota', contextToken: 'ctx_seed' }
+    }
+  })
+  const sent = []
+  let inbound = { context_token: 'ctx_fresh', from_user_id: 'user_quota' }
+  const notifyFetchImpl = async (url, options) => {
+    const u = String(url)
+    if (u.includes('/sendmessage')) {
+      const body = JSON.parse(options.body)
+      sent.push({ text: body.msg.item_list[0].text_item.text, token: body.msg.context_token })
+      return { ok: true, status: 200, json: async () => ({ ret: 0, message_id: 7514520117146685576 }) }
+    }
+    if (u.includes('/getupdates')) {
+      const msg = inbound
+      inbound = null
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ret: 0, msgs: msg ? [msg] : [], get_updates_buf: 'buf_1' })
+      }
+    }
+    return { ok: true, status: 200, json: async () => ({ ret: 0 }) }
+  }
+  const t = await startBridge({ bridgeOptions: { settingsStore: store, notifyFetchImpl } })
+  try {
+    const desktop = await t.pairDesktop()
+    const headers = { Cookie: desktop }
+    const wait = (what) =>
+      new Promise((resolve, reject) => {
+        const deadline = Date.now() + 6000
+        const step = () => {
+          if (what()) return resolve()
+          if (Date.now() > deadline) return reject(new Error('quota watcher never caught up'))
+          setTimeout(step, 30)
+        }
+        step()
+      })
+
+    // 第一条入站：watcher 回就绪回执，回执自己就是第 1 条。
+    await wait(() => sent.length >= 1)
+    assert.equal(sent[0].token, 'ctx_fresh', '回执用刚换到的新令牌')
+    assert.ok(sent[0].text.includes('（第 1/10 条）'), '就绪回执也带计数——它确实吃掉一条额度')
+
+    const push = () =>
+      httpFetch(`${t.base}/desktop/notify/test`, { method: 'POST', headers }).then((r) => r.json())
+    await push()
+    await push()
+    assert.ok(sent[1].text.includes('（第 2/10 条）'), sent[1].text)
+    assert.ok(sent[2].text.includes('（第 3/10 条）'), sent[2].text)
+    assert.ok(sent[2].text.includes('这是一条测试通知'), '计数是尾巴，不是替换正文')
+
+    // 再来一条入站，令牌字符串与存档**相同**（isNew 为假、不进回执分支），
+    // 计数照样必须归零——这正是「落盘时间不能当判据」那条铁律的代码侧版本。
+    inbound = { context_token: 'ctx_fresh', from_user_id: 'user_quota' }
+    await wait(() => t.bridge.clawbotQuotaUsed === 0)
+    await push()
+    assert.equal(sent.length, 4)
+    assert.ok(sent[3].text.includes('（第 1/10 条）'), '同令牌重复入站也算续期：重新从第 1 条数')
   } finally {
     await t.stop()
     fs.rmSync(dir, { recursive: true, force: true })
