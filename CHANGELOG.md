@@ -4,6 +4,35 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.4.9 — 2026-10-10
+
+### 修复（用户可见）
+
+- **微信 ClawBot 消息「服务端受理但微信端收不到」**：根因是**消息项的类型键名错了**——线上字段是
+  `type`，pocket 一直在发 `item_type`。服务端不校验这个键，照样回 `200` + `message_id`，
+  但微信端识别不到就**静默丢弃**，于是表现为「日志说发出去了、微信里什么都没有」。
+  现已改发 `type: 1`。
+  - **受控实验（2026-10-10 上午，同一 context_token 连发三条，只改这一处）**：A `type:1`、
+    B `item_type:1`、C 两者都带。三条服务端全回 200 + message_id（`7514489654797662984` /
+    `7514489656118807944` / `7514489657536482824`），**但只有 A 与 C 送达，B 没到**。
+  - 与参考实现一致：`ilink-hub` 的 `MessageItem` 是 `#[serde(rename = "type")] item_type`，
+    即线上键名 `type`。
+- **`test/clawbot.test.js` 加一条 wire 键名断言**：`item_list[0].type === 1` 且 `item_type`
+  不得出现。这条是「能不能真送到微信」的闸门，不是格式检查——键名错了服务端照样点头。
+
+### 施工账
+
+- `lib/clawbot.js` 的 `sendTextMessage`：`item_list[0].item_type` → `type`（附中文注释记受控实验结论）。
+- `CHANGELOG.md`／`package.json`：0.4.8 → 0.4.9。
+- 本段踩过的两个坑，写给下一个查这个协议的人：
+  - **`prepare failed` 不是本地代码里的字符串**，是服务端 errmsg 经
+    `notify send failed: clawbot ${detail}` 透出来的；本地 grep 全仓与 git 历史都搜不到它。
+  - **用已失效的 `context_token` 做的排除实验全部无效**：`ret=-2 prepare failed` 只说明
+    token 过期了（同一 token 反复发必然复现），并不能证明请求体字段对不对。当时
+    `item_type`/`type`/两者/都不带、带不带 `message_id` 六个变体全报 `prepare failed`，
+    看起来像「字段名不是原因」，其实是 token 先死了。**排查 iLink 必须先确认 token 是新的**，
+    判据：`settings` 里 context_token 的落盘时间是否在近几分钟内。
+
 ## 0.4.8 — 2026-10-10
 
 ### 修复（用户可见）

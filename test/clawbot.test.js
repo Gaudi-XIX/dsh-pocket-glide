@@ -169,6 +169,13 @@ test('clawbot: sendTextMessage posts formatted text payload', async () => {
   assert.equal(outboundBody.msg.context_token, 'ctx_tok')
   assert.equal(outboundBody.msg.to_user_id, 'user_dest')
   assert.equal(outboundBody.msg.item_list[0].text_item.text, 'Hello WeChat!')
+  // 线上键名是 `type`，不是 `item_type`。2026-10-10 受控实验：同一 context_token
+  // 连发三条，只有带 `type:1` 的能到微信；只写 `item_type:1` 的那条服务端照样
+  // 回 200 + message_id，但微信端静默丢弃。所以这条断言是「能不能送到」的闸门，
+  // 不是格式洁癖。
+  assert.equal(outboundBody.msg.item_list[0].type, 1)
+  assert.equal('item_type' in outboundBody.msg.item_list[0], false,
+    'item_type 不上线（服务端不校验、微信端忽略）；带上它只是噪声')
   // iLink answers an accepted sendmessage with a server-assigned message_id.
   assert.equal(res.messageId, '7514407535056518664')
 })
