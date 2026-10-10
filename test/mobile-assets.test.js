@@ -714,6 +714,12 @@ test('AC-UI9 the settings field reads as a field, and a padded catalogue name ca
 //    retired (`ws-count` markup + `.ws-count` rule + taskUnit, −~130 B) and pays for the
 //    one-indicator rule `#pullHint.visible+#messages>.older-row{display:none}` — the
 //    shell lands at zh 257293 / en 257220, headroom ~0.71 KB zh / ~0.78 KB en.
+//    Follow-up 2 (same version, the merge the user chose): turn grouping costs +652 B
+//    (the per-node lead/stash rewrite in visibleMessages + its comment) and was paid
+//    for inside the 258_000 ceiling by tightening that comment and reusing a local
+//    `list` — zh 257945 / en 257872. Headroom is now 55 B / 128 B: the next addition
+//    either pays for itself or raises this number with a receipt. Do not "save" bytes
+//    by deleting the reasoning comments that tell the next reader why a rule exists.
 const ASSET_BUDGET_BYTES = 258_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {

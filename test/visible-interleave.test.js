@@ -8,6 +8,10 @@
 // way transcript-order.test.js does. These tests are the mutation proof: reverting
 // the single-pass flush back to the round-level grouping fails INTERLEAVE-1 (order)
 // and INTERLEAVE-4 (segments), not just a string anchor.
+//
+// MERGE-* at the bottom is the second half of the same contract (user decision
+// 2026-10-10, plan A): a step's LEADING reasoning no longer emits as its own item —
+// it heads the reply it produced, inside that message.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mobilePageAssets } from '../lib/pages.js'
@@ -163,4 +167,86 @@ test('INTERLEAVE-6 a closed turn renders every segment collapsed', () => {
   assert.deepEqual(shape(out), ['user', 'process#0', 'reply:回复', 'process#1'], 'trailing tool-only segment survives turn/end')
   assert.equal(out[1].streaming, false, 'flushed segment is collapsed')
   assert.equal(out[3].streaming, false, 'and so is the tail once the turn closes')
+})
+
+// ---------------------------------------------------------------------------
+// MERGE (user decision 2026-10-10, plan A over a spacing-only patch). The Host ships
+// a step as [reasoning, text, tool-call] — counted on two live local sessions, 97 and 6
+// records of that shape at 2026-10-10 16:4x — and feeding those records through the
+// shipped renderer emitted `[text] [reasoning] [text]`: the fold sat under the reply
+// ABOVE it, which is the report. So one step's leading reasoning now heads its own reply.
+// ---------------------------------------------------------------------------
+
+const think = (text) => ({ type: 'reasoning', text })
+const say = (text) => ({ type: 'text', text })
+
+function stepMessage(seq, turn, step, content) {
+  return { event: { seq, type: 'assistant/message', data: { turn, step, message: { content } } } }
+}
+
+test('MERGE-1 a reasoning+text step is ONE message with the thought as its head', () => {
+  const sandbox = buildSandbox()
+  const out = sandbox.visibleMessages([
+    userEvent(1, '问'),
+    stepMessage(2, 1, 1, [think('先想一层'), say('第一段答复')]),
+    stepMessage(3, 1, 2, [think('再想一层'), say('第二段答复')]),
+    turnEnd(4, 1),
+  ])
+  assert.deepEqual(
+    shape(out),
+    ['user', 'reply:先想一层|第一段答复', 'reply:再想一层|第二段答复'],
+    'the shape this replaced was reply / reasoning-item / reply / reasoning-item — no orphan item between answers',
+  )
+  assert.deepEqual(out[1].blocks.map((b) => b.kind), ['reasoning', 'text'], 'one message, thought first')
+  assert.ok(out[1].openKey, 'and the fold still owns an open-state key')
+  assert.notEqual(out[1].openKey, out[2].openKey, 'two merged replies do not share one fold key')
+})
+
+test('MERGE-2 thought with no reply of its own still rides the process card', () => {
+  // The fallback must not change: a thinking-only stretch joins the accumulated group.
+  // It is emitted as an assistant/message with NO step (stepKey then misses the tool
+  // call's `1:1` key and opens a fresh node), which is how the record leg actually
+  // reaches the page — with a step it would merge, and MERGE-1 already covers that.
+  const sandbox = buildSandbox()
+  const out = sandbox.visibleMessages([
+    userEvent(1, '问'),
+    toolCall(2, 1, 1, 'c1', 'read_file'),
+    stepMessage(3, 1, undefined, [think('边看边想')]),
+    textChunk(4, 1, 2, '查完了'),
+    turnEnd(5, 1),
+  ])
+  assert.deepEqual(shape(out).slice(1), ['process#0', 'reply:查完了'], 'the thought folded into the card, the reply stands alone')
+  assert.ok(out[1].blocks.some((b) => b.kind === 'reasoning'), 'and nothing was dropped to make the shape pretty')
+})
+
+test('MERGE-3 reasoning that FOLLOWS its own reply is not dragged above it', () => {
+  // Arrival order is honoured: only reasoning that LEADS the step attaches. A model
+  // that keeps thinking after answering really did think later, so it stays below —
+  // this is the one shape the merge deliberately leaves alone.
+  const sandbox = buildSandbox()
+  const out = sandbox.visibleMessages([
+    userEvent(1, '问'),
+    stepMessage(2, 1, 1, [say('答复在此'), think('答完还在想')]),
+    turnEnd(3, 1),
+  ])
+  assert.deepEqual(shape(out), ['user', 'reply:答复在此', 'reply:答完还在想'], 'the reply first, the later thought after it')
+  assert.deepEqual(out[1].blocks.map((b) => b.kind), ['text'], 'the reply did not swallow the later thought')
+})
+
+test('MERGE-4 a tool that follows its own narration still opens the next segment', () => {
+  // [reasoning, text, tool-call] — the shape the Host actually ships.
+  const sandbox = buildSandbox()
+  const out = sandbox.visibleMessages([
+    userEvent(1, '问'),
+    stepMessage(2, 1, 1, [think('想一想'), say('我这就去查'), ]),
+    toolCall(3, 1, 1, 'c1', 'grep'),
+    toolResult(4, 1, 1, 'c1'),
+    stepMessage(5, 1, 2, [think('又一想'), say('查到了')]),
+    turnEnd(6, 1),
+  ])
+  assert.deepEqual(
+    shape(out),
+    ['user', 'reply:想一想|我这就去查', 'process#0', 'reply:又一想|查到了'],
+    'thought+narration in one message, then the tool segment, then the next merged reply',
+  )
 })
