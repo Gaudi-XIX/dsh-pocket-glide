@@ -108,8 +108,21 @@ test('B-9 a missing QR payload does not take the page down', () => {
   assert.ok(render({ qrSvg: 0 }, 'a numeric QR payload').includes('pairing-content'))
 })
 
-test('B-9 the escaping still holds for markup that arrives in an option', () => {
-  const html = render({ pairingUrl: '<script>alert(1)</script>' }, 'markup in an option')
-  assert.ok(html.includes('&lt;script&gt;'), 'the option is escaped on the way in')
+test('B-9 the escaping still holds for markup that arrives in the address line', () => {
+  // tunnelActive: with the public tab pending there is no address to print at all
+  // (pinned by the next test), so this arm has to render the live one.
+  const html = render({ pairingUrl: '<script>alert(1)</script>', tunnelActive: true }, 'markup in the address line')
+  assert.ok(html.includes('&lt;script&gt;'), 'the address is escaped on the way in')
   assert.ok(!html.includes('<script>alert'), 'so it cannot become a real script tag in the page')
+})
+
+test('B-9b the public tab with no tunnel yet shows neither a QR nor a LAN address', () => {
+  // Landing on 公网 by default must not present the LAN URL as if it were the
+  // public link (2026-10-10): no tunnel, nothing to encode.
+  const html = render({ pairingUrl: 'http://192.168.1.5:43127/pair?token=abc', tunnelActive: false }, 'tunnel down')
+  const address = html.match(/<div class="url([^"]*)" id="url">([^<]*)</)
+  assert.ok(address, 'the address line is still rendered')
+  assert.match(address[1], /is-pending/, 'and says it is pending')
+  assert.ok(!address[2].includes('192.168.1.5'), 'the LAN address is not printed in it')
+  assert.ok(/id="qrCode"[^>]*><\/div>/.test(html), 'the QR box is empty until the tunnel is online')
 })

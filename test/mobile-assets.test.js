@@ -403,7 +403,7 @@ test('AC-UI1 every control the audit measured small now clears the 44px floor', 
     '.plus-search-open{display:flex;align-items:center;gap:7px;width:100%;height:44px;',
     '.plus-filter{width:100%;height:44px;',
     '.todo-header{width:100%;height:44px;',
-    '.setting-field select{width:100%;height:46px;',
+    '.setting-pick{width:100%;height:46px;',
     '.chat-toolbar{position:absolute;inset:0 0 auto;z-index:2;min-height:44px;',
     '.plus-search-cancel{flex:none;min-width:44px;min-height:44px;',
     '.plus-back{display:inline-flex;align-items:center;gap:4px;min-height:44px;',
@@ -591,18 +591,23 @@ test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
 // labels are collapsed and trimmed because a padded name reads as an indent.
 // ---------------------------------------------------------------------------
 
-test('AC-UI9 the settings field reads as a field, and a padded catalogue name cannot', () => {
+test('AC-UI9 the settings field is a page-drawn picker, and a padded name still cannot leak', () => {
   const css = assets.css
-  assert.match(
-    css,
-    /\.setting-field select\{width:100%;height:46px;padding:0 34px 0 13px;[^}]*appearance:none;-webkit-appearance:none\}/,
-    'the native arrow is off and the value sits at one declared padding, not two',
-  )
-  assert.match(css, /\.setting-field select\{[^}]*font-size:15px;font-weight:550/, 'the value reads at body size in ink, not small grey')
-  assert.ok(css.includes('background:var(--surface);color:var(--ink)'), 'and on the surface token, ink typed')
-  assert.match(css, /\.setting-field::after\{content:"";[^}]*rotate\(45deg\);pointer-events:none\}/, 'one CSS-drawn chevron, no image bytes')
-  assert.match(css, /\.setting-field\{position:relative;/, 'the field owns its own coordinate system')
-  assert.match(css, /\.setting-field option,\.setting-field optgroup\{color:var\(--ink\);font-size:15px\}/, 'the opened list keeps the same type')
+  const js = assets.js
+  // Why this is not just a styling pass: the sheet a native <select> opens belongs to
+  // the phone OS and CSS never reaches it, so the last two rounds — which only moved
+  // the closed control — could not fix what the user reported, twice.
+  assert.ok(!/\.setting-field select\{/.test(css), 'the select-only rules are gone with the select')
+  assert.ok(!js.includes('<select id="modelSelect"') && !js.includes('<select id="presetSelect"'), 'no native select ships in the settings panel')
+  assert.equal((js.match(/<select/g) || []).length, 0, 'and none anywhere else on the phone page')
+  assert.match(css, /\.setting-pick\{width:100%;height:46px;[^}]*font-size:15px;font-weight:550/, 'the field is a 46px control typed at 15px ink')
+  assert.match(css, /\.setting-pick i\{[^}]*rotate\(45deg\)/, 'one CSS-drawn chevron, no image bytes')
+  assert.match(css, /\.setting-pick\[aria-expanded=true\]\{/, 'an opened field says so')
+  assert.match(css, /\.setting-list\{[^}]*overflow-y:auto/, 'the opened list is this page own scroll box')
+  assert.match(css, /\.setting-opt\{[^}]*min-height:44px[^}]*font-size:15px/, 'rows are finger-sized and typed like the sheet')
+  assert.match(css, /\.setting-opt\.is-on\{color:var\(--brand\)/, 'the current choice is marked by colour plus the ✓ in ::after')
+  assert.match(css, /\.setting-group\{[^}]*font-size:11px/, 'providers read as headings, not as options')
+  assert.ok(js.includes('class="setting-opt'), 'the rows are built by this page, not by the OS')
 
   const fieldText = new Function(`${slice(assets.js, 'function fieldText(', 'function renderSessionSettings(')};return fieldText`)()
   assert.equal(fieldText('  DeepSeek V3.2  ', 'ds'), 'DeepSeek V3.2', 'leading and trailing pad is gone')
@@ -720,7 +725,17 @@ test('AC-UI9 the settings field reads as a field, and a padded catalogue name ca
 //    `list` — zh 257945 / en 257872. Headroom is now 55 B / 128 B: the next addition
 //    either pays for itself or raises this number with a receipt. Do not "save" bytes
 //    by deleting the reasoning comments that tell the next reader why a rule exists.
-const ASSET_BUDGET_BYTES = 258_000
+//
+// Receipt (0.4.14, 2026-10-10, the picker the user had to ask for twice): budget
+// raised 258_000 -> 261_000 — zh 257945 -> 259268, en 257872 -> 259195 (+1.3 KB).
+// The session-settings fields are no longer native <select>s at all: the sheet a
+// native select opens is drawn by the phone OS and CSS cannot reach a byte of it, so
+// the previous two rounds (which only restyled the closed control) could not fix the
+// report. Providers/models/efforts/presets are now rendered by this page
+// (.setting-pick / .setting-list / .setting-opt / .setting-group), which retires the
+// select-only CSS, syncEffortOptions and selectedModelEntry with it. Headroom left:
+// ~1.7 KB zh / ~1.8 KB en.
+const ASSET_BUDGET_BYTES = 261_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

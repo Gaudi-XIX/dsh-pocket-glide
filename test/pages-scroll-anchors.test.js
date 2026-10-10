@@ -65,48 +65,40 @@ test('the near-bottom band is the 120px follow threshold, measured from the bott
   assert.equal(isNearBottom({ scrollHeight: 800, scrollTop: 0, clientHeight: 800 }), true, 'a short transcript is always near bottom')
 })
 
-test('anchor visibility: nothing lights on the bottom screen, ↑ needs a screen of scrolling back, ↓ joins past 1.5 screens, and neither one takes the other away', () => {
+test('anchor visibility: nothing lights on the bottom screen, ↑ needs a question above the fold, ↓ joins past 1.5 screens, and neither takes the other away', () => {
   const { anchorVisibleState } = scrollOrgans()
   const clientHeight = 800
-  // (2026-10-09) Within one screen of the bottom NOTHING may light, even
-  // when the last question hangs a screen above the viewport — that was the bug
-  // (↑ lit while the reader had not moved at all, at the foot of a long reply).
-  let state = anchorVisibleState(300, clientHeight, 2000, 4000)
+  // (2026-10-09) Within one screen of the bottom NOTHING may light, even with a
+  // question above the fold — that was the bug (↑ lit while the reader had not moved
+  // at all, at the foot of a long reply).
+  let state = anchorVisibleState(300, clientHeight, true)
   assert.deepEqual(state, { latest: false, prompt: false }, 'bottom screen: dark')
-  state = anchorVisibleState(800, clientHeight, 2000, 4000)
+  state = anchorVisibleState(800, clientHeight, true)
   assert.deepEqual(state, { latest: false, prompt: false }, 'exactly one screen back: still dark')
-  state = anchorVisibleState(801, clientHeight, 2000, 4000)
-  assert.deepEqual(state, { latest: false, prompt: true }, 'past a screen of scrolling → ↑')
-  // (2026-10-10) The other half of the report: far up, ↓ must JOIN, not REPLACE.
-  // The reader climbing through history still wants ↑; the old mutual exclusion
-  // changed the identity of the tile under the finger. Here the last question is a
-  // screen and a half ABOVE the reader while the bottom is nearly three screens
-  // below them — both targets are off-screen, so both buttons belong.
-  state = anchorVisibleState(2200, clientHeight, 2000, 3000)
-  assert.deepEqual(state, { latest: true, prompt: true }, 'both targets off-screen → both buttons')
-  // question barely above the top edge (less than a screen) → neither
-  state = anchorVisibleState(900, clientHeight, 1500, 2000)
-  assert.deepEqual(state, { latest: false, prompt: false })
-  // question still on screen → neither
-  state = anchorVisibleState(900, clientHeight, 2500, 2000)
-  assert.deepEqual(state, { latest: false, prompt: false })
-  // at the exact 1.5-screen boundary the ↓ button stays quiet
-  state = anchorVisibleState(1200, clientHeight, -500, 2000)
-  assert.deepEqual(state, { latest: false, prompt: false })
-  state = anchorVisibleState(1201, clientHeight, -500, 2000)
-  assert.equal(state.latest, true)
-  // A reader who keeps going up never loses the ↓ that was already there, and the
-  // exact moment ↓ lights does not put ↑ out (the old rule swapped one for the
-  // other in the same tile).
-  let previous = { latest: false, prompt: false }
-  for (let scrollTop = 5000; scrollTop >= 0; scrollTop -= 37) {
-    const swept = anchorVisibleState(5000 - scrollTop - clientHeight, clientHeight, 2000, scrollTop)
-    if (previous.latest) assert.equal(swept.latest, true, `↓ vanished at scrollTop=${scrollTop}`)
-    previous = swept
+  state = anchorVisibleState(801, clientHeight, true)
+  assert.deepEqual(state, { latest: false, prompt: true }, 'past a screen, with a question above → ↑')
+  state = anchorVisibleState(801, clientHeight, false)
+  assert.deepEqual(state, { latest: false, prompt: false }, 'nothing above the fold → nothing to jump up to')
+  // (2026-10-10 round two) What this replaces: ↑ used to demand the question sit a
+  // FULL screen above the viewport, so the moment the reader climbed past his last
+  // question it switched off — mid-climb, with older questions still above him. The
+  // machine now only asks whether userAnchorEl found one above the fold, and that one
+  // is the nearest, so ↑ also steps back through the history.
+  state = anchorVisibleState(4000, clientHeight, true)
+  assert.deepEqual(state, { latest: true, prompt: true }, 'deep in history: both targets off-screen, both buttons')
+  state = anchorVisibleState(1200, clientHeight, true)
+  assert.deepEqual(state, { latest: false, prompt: true }, 'the 1.5-screen boundary keeps ↓ quiet while ↑ stays')
+  state = anchorVisibleState(1201, clientHeight, true)
+  assert.equal(state.latest, true, 'past it ↓ joins')
+  assert.equal(state.prompt, true, 'and ↑ is still there — no tile changes identity under the finger')
+  // Monotone over a climb: neither button switches off while its own target holds.
+  let latestBefore = false
+  for (let dist = 0; dist <= 6000; dist += 37) {
+    const swept = anchorVisibleState(dist, clientHeight, true)
+    if (latestBefore) assert.equal(swept.latest, true, `↓ vanished at dist=${dist}`)
+    latestBefore = swept.latest
+    assert.equal(swept.prompt, dist > clientHeight, `↑ flickered at dist=${dist}`)
   }
-  // dist 1201 with the question two screens above the viewport: both are wanted.
-  assert.deepEqual(anchorVisibleState(1201, clientHeight, 2000, 3400), { latest: true, prompt: true },
-    'where ↓ first lights, ↑ is still there')
 })
 
 test('the reported bug: at the foot of a multi-screen reply the deck stays dark, however far above the question sits', () => {
@@ -397,6 +389,14 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   assert.match(js, /poll=null;if\(activeSession\)noteSessionOpened\(activeSession\);/, 'leaving to the list stamps the ledger (activity seen live is read)')
   assert.match(js, /latest\.classList\.toggle\('show',state\.latest\);prompt\.classList\.toggle\('show',state\.prompt\)/, 'each anchor button is wired to its OWN state — no mutual exclusion in the DOM either')
   assert.match(js, /followStream=isNearBottom\(live\);syncScrollAnchors\(\);topEdgePull\(live\)/, 'the same rAF tick re-decides the anchors and the top edge')
+  // The deck's own geometry: the ↑ tile sits in the upper slot and ↓ in the lower one,
+  // and ↑ chases the nearest question ABOVE the fold rather than the last question
+  // (live report 2026-10-10: the tiles were stacked the wrong way round and ↑ died
+  // the moment the reader climbed past the question he had been aiming at).
+  assert.match(assets.zh.document, /id="scrollAnchors"[^>]*><button id="jumpPrompt"[\s\S]{0,400}id="jumpLatest"/, 'the up-jump owns the upper slot')
+  assert.match(assets.zh.document, /id="jumpPrompt"[^>]*aria-label="上一条提问"/, 'and is named for the question above, not the last one')
+  assert.match(js, /function userAnchorEl\(box\)\{const rows=[\s\S]*?for\(let index=rows\.length-1;index>=0;index-=1\)/, 'the scan walks the questions backwards from the newest')
+  assert.match(js, /if\(anchorTopOf\(box,row\)<box\.scrollTop-JUMP_EDGE_PX\)return row/, 'and stops at the first one above the fold')
   assert.match(js, /function topEdgePull\(box\)\{if\(box\.scrollTop>0\)\{topEdgeArmed=false;return\}if\(topEdgeArmed\)return;topEdgeArmed=true;/, 'the top-edge load is edge-triggered, one page per arrival')
   assert.match(js, /if\(!activeSession\|\|!olderHasMore\|\|olderBusy\|\|olderRunBusy\)return;void loadOlder\(\)/, 'and it obeys every lock the deliberate pull obeys')
   assert.match(js, /if\(typeof followStream==='undefined'\|\|followStream\)box\.scrollTop=box\.scrollHeight/, 'patchLastStreamMessage gates the stick on followStream')
