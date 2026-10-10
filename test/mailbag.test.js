@@ -34,19 +34,21 @@ test('平邮：刚投进来不发车，这一波安静够了才走（末班车�
 })
 
 test('平邮：一直有新信进来会把末班车一直推迟，所以封顶时间兜住最早那一封', () => {
-  // 「末班车」单独用是有洞的：只要 stream 不断，就永远等不到安静。
-  // 这一档测的就是那个兜底：每隔 9 分钟来一封（ rideMs 是 10 分钟），前两回都不该走，
-  // 到第三回最早那封已经压了 27 分钟 ⇒ 强制发车。
+  // 「末班车」单独用是有洞的：只要一直有新信进来，就永远等不到安静（rideMs 不满足）。
+  // 这一档测的就是那个兜底，也是「15 分钟和 30 分钟到底啥区别」的机械化证明：
+  // 每隔 rideMs-1 分钟来一封 ⇒ 回回都差一分钟不够安静，直到最早那封压过 holdMs。
+  // lettersMax 从 8 降到 5 不改变这一档的成立：循环最多攒 4 封，够不到「装满」。
   const b = bag()
   const t0 = 2_000_000
   b.post(POST_ORDINARY, { key: 's1', title: '第一封', body: '已完成' }, t0)
+  const gap = M.rideMs - 60_000
   let now = t0
   for (let i = 2; i <= 3; i++) {
-    now += M.rideMs - 60_000
+    now += gap
     b.post(POST_ORDINARY, { key: `s${i}`, title: `第${i}封`, body: '已完成' }, now)
     assert.equal(b.due(now), false, `第 ${i} 封进来时：既没装满也没安静 ⇒ 不走`)
   }
-  now += M.rideMs - 60_000
+  now += gap
   b.post(POST_ORDINARY, { key: 's4', title: '第4封', body: '已完成' }, now)
   assert.ok(b.pressureMs(now) > M.holdMs, '最早那封已经压过封顶时间')
   assert.equal(b.due(now), true, '封顶了就走，不管后面还有没有信来')
@@ -166,13 +168,16 @@ test('装信：没东西可说就是空信，不是一封空白邮件', () => {
 })
 
 test('班次表就是定出来的那张表（改数要连带改注释与 CHANGELOG）', () => {
-  // lettersMax 8 ＝ 一封信列得下的名字数（也是信的可读长度上限）；
-  // rideMs 10 分钟、holdMs 20 分钟 ＝ 用户给的尺度「完成通知十几二十分钟能接受」；
+  // 2026-10-10 用户重定：15/30/5。三个是**并排的 OR 触发**不是接力 —— 见 lib/bridge.js
+  // 的 NOTIFY_MAILBAG 注释（那里记了「15 和 30 有啥区别」的答案）。
+  // lettersMax 5 ＝ 一封信列得下的名字数（也是信的可读长度上限）；
+  // rideMs 15 分钟 ＝ 这一波安静够了（只在「用户停手了」时满足）；
+  // holdMs 30 分钟 ＝ 最早那件压到封顶（任务一直不停时唯一的兜底）；
   // registeredMax 8 ＝ 等补投的挂号信上限；ttlMs 2 小时之后的完成消息不值得再寄。
   assert.deepEqual({ ...M }, {
-    lettersMax: 8,
-    rideMs: 10 * 60_000,
-    holdMs: 20 * 60_000,
+    lettersMax: 5,
+    rideMs: 15 * 60_000,
+    holdMs: 30 * 60_000,
     registeredMax: 8,
     ttlMs: 2 * 60 * 60_000
   })
