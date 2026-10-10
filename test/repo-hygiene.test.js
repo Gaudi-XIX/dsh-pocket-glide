@@ -268,7 +268,12 @@ test('⑨ CHANGELOG.md 在场、最新一节跟着 version 走，且 README 不�
 // 合法的控制字节仅此三个；误伤更宽的字节（如 \f）时按红名放宽，放宽须本注释与断言成对改。
 // 枚举走 `git ls-files`：tracked 面才是会随 commit 发布的面，工作区杂散文件不读进来。
 test('⑩ 追踪的每个 .md 都严格 UTF-8 且零杂散控制字节', () => {
-  const ls = spawnSync('git', ['ls-files', '--', '*.md'], { cwd: root, encoding: 'utf8' })
+  // `-c core.quotepath=off` 是必需的，不是风格：默认 quotepath=on 会把带非 ASCII 的路径
+  // 原样加引号转义输出（`"docs\HANDOFF-\346\211\213…"`），这一档就照着那个带引号的字符串
+  // 去 readFileSync ⇒ ENOENT。本仓第一份**被追踪**的中文名 .md 出现时（2026-10-11
+  // `docs/HANDOFF-手机8问取证与修法-20261010.md`）正是它把这条潜伏的枚举 bug 打红的——
+  // 在此之前追踪面全是 ASCII 名，这条测试从未真正覆盖过非 ASCII 文件名。
+  const ls = spawnSync('git', ['-c', 'core.quotepath=off', 'ls-files', '--', '*.md'], { cwd: root, encoding: 'utf8' })
   assert.equal(ls.status, 0, `git ls-files 失败：${ls.stderr?.trim()}`)
   const files = (ls.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean)
   assert(files.length >= 2, `追踪 .md 至少应有 README 与 CHANGELOG 两件，实际 ${files.length}`)
