@@ -328,6 +328,11 @@ function initHarness(modeView) {
   const sandbox = { document: doc, T, fetch: fetchStub, deviceCardHtml: cardHtml.deviceCardHtml,
     loadDevicePanel: cardHtml.loadDevicePanel,
     renderPendingPairings: () => {}, syncModeControls: () => {}, pollBusy: false, modeSwitching: false,
+    // The init tail now also starts the public tunnel on a fresh pairing page
+    // (user decision 2026-10-10: opening the page IS the intent), so the harness has
+    // to supply the three flags that guard reads and stub the kick it calls.
+    phoneConnected: false, tunnelActive: false, selectedTunnelTab: modeView === 'tunnel',
+    switchMode: async () => { calls.push('/desktop/tunnel/toggle') },
     pendingPairings: [], modeView, poll: () => {}, setInterval: () => 0, calls,
     // The init tail also repaints the ClawBot binding panel (lib/pages.js);
     // this harness only cares about the device-list kick, so it gets a stub.
@@ -358,6 +363,16 @@ test('B-3 the init kick fetches /desktop/devices only when the device view is on
   await lanOff.done
   assert.ok(!lanOff.calls.includes('/desktop/devices'),
     'with modeView=lan the init must NOT fetch the device list')
+
+  // 2026-10-10: the same tail also generates the public link on a fresh pairing page.
+  const onPublic = initHarness('tunnel')
+  await onPublic.done
+  assert.ok(onPublic.calls.includes('/desktop/tunnel/toggle'),
+    'landing on the public tab with the tunnel down starts it — no second click')
+  assert.ok(!lanOff.calls.includes('/desktop/tunnel/toggle'),
+    'but the LAN tab does not start anything (the guard needs the public tab showing)')
+  assert.ok(!devicesOn.calls.includes('/desktop/tunnel/toggle'),
+    'and neither does the device view — there is already a phone on it')
 })
 
 /* ------------------------------------------------------------------ *

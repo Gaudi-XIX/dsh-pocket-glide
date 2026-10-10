@@ -240,3 +240,23 @@ test('the handoff reads go out in one batch, and the ladder only ever climbs', (
   const source = readFileSync(new URL('../lib/pages.js', import.meta.url), 'utf8')
   assert.equal(source.split('const stageRunner=(setStep)=>{').length - 1, 1, 'one copy of the stage runner, shared')
 })
+
+// ---------------------------------------------------------------------------
+// 「点进去就要生成网络连接」（用户 2026-10-10）：开机自启被明确否决，但打开配对页这个
+// 动作本身就是意图——所以页面加载即自己起公网隧道，不必再点第二次。
+// ---------------------------------------------------------------------------
+
+test('opening the pairing page generates the public link by itself', () => {
+  const fresh = renderDesktopPairingPage({ locale: 'zh', pairingUrl: 'http://127.0.0.1:1/pair?token=x', pairingPin: '12345678' })
+  const taken = renderDesktopPairingPage({ locale: 'zh', pairingUrl: 'https://x', pairingPin: '12345678', tunnelActive: true, connected: true })
+  const guard = 'if(!phoneConnected&&selectedTunnelTab&&!tunnelActive)void switchMode(true);'
+  assert.ok(fresh.includes(guard), 'the page starts the tunnel on load')
+  assert.ok(fresh.indexOf(guard) < fresh.indexOf('setInterval(poll,800)'), 'it fires before the first status poll, not after it')
+  assert.match(fresh, /tunnelActive=false/, 'a fresh pairing page renders with the tunnel down…')
+  // phoneConnected is interpolated raw, so "no phone yet" is `undefined` — falsy, which
+  // is what the guard reads; a real pairing pins it to true (the `taken` render below).
+  assert.match(fresh, /phoneConnected=(undefined|false)/, '…and with no phone on it, which is exactly when it must fire')
+  assert.ok(taken.includes(guard), 'the same guard ships in every render — the runtime flags decide')
+  assert.match(taken, /tunnelActive=true/, 'with the tunnel up there is nothing to start…')
+  assert.match(taken, /phoneConnected=true/, '…and a paired phone stops it dead either way')
+})
