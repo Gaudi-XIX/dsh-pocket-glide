@@ -39,6 +39,7 @@ function fakeBox({ scrollHeight = 5000, scrollTop = 0, clientHeight = 800 } = {}
   return {
     scrollHeight, scrollTop, clientHeight,
     innerHTML: '',
+    getBoundingClientRect() { return { top: 0, bottom: this.clientHeight, height: this.clientHeight } },
     querySelectorAll() { return [] },
     querySelector() { return null },
   }
@@ -165,7 +166,7 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
   const js = assets.zh.js
   const body = [
     'transcriptHasContent', 'olderButtonHtml', 'loadingShell', 'transcriptWaitHtml',
-    'showTranscriptRetry', 'paintMessages', 'esc', 'markHistoryTail',
+    'showTranscriptRetry', 'paintMessages', 'esc', 'markHistoryTail', 'readTranscriptAnchor', 'restoreTranscriptAnchor',
   ]
     .map((name) => extractFunction(js, name))
     .join('\n')
@@ -176,6 +177,7 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
     let olderBusy=false,olderRunBusy=false,olderExhausted=false,sessionBlank=false
     let agentRunning=false,pendingQuestion=null
     let followStream=true
+    let transcriptAnchor=null,skipAnchorOnce=false
     const turnOpenState=new Map()
     const L={}
     const $=()=>box
@@ -219,7 +221,7 @@ test('paintMessages tags the history tail through the real markHistoryTail', () 
   const js = assets.zh.js
   const body = [
     'transcriptHasContent', 'olderButtonHtml', 'loadingShell', 'transcriptWaitHtml',
-    'showTranscriptRetry', 'paintMessages', 'esc', 'markHistoryTail',
+    'showTranscriptRetry', 'paintMessages', 'esc', 'markHistoryTail', 'readTranscriptAnchor', 'restoreTranscriptAnchor',
   ]
     .map((name) => extractFunction(js, name))
     .join('\n')
@@ -235,6 +237,7 @@ test('paintMessages tags the history tail through the real markHistoryTail', () 
     function renderMessage(message){return '<div class="message '+message.role+'">'+(message._history===true?'H':'')+'</div>'}
     function syncScrollAnchors(){}
     let followStream=true
+    let transcriptAnchor=null,skipAnchorOnce=false
     ${body}
     return { paintMessages }
   `)
@@ -373,7 +376,13 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   assert.match(js, /activeSession=id;const summary=sessionSummaries\.find\(item=>item\.sessionId===id\);sessionBlank=summary\?\.blank\?\?true;noteSessionOpened\(id\);followStream=true;/, 'openSession stamps the ledger and re-arms the follow')
   assert.match(js, /poll=null;if\(activeSession\)noteSessionOpened\(activeSession\);/, 'leaving to the list stamps the ledger (activity seen live is read)')
   assert.match(js, /latest\.classList\.toggle\('show',state\.latest\);prompt\.classList\.toggle\('show',state\.prompt\)/, 'each anchor button is wired to its OWN state — no mutual exclusion in the DOM either')
-  assert.match(js, /followStream=isNearBottom\(live\);syncScrollAnchors\(\);topEdgePull\(live\)/, 'the same rAF tick re-decides the anchors and the top edge')
+  // Literal grew with the E anchor (0.4.18): this same rAF tick now does a FOURTH
+  // thing — it records the reader's row (`transcriptAnchor=readTranscriptAnchor(live)`)
+  // whenever the follow is off, so a later full re-paint can put that row back.
+  // The contract this assertion carries is unchanged and still holds: all of it
+  // happens in ONE tick, so the re-decision, the anchor, the scroll anchors and the
+  // top-edge pull can never be spread across frames and fight each other.
+  assert.match(js, /followStream=isNearBottom\(live\);if\(!followStream\)transcriptAnchor=readTranscriptAnchor\(live\);syncScrollAnchors\(\);topEdgePull\(live\)/, 'the same rAF tick re-decides the anchors and the top edge')
   // The deck's own geometry: the ↑ tile sits in the upper slot and ↓ in the lower one,
   // and ↑ chases the nearest question ABOVE the fold rather than the last question
   // (live report 2026-10-10: the tiles were stacked the wrong way round and ↑ died

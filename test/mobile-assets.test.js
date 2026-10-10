@@ -189,16 +189,23 @@ test('AC-PERF the session cache is bounded and the resize path refills the trans
   // branch drives --app-height first, every other device goes straight to the
   // fill, and neither calls ensureTranscriptFilled() inline (the debounce is the
   // whole point — a per-frame fill is the §5b ban).
+  // Literal changed with the E anchor (0.4.18): both branches now call
+  // restoreViewportAnchor() BEFORE the debounced fill. The keyboard folding away
+  // shrinks the scrollable range, so the browser clamps scrollTop down in that same
+  // frame (measured 260→10) and never fires a scroll event — the anchor has to be
+  // re-aimed inside the viewport-change frame; waiting for the 150 ms fill turns one
+  // jump into two. The assertion still pins the same contract: no rAF and no height
+  // write on the non-Apple branch, height first then fill on the Apple one.
   const viewport = slice(js, 'function scheduleViewportFill()', "document.addEventListener('visibilitychange'")
   assert.ok(viewport.includes('void ensureTranscriptFilled()'), 'the debounced fill reaches the transcript')
   assert.match(
     viewport,
-    /function scheduleViewport\(\)\{if\(viewportRaf\)return;if\(!appleTouchDevice\)\{scheduleViewportFill\(\);return\}/,
+    /function scheduleViewport\(\)\{if\(viewportRaf\)return;if\(!appleTouchDevice\)\{restoreViewportAnchor\(\);scheduleViewportFill\(\);return\}/,
     'the non-Apple branch refills without allocating a rAF or writing the height',
   )
   assert.match(
     viewport,
-    /viewportRaf=requestAnimationFrame\(\(\)=>\{applyViewportHeight\(\);scheduleViewportFill\(\)\}\)/,
+    /viewportRaf=requestAnimationFrame\(\(\)=>\{applyViewportHeight\(\);restoreViewportAnchor\(\);scheduleViewportFill\(\)\}\)/,
     'the Apple branch still drives the height, then refills',
   )
   assert.ok(js.includes("window.addEventListener('resize',scheduleViewport)"), 'the window resize is wired to it')
@@ -760,8 +767,15 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 // paid once per installed version. What they buy is paid back on every single
 // open: 31.7 KB less document (the icon is no longer inlined three times), ~300 KB
 // less list markup per refresh, and no re-paint of a transcript that did not
-// change. Headroom left: ~1.0 KB zh / ~1.1 KB en.
-const ASSET_BUDGET_BYTES = 263_000
+// change. Headroom left: ~1.0 KB zh / ~1.1 KB en（该数字属于 263 000 那一档，已被下面的 E 段作废）。
+// E 视野锚点（0.4.18）：zh 265 554 B（css 43 971 + js 221 583）对旧预算 263 000 超 2 554 B。
+// 页内长注释已先压成两行指针（源文件 381 081 → 380 681 字符，中文注释 UTF-8 每字 3 字节，
+// 而壳量的是 renderMobilePage() 出货后的字节），剩下的是逻辑本体，压不动。
+// 提额到 266 000 的代价照本仓规矩记在这：壳带内容哈希 + private, max-age=604800 + service worker，
+// 这 2.5 KB 每个装机版本只付一次；换回的是「上滑读历史时新消息不再把整段甩走」
+// （深滚实测：修前视野第一行 61→113，修后 61→61、scrollTop 2452 不动）。
+// 新预算下的真实余量：zh 446 B / en 523 B（en js 221 506 B）——下一笔壳增量只剩这点空间。
+const ASSET_BUDGET_BYTES = 266_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

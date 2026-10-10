@@ -190,6 +190,9 @@ test('AC-A6 the head pull really goes out with no beforeSeq', async () => {
     function messagesWithOptimistic(list){return list}
     function paintMessages(){}
     function showError(){}
+    let transcriptAnchor=null,skipAnchorOnce=false
+    function readTranscriptAnchor(){return null}
+    function restoreTranscriptAnchor(){return false}
     async function rpc(method,payload){calls.push({method,payload});return {events:[],hasMore:false}}
     ${source}
     return { run: fetchOlderPage, calls, state: () => ({ olderHasMore, olderExhausted }) }
@@ -251,6 +254,8 @@ function buildPaintSandbox(state = {}) {
     'showTranscriptRetry',
     'paintMessages',
     'esc',
+    'readTranscriptAnchor',
+    'restoreTranscriptAnchor',
   ]
     .map((name) => extractFunction(js, name))
     .join('\n')
@@ -260,6 +265,7 @@ function buildPaintSandbox(state = {}) {
     let streamEvents=[],olderEvents=[],olderHasMore=${JSON.stringify(state.olderHasMore ?? false)}
     let olderBusy=false,olderRunBusy=false,olderExhausted=${JSON.stringify(state.olderExhausted ?? false)},sessionBlank=${JSON.stringify(state.sessionBlank ?? true)}
     let agentRunning=false,pendingQuestion=null
+    let transcriptAnchor=null,skipAnchorOnce=false
     const turnOpenState=new Map()
     const L=${JSON.stringify(L)}
     const $=()=>box

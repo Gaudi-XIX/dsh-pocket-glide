@@ -788,6 +788,9 @@ function buildPullSandbox(opts) {
     async function fetchOlderPage(){calls.push('page');return opts.pageReturnsTrue===true}
     async function ensureTranscriptFilled(){calls.push('fill')}
     function showError(){calls.push('error')}
+    let transcriptAnchor=null,skipAnchorOnce=false
+    function readTranscriptAnchor(){return null}
+    function restoreTranscriptAnchor(){return false}
     ${source}
     return { run: loadOlder, calls, state: () => ({ olderRunBusy }) }
   `)(opts)
@@ -811,6 +814,9 @@ function buildPageFetchSandbox(opts) {
     function messagesWithOptimistic(list){return list}
     function paintMessages(){}
     function showError(){calls.push('error')}
+    let transcriptAnchor=null,skipAnchorOnce=false
+    function readTranscriptAnchor(){return null}
+    function restoreTranscriptAnchor(){return false}
     async function rpc(method,payload){rpcCalls.push({method,payload});return {events:[],hasMore:false}}
     ${source}
     return { run: fetchOlderPage, calls, rpcCalls, state: () => ({ olderBusy, olderHasMore, olderExhausted }) }
