@@ -105,7 +105,10 @@ e575529 fix(clawbot): 消息项类型键名改为 type——服务端受理但�
 ### 排障铁律（已写进 CHANGELOG 0.4.9，留给下一个查这个协议的人）
 
 1. **用已失效的 `context_token` 做的排除实验全部无效。** `ret=-2 prepare failed` 只说明 token 过期了，**不能证明请求体字段对不对**。当时 probe5/probe6 试了 `item_type:1`／`type:1`／两者都带／都不带、带不带 `message_id` 共六个变体，全回 `prepare failed`，据此判「键名不是原因」——**这个结论是错的，token 先死了**。
-   **判据**：设置档里 `context_token` 的落盘时间是否在近几分钟内。
+   **判据**（**10:5x 更正**）：要确认「刚刚有入站消息」——看日志有没有 `clawbot context_token updated and persisted`。
+   ~~设置档里 `context_token` 的落盘时间是否在近几分钟内~~ **这条判据已作废**：刷新只在令牌**字符串发生变化**时才落盘记日志，
+   同一条对话线上 repeated 入站可能给出同一个字符串 ⇒ 落盘时间只是**下界**，按它判断会把「有入站但没变化」误读成「没入站」。
+   另：`prepare failed` 的成因是**缺令牌或额度用尽**，不是「时间到期」（见下一节）。
 2. **`clawbot prepare failed` 不是本地源码里的字符串**（全仓 grep、git 历史 grep、`D:\DSH\resources\app.asar` 用 findstr 全无命中），是服务端 errmsg 经 `notify send failed: clawbot ${detail}` 透出来的。
 3. probe7/probe8 长轮询 `msgs` 恒 0：pocket 自己的 watcher 同时消费同一条 getupdates 流，两边在竞争 ⇒ 独立探针抓不到入站消息是预期的，不是通道坏了。
 4. 用户发来的截图本机读不到（GUI 不渲染本地图片、pwsh 7 调不动 `Windows.Media.Ocr`）⇒ 直接请用户文字回答，别在 OCR 上耗时间。
