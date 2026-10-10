@@ -311,7 +311,7 @@ test('bridge question push: one notice per question, identified by session title
     t.bridge.rememberPendingQuestion('evt-1', { rpcId: 'r1', sessionId: 's1', questions: [] })
     await drain()
     assert.equal(sent.length, 1, 'the arrival pushes immediately')
-    assert.ok(sent[0].includes(encodeURIComponent('AI 在等你审批')), 'the notice names the wait')
+    assert.ok(sent[0].includes(encodeURIComponent('有问题需要你回答')), 'the notice names the wait')
     assert.ok(sent[0].includes(encodeURIComponent('部署周报')), 'the session title identifies it')
     // A reconnect replay of the same event id must stay silent.
     t.bridge.rememberPendingQuestion('evt-1', { rpcId: 'r1', sessionId: 's1', questions: [] })
