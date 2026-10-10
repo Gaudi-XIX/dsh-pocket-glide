@@ -237,11 +237,29 @@ powershell -File F:\defws\scripts\dsh-restart-now.ps1
 
 **重启后的验收清单**（这是 ClawBot 通道第一次真机端到端验收，之前从没通过）：
 
-1. 桌面配对页 → 设备视图 → 通知 → 通道下拉选「微信 ClawBot」
-2. 点「测试」→ 微信里应收到：标题 `通知测试`，正文 `这是一条测试通知，能收到就说明通道是通的`
-3. 真实场景：让一个 DSH 会话跑完 → 微信里应收到：标题 = 会话名，正文 `已完成`
-4. 真实场景：让一个会话抛出提问 → 微信里应收到：标题 = 会话名，正文 `有问题需要你回答`
-5. 看 `C:\Users\toast\.dsh\pocket\logs\pocket.log`（**UTC，+8**）：应见 `notify sent: clawbot ok message_id=<号>`；若见 `clawbot ready notice failed ...` 或 `notify send failed: clawbot prepare failed`，说明 `context_token` 已过期，需用户在微信再发一句激活
+> **顺序纠正（10:4x 看日志实证后改的，原来的顺序会把人引到「测试按钮坏了」的误判上）**：
+> `context_token` 现在**是过期的**。`pocket.log`（UTC，+8 后为当地）里 09:52–10:22 每一次推送都回
+> `notify send failed: clawbot prepare failed`，最后一次成功是 09:34（`message_id=7514498537624668040`）。
+> 那次成功出自**装载 0.4.9 之前的代码**（0.4.9 提交于 09:51:41，宿主 10:30:45 才重启）⇒
+> 按 0.4.9 的根因推断，那条在服务端受理、微信端被静默丢弃，手机上大概率没有（用户可径直确认）。
+> 另：09:34:23 一秒内十几条 `prepare failed` 挤在一起，说明**推送本身一直在生成**（完成判据在跑），
+> 卡住的只有投递。
+> 令牌**只能从入站消息换出**，所以第 1 步必须是「在微信里先发一句」，不是先点「测试」。
+> 代码路径已核（`lib/bridge.js:1235–1281`，提交 `4b0fd08` 后的行号）：watcher 抓到 `context_token` 与存档不同 ⇒
+> 落盘 + `clawbot context_token updated and persisted` + 自动回一条「通道已就绪」回执；
+> **不需要重新扫码**。
+
+1. **微信里给机器人随便发一句** → 应收到 `微信通知通道已就绪：任务完成、等待审批或连接地址变更会推到这里。`
+   （这句文案本身就是 0.4.10 的判据：旧文案以「【DSH Pocket】」开头）；日志应见
+   `clawbot context_token updated and persisted` 紧跟 `clawbot ready notice sent`。
+2. 桌面配对页 → 设备视图 → 通知 → 通道下拉确认是「微信 ClawBot」（应已是，设置档里 `channel=clawbot`、`enabled=true`）。
+3. 点「测试」→ 微信里应收到：标题 `通知测试`，正文 `这是一条测试通知，能收到就说明通道是通的`
+4. 真实场景：让一个 DSH 会话跑完 → 微信里应收到：标题 = 会话名，正文 `已完成`
+5. 真实场景：让一个会话抛出提问 → 微信里应收到：标题 = 会话名，正文 `有问题需要你回答`
+6. 看 `C:\Users\toast\.dsh\pocket\logs\pocket.log`（**UTC，+8**）：应见 `notify sent: clawbot ok message_id=<号>`；
+   若再见 `clawbot ready notice failed ...` 或 `notify send failed: clawbot prepare failed`，就是令牌又过期了 ⇒ 回第 1 步。
+   **推论**：令牌活得短（09:34 成功、09:52 起全失败 ⇒ 窗口可能只有十几分钟或一次性），
+   「什么时候必须让用户再发一句」这条还没量化，属 §8 第 3 项后续优化要回答的。
 
 ---
 
