@@ -398,10 +398,11 @@ async function scenarioList(host, port, failures) {
   });
 
   // The list scenario asks the opposite of the chat one: with no visible session at all,
-  // the workspace must show its empty hint and count zero, not a ghost row for the child.
+  // the workspace must show its empty hint, not a ghost row for the child. The task count
+  // is retired by user decision (2026-10-10): its absence is what is asserted now.
   if (result.rowIds.length !== 0) failures.push(`list: rows appeared with no visible session: ${JSON.stringify(result.rowIds)}`);
   if (!result.workspaceHtml.includes('class="ws-empty"')) failures.push('list: the empty hint is missing');
-  if (!result.workspaceHtml.includes('ws-count">0')) failures.push('list: the count is not zero');
+  if (result.workspaceHtml.includes('ws-count')) failures.push('list: a task count was painted; the field is retired');
   if (result.workspaceHtml.includes(SUBAGENT_ID)) failures.push('list: the child id is still in the markup');
   if (!result.sessionsActive) failures.push('list: the list view is not active');
   if (state.historySeq.includes(SUBAGENT_ID)) failures.push(`list: a child history request was made: ${JSON.stringify(state.historySeq)}`);
@@ -411,7 +412,7 @@ async function scenarioList(host, port, failures) {
     rowIds: result.rowIds,
     sessionsActive: result.sessionsActive,
     emptyHint: result.workspaceHtml.includes('class="ws-empty"'),
-    zeroCount: result.workspaceHtml.includes('ws-count">0'),
+    noCount: !result.workspaceHtml.includes('ws-count'),
     historySeq: state.historySeq,
   };
 }

@@ -710,6 +710,10 @@ test('AC-UI9 the settings field reads as a field, and a padded catalogue name ca
 //    ink with a CSS-only chevron replacing the native arrow, focus ring, option and
 //    optgroup type) and fieldText(), the collapse+trim guard for padded catalogue
 //    names. Headroom left: ~0.67 KB zh / ~0.75 KB en.
+//    Follow-up in the same version (same user batch): the per-workspace task count is
+//    retired (`ws-count` markup + `.ws-count` rule + taskUnit, −~130 B) and pays for the
+//    one-indicator rule `#pullHint.visible+#messages>.older-row{display:none}` — the
+//    shell lands at zh 257293 / en 257220, headroom ~0.71 KB zh / ~0.78 KB en.
 const ASSET_BUDGET_BYTES = 258_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {

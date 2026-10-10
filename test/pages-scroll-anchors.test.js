@@ -345,7 +345,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null } = {}) => {
   const host = { innerHTML: '' }
   const make = new Function(
     'workspaces', 'sessionSummaries', 'expandedWsIds', 'activeSession', 'container', 'localStorage', `
-    const L=${JSON.stringify({ noWorkspaces: 'none', noTasksHint: 'hint', taskUnit: ' tasks', newChat: 'new', untitled: 'untitled', justNow: 'now', minute: 'm', hour: 'h', day: 'd' })}
+    const L=${JSON.stringify({ noWorkspaces: 'none', noTasksHint: 'hint', newChat: 'new', untitled: 'untitled', justNow: 'now', minute: 'm', hour: 'h', day: 'd' })}
     const BLANK_ROW_VISIBLE_MS=${24 * 60 * 60 * 1000}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200
     const $=(id)=>container

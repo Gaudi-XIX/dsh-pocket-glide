@@ -254,7 +254,10 @@ test('R1.2 the workspace list paints the projected row and nothing else', () => 
   assert.ok(!sandbox.markup.includes('CHILD-SECRET'), 'and its transcript title never leaks into the markup');
   assert.ok(!sandbox.markup.includes('data-id="sub1"'), 'nor as an attribute value');
   assert.ok(sandbox.markup.includes('data-ws="w1"'), 'the workspace itself is still rendered');
-  assert.ok(sandbox.markup.includes('ws-count">1'), 'the count reports only the visible row');
+  // The per-workspace task count was retired by user decision (2026-10-10: 「我要这个
+  // 数量干啥呢？直接不传吧」) — the row list above IS the answer, and it already
+  // excludes subagent children, projected-away ids and stale blank shells.
+  assert.ok(!sandbox.markup.includes('ws-count'), 'no task count is painted any more');
 });
 
 test('R1.2 a projected-away id lands on the empty state, not on a ghost row', () => {
@@ -271,7 +274,6 @@ test('R1.2 a projected-away id lands on the empty state, not on a ghost row', ()
   assert.ok(!sandbox.markup.includes('sub1'), 'the id appears nowhere');
   assert.ok(sandbox.markup.includes('class="ws-empty"'), 'the empty hint is what the user sees');
   assert.ok(sandbox.markup.includes(L.noTasksHint), 'carrying the page own copy');
-  assert.ok(sandbox.markup.includes('ws-count">0'), 'the count reads zero, not one');
   assert.ok(!sandbox.markup.includes('ws-last'), 'no status glyph is invented for a row that does not exist');
 });
 
@@ -337,7 +339,6 @@ test('R1-audit a locally created blank session is a visible row, not a ghost', (
   sandbox.renderWorkspaces();
 
   assert.deepEqual(sandbox.rowIds(), ['new1'], 'the new session is a clickable row');
-  assert.ok(sandbox.markup.includes('ws-count">1'), 'and the workspace count includes it');
 });
 
 test('R1-audit follow-up a days-old blank shell is not a row again', () => {
@@ -348,7 +349,6 @@ test('R1-audit follow-up a days-old blank shell is not a row again', () => {
   sandbox.renderWorkspaces();
 
   assert.deepEqual(sandbox.rowIds(), [], 'a stale empty shell is not a clickable row');
-  assert.ok(sandbox.markup.includes('ws-count">0'), 'the count reads zero, not one');
   assert.ok(sandbox.markup.includes('class="ws-empty"'), 'the empty hint is what the user sees');
 });
 

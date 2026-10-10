@@ -322,6 +322,14 @@ test('the list follows the finger and springs back without the old ring', () => 
   assert.ok(js.includes("hintText('loading');void loadOlder()"), 'and it stays talking while the page is in flight')
   assert.ok(html.includes('#pullHint.visible{opacity:1'), 'the hint only paints while the drag owns it')
   assert.ok(html.includes('#pullHint.armed{color:var(--brand)}'), 'armed reads as armed, not as the idle sentence')
+  // One indicator per event (live report 2026-10-10): while the drag owns the hint, the
+  // row inside the list must go quiet — it followed the finger while the sentence above
+  // it did not, so the reader saw the same line twice, one moving and one still.
+  assert.ok(html.includes('#pullHint.visible+#messages>.older-row{display:none}'), 'the row yields to the hint it duplicates')
+  // The arming distance is short and one-way: 26px damped (~52px of finger), and only
+  // pushing back above the drag start cancels it.
+  assert.ok(js.includes('THRESHOLD=26'), 'the pull arms on a short drag, not on a measured one')
+  assert.ok(js.includes('if(pulled>=THRESHOLD)ready=true'), 'arming is a latch, never a re-decision each frame')
 })
 
 // The hint must never promise a release that fetches nothing: once the host has
