@@ -283,6 +283,8 @@ test('挂号信：提问当场就投；这轮投不出去就留着，下次入�
 
     assert.equal(fx.sent.length, 1, '挂号信不进邮包，当场就投')
     assert.ok(fx.sent[0].text.includes('有问题需要你回答'))
+    // A 问（用户 2026-10-11 01:20）：通知第一行必须是实际会话名。
+    assert.ok(fx.sent[0].text.startsWith('部署周报'), `标题是会话名， got ${JSON.stringify(fx.sent[0].text)}`)
     assert.equal(t.bridge.clawbotQuotaSpent, true, '被服务端拒了')
     assert.equal(t.bridge.mailbag.registeredCount, 1, '没丢：留在待补投里')
 
@@ -291,6 +293,27 @@ test('挂号信：提问当场就投；这轮投不出去就留着，下次入�
     await settleFor(() => fx.sent.length >= 2)
     assert.ok(fx.sent[1].text.includes('有问题需要你回答'), '续期后第一件事就是补它')
     assert.equal(t.bridge.mailbag.registeredCount, 0, '投出去了就不再留着')
+  } finally {
+    await t.stop()
+    fs.rmSync(fx.dir, { recursive: true, force: true })
+  }
+})
+
+test('名字取不到就说「会话」，不许把 sessionId 印到通知第一行冒充名字', async () => {
+  // A 问（用户 2026-10-11 01:20：「标题退化我看到了，这个是错的。应该是实际名称」）。
+  // 这一档钉的是退化那一半：强刷之后仍然没有名字时，标题说「会话」——
+  // 一串机器 id 在通知栏里既读不出是谁、也搜不回去，比空着更难用。
+  const fx = makeFixture()
+  const t = await fx.bridgePromise
+  try {
+    fx.state.items = [{ sessionId: 'q9', running: false, updatedAt: 1 }]
+    t.bridge.rememberPendingQuestion('evt-named', { rpcId: 'r9', sessionId: 'q9', questions: [{ id: 'one' }] })
+    await settleFor(() => fx.sent.length >= 1)
+
+    const text = fx.sent[0].text
+    assert.ok(text.startsWith('会话'), `第一行是「会话」，got ${JSON.stringify(text)}`)
+    assert.ok(!text.includes('q9'), 'sessionId 一个字都不出现在推送里')
+    assert.ok(text.includes('有问题需要你回答'), '该说的事照说')
   } finally {
     await t.stop()
     fs.rmSync(fx.dir, { recursive: true, force: true })
