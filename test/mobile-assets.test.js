@@ -773,18 +773,15 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 // open: 31.7 KB less document (the icon is no longer inlined three times), ~300 KB
 // less list markup per refresh, and no re-paint of a transcript that did not
 // change. Headroom left: ~1.0 KB zh / ~1.1 KB en（该数字属于 263 000 那一档，已被下面的 E 段作废）。
-// E 视野锚点（0.4.18）：zh 265 554 B（css 43 971 + js 221 583）对旧预算 263 000 超 2 554 B。
-// 页内长注释已先压成两行指针（源文件 381 081 → 380 681 字符，中文注释 UTF-8 每字 3 字节，
-// 而壳量的是 renderMobilePage() 出货后的字节），剩下的是逻辑本体，压不动。
-// 提额到 266 000 的代价照本仓规矩记在这：壳带内容哈希 + private, max-age=604800 + service worker，
-// 这 2.5 KB 每个装机版本只付一次；换回的是「上滑读历史时新消息不再把整段甩走」
-// （深滚实测：修前视野第一行 61→113，修后 61→61、scrollTop 2452 不动）。
-// 新预算下的真实余量：zh 446 B / en 523 B（en js 221 506 B）——下一笔壳增量只剩这点空间。
-// 0.4.19 的增量（**临时**：F 埋点量完就摘，届时把预算降回 266 000）：
-// 页内 PROBE_ON / probeMark / probeSend 加三处打点 = +1 143 B（zh 265 554 → 266 697）。
-// 它默认零开销（URL 不带 ?probe 就不挂监听、不发请求），但字节照样每个装机版本下一遍，
-// 所以记成有到期日的提额，不是常态余量。
-const ASSET_BUDGET_BYTES = 268_000
+// 预算来路（每步都是实测字节，不是估的）：
+//   263 000 → 266 000  0.4.18 E 视野锚点，zh 265 554（css 43 971 + js 221 583），+2 554 B
+//   266 000 → 268 000  0.4.19~0.4.20 为 F 装的**临时**取证埋点，zh 266 697 → 267 352
+//                     该笔从第一天就写明「有到期日、量完撤」；0.4.23 已整批撤除
+//   268 000 → 267 000  0.4.23 撤埋点后实测 zh **266 023**（不是回到 265 554）：
+//                     留下的是 0.4.22 的键盘抬起量（--kb 与 applyKeyboardLift，功能不是埋点）
+//                     与 0.4.21 撤抢写后的形状变化。余量 977 B。
+// 规矩不变：提额只认实测数字，临时东西必须带到期日。
+const ASSET_BUDGET_BYTES = 267_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {
