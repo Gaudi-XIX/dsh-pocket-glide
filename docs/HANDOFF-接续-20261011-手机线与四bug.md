@@ -78,7 +78,7 @@ Select-String -Path "$env:USERPROFILE\.dsh\pocket\logs\pocket.log" -Pattern 'kbp
 # ⚠ 读法：tag@perf 是一段，后 6 段才是数值；rz 在同毫秒成对出现（两个 resize 监听器共用下游打点），别当两次动作
 
 # 从宿主之外推微信（必须先清 DSH_HOME）
-$env:DSH_HOME=''; cd F:\defws\scripts; node dsh-push-notice.mjs "<标题>" "<正文>"
+$env:DSH_HOME=''; node F:\defws\dsh-pocket\tools\dsh-push-notice.mjs "<标题>" "<正文>"
 
 # 重启（红线，须用户发话）
 cd F:\defws\scripts; powershell -File .\dsh-restart-now.ps1

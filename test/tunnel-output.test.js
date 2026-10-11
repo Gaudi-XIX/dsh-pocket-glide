@@ -11,7 +11,7 @@
 // cloudflared logs continuously, so dropping the work without keeping the drain would
 // trade a hot loop for a stalled tunnel. Both halves are pinned here, and the test
 // injects a spawner instead of starting anything that could reach the network.
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -92,10 +92,19 @@ function fakeCloudflared() {
 /** A file on disk, so a caller-supplied path resolves without a PATH probe. */
 function fakeBinary() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pocket-s5-'))
+  // 目录句柄在这里就丢了（返回的是里面的文件），所以只能记下来由文件级钩子收。
+  // 以前没有钩子，四档各建一个、每跑一轮全量就在 %TEMP% 留四个。
+  tempDirs.push(dir)
   const file = path.join(dir, 'cloudflared.exe')
   fs.writeFileSync(file, 'never executed — this file only exists to be resolved')
   return file
 }
+
+const tempDirs = []
+
+after(() => {
+  for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 })
+})
 
 /** Never call the real resolver: it is the door to the machine's cache directory. */
 const stubEnsure = async () => 'stubbed-cloudflared'
