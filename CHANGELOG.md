@@ -4,6 +4,27 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.4.27 — 2026-10-11
+
+**诊断模式补上面板开关**（用户 14:18 令「做面板开关」）。0.4.26 只落了后端，开关只能靠手改设置档
+或手机侧手动带 `?probe=1`；本节把最后三块补齐：**路由 / 回显 / UI**。
+
+- **`POST /desktop/diagnostics`**（`bridge.js`）：照 `tunnel/config` 全套 —— 桌面会话闸 → 同源校验 →
+  解析正文 → **严格布尔**（`probe` 非 boolean 一律 400，`"true"`、`1` 这类 truthy 不放行）→
+  `settingsStore.save({ diagnostics: { probe } })` → 回快照。严格布尔是这条路由的重点：放一个 truthy 过去
+  就等于把手机的滚动时序持续写进 `pocket.log`，而默认关的全部意义就是不让它发生。
+- **回显**：`snapshot()` 与 `desktopTunnelPayload()` 都加 `diagnostics: { probe }`。只加 `snapshot()` 不够——
+  面板实际读的是 `desktopTunnelPayload`（`/desktop/tunnel/status`），漏了它开关就会每次刷新都弹回关。
+- **UI**（`pages.js`）：`#deviceExtras` 内新增 `#diagPanel`，一行勾选 + 说明 + 保存；zh/en 两套文案。
+  文案写全代价：**开着时手机每滑动约 1.5 秒回传一批**、日志会涨、**换隧道域名后必须重新用带 `?probe=1`
+  的链接进一次**（localStorage 按 origin 隔离）。
+- 测试 `test/diagnostics-panel.test.js` 五条：路由契约（未鉴权 403 / 七种非布尔 400 且不落盘 / 开-关往返与
+  快照回显 / 被拒的载荷不改设置）+ 面板渲染（关不预勾、开预勾、缺省段=关）+ 两语文案代价 + 页内 fetch 契约。
+  PARSE 档同批绿。
+- 字节：**手机壳零变化**（实测 `mobilePageAssets` zh 263 660 → 263 660，改的全在桌面配对页，
+  不进壳预算）；`ASSET_BUDGET_BYTES` 维持 269 000。
+- **需要重启才生效**（改了桥与页）。
+
 ## 0.4.26 — 2026-10-11
 
 **电脑面板交给手机的公网入口改成裸地址**（用户 14:1x：「公网地址也不要后面那一长串，就裸地址」）。
