@@ -32,7 +32,7 @@ function makeTempDir(prefix) {
  * 即便 `await t.stop()` 已经回来，最后一个原子改名的句柄也可能还没关。
  * 裸 `rmSync` 这时抛 EBUSY/EPERM，而它在 `finally` 里 —— 异常会把已经通过的
  * 断言整档带红，同时把目录留在 `%TEMP%`（实测积到 252 个 `dsh-pocket-mailbag-settings-*`）。
- * 重试是唯一的办法：`force: true` 只吞 ENOENT，吞不掉共享冲突。
+ * 退避重试能兜住绝大多数：`force: true` 只吞 ENOENT，吞不掉共享冲突。
  */
 async function removeTempDir(dir, attempts = 8) {
   for (let i = 0; i < attempts; i += 1) {
@@ -373,10 +373,13 @@ test('桌面「测试」当场就投，并顺路把包里的信带走', async ()
 test('落盘：宿主重启后包里的平邮还在、照原时间排队；挂号信不落盘（它可能已经过去了）', async () => {
   const mailbagDir = makeTempDir('dsh-pocket-mailbag-file-')
   const mailbagStore = createMailbagStore(mailbagDir)
-  const shared = createSettingsStore(makeTempDir('dsh-pocket-mailbag-settings-'))
+  const settingsDir = makeTempDir('dsh-pocket-mailbag-settings-')
+  const shared = createSettingsStore(settingsDir)
+  let t
+  let t2
   try {
     const fx = makeFixture({ refuse: true, mailbagStore, settingsStore: shared })
-    const t = await fx.bridgePromise
+    t = await fx.bridgePromise
     await runThenSettle(t, fx, [
       { sessionId: 'a', title: '甲' },
       { sessionId: 'b', title: '乙' }
@@ -394,7 +397,7 @@ test('落盘：宿主重启后包里的平邮还在、照原时间排队；挂�
 
     // 换一只新桥（＝宿主重启），用同一个文件与同一份设置。
     const fx2 = makeFixture({ mailbagStore, settingsStore: shared })
-    const t2 = await fx2.bridgePromise
+    t2 = await fx2.bridgePromise
     assert.equal(t2.bridge.mailbag.ordinaryCount, 2, '重启后信还在包里')
     assert.equal(t2.bridge.mailbag.registeredCount, 0, '重启后没有陈年提问被补投')
 
@@ -404,10 +407,12 @@ test('落盘：宿主重启后包里的平邮还在、照原时间排队；挂�
     await settleFor(() => fx2.sent.some((entry) => entry.text.includes('甲')))
     const letter = fx2.sent.find((entry) => entry.text.includes('甲'))
     assert.ok(letter.text.includes('乙'), '两封合成一封寄出')
-    await t2.stop()
   } finally {
+    // 两只桥都在 finally 里停：上面任何一条断言先炸，都不该把活着的桥和目录留下。
+    await t?.stop()
+    await t2?.stop()
     await removeTempDir(mailbagDir)
-    await removeTempDir(shared ? path.dirname(mailbagPath(mailbagDir)) : mailbagDir)
+    await removeTempDir(settingsDir)
   }
 })
 
