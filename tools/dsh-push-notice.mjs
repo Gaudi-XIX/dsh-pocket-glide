@@ -77,7 +77,9 @@ async function main() {
   const delivered = await notifySend(notify, withProbeSuffix(title, probe), withProbeSuffix(body, probe), {
     log: (level, message) => console.error(`${level}: ${message}`)
   })
-  if (probe) console.error('diagnostics: probe 已开启，推送里的地址已补 ?probe=1')
+  // 状态行走 stderr，而 dsh-revive.ps1 在 PowerShell 5.1 下按 GBK 收它——写中文会变成乱码
+  // （20:46 实测：`diagnostics: probe 宸插紑鍚?..`）。所以这行一律 ASCII。
+  if (probe) console.error('diagnostics: probe is on, probe=1 appended to links in this push')
   console.log(delivered ? 'push-delivered' : 'push-failed')
   return delivered ? 0 : 1
 }
