@@ -1,6 +1,6 @@
 {
   "name": "@defws/dsh-pocket",
-  "version": "0.4.25",
+  "version": "0.4.26",
   "description": "Pocket DSH — the phone connection plugin (pocket bridge) for DSH. The bridge runs inside the host process, not as a separate server and not as a desktop mirror: pair by QR/PIN, read sessions and history, send messages, stream replies. LAN listener plus an optional Cloudflare quick tunnel.",
   "type": "module",
   "main": "lib/index.js",
