@@ -391,7 +391,7 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   assert.match(assets.zh.document, /id="jumpPrompt"[^>]*aria-label="上一条提问"/, 'and is named for the question above, not the last one')
   assert.match(js, /function userAnchorEl\(box\)\{const rows=[\s\S]*?for\(let index=rows\.length-1;index>=0;index-=1\)/, 'the scan walks the questions backwards from the newest')
   assert.match(js, /if\(anchorTopOf\(box,row\)<box\.scrollTop-JUMP_EDGE_PX\)return row/, 'and stops at the first one above the fold')
-  assert.match(js, /function topEdgePull\(box\)\{if\(box\.scrollTop>0\)\{topEdgeArmed=false;return\}if\(topEdgeArmed\)return;topEdgeArmed=true;/, 'the top-edge load is edge-triggered, one page per arrival')
+  assert.match(js, /function topEdgePull\(box\)\{probeMark\('sc'\);if\(box\.scrollTop>0\)\{topEdgeArmed=false;return\}if\(topEdgeArmed\)return;topEdgeArmed=true;/, 'the top-edge load is edge-triggered, one page per arrival（0.4.19：开头只多了 F 的临时埋点 probeMark，边缘触发与「一次到达只取一页」这两条语义没变；埋点摘掉时这条字面要跟着改回去）')
   assert.match(js, /if\(!activeSession\|\|!olderHasMore\|\|olderBusy\|\|olderRunBusy\)return;void loadOlder\(\)/, 'and it obeys every lock the deliberate pull obeys')
   assert.match(js, /if\(typeof followStream==='undefined'\|\|followStream\)box\.scrollTop=box\.scrollHeight/, 'patchLastStreamMessage gates the stick on followStream')
   assert.match(assets.zh.document, /id="scrollAnchors"/, 'the anchor deck ships in the document')

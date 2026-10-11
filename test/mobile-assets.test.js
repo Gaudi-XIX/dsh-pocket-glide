@@ -775,7 +775,11 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 // 这 2.5 KB 每个装机版本只付一次；换回的是「上滑读历史时新消息不再把整段甩走」
 // （深滚实测：修前视野第一行 61→113，修后 61→61、scrollTop 2452 不动）。
 // 新预算下的真实余量：zh 446 B / en 523 B（en js 221 506 B）——下一笔壳增量只剩这点空间。
-const ASSET_BUDGET_BYTES = 266_000
+// 0.4.19 的增量（**临时**：F 埋点量完就摘，届时把预算降回 266 000）：
+// 页内 PROBE_ON / probeMark / probeSend 加三处打点 = +1 143 B（zh 265 554 → 266 697）。
+// 它默认零开销（URL 不带 ?probe 就不挂监听、不发请求），但字节照样每个装机版本下一遍，
+// 所以记成有到期日的提额，不是常态余量。
+const ASSET_BUDGET_BYTES = 268_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {
