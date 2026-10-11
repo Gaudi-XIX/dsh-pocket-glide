@@ -67,3 +67,19 @@ test('a probe line lands sanitised, and a burst inside a second is dropped', asy
     await t.stop()
   }
 })
+
+test('埋点开关活过 SW 的 URL 改写（0.4.20 成因档）', async () => {
+  // 真机实测到的失败：手机最后一次装的是 `doc url=/?revalidate=1` —— 本仓的 SW／离线路径会自己
+  // 拿查询参数改写 URL，所以「只看 location.search」的开关在第二次装载就失明：用户点了半天，
+  // 日志里 0 条 kbprobe。钉住修复后的语义，别让开关退回「一次性 URL 标记」。
+  const { mobilePageAssets } = await import('../lib/pages.js')
+  const js = mobilePageAssets({ locale: 'zh' }).js
+
+  assert.match(js, /var PROBE_ON=false/, '开关不由 location.search 单独决定（默认仍关）')
+  assert.match(js, /localStorage\.getItem\('pocketProbe'\)/, '要读持久化凭据')
+  assert.match(js, /localStorage\.setItem\('pocketProbe',String\(Date\.now\(\)\+216e5\)\)/,
+    '命中或仍在期内就续一份 6 小时到期的凭据（临时仪器不该永久开着）')
+  assert.match(js, /localStorage\.removeItem\('pocketProbe'\)/, '过期自己删掉，不留残余')
+  assert.match(js, /if\(PROBE_ON\)setTimeout\(\(\)=>probeMark\('on'\),300\)/,
+    'armed 后立刻发一条 on ——「有没有开」必须可证，不能靠缺席推断')
+})
