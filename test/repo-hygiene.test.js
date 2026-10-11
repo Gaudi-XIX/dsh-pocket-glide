@@ -25,7 +25,7 @@
 //     「工具 ↔ 运行时」，红的时候两边都归仓库面读者管，且 tunnel 侧当前无人改写。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -318,4 +318,30 @@ test('⑪ pin-store 默认仓注释与真实读写裁定一致，被否旧设计
     source.slice(docStart, docEnd).includes('`pairingPinWritePath()`'),
     'doc 块内必须引用 `pairingPinWritePath()`（写=readPaths[0] 裁定的正锚，F-1）'
   )
+})
+
+// ⑫（2026-10-11，泄漏归零那一轮）
+//
+// 钉的是哪句语义：**每一处 `mkdtempSync` 都必须有一条能走到它的回收路径**。
+//
+// 存在理由：临时目录删不掉在 Windows 上是**静默**的 —— `rmSync(..., { force: true })`
+// 只吞 ENOENT，EBUSY/EPERM 会抛；抛在 `finally` 里就把已经通过的断言整档带红，
+// 抛在别处则被 `catch` 吃掉、只剩目录。于是这类漏能一直不被发现：实测 %TEMP%
+// 积到上千个 `dsh-pocket-mailbag-settings-*`，以及每跑一轮全量稳定新增 7 个
+// （`-test-bin-` ×3、`-s5-` ×4、`-pinstore-` ×1）。
+//
+// 这条断言只做机械核对（有没有回收调用），**不跑测试、不碰 %TEMP%**：
+// 真正判「漏没漏」的权威手段是跑全量前后各来一次 `node tools/temp-leak-check.mjs`
+// 比总数（工具头注写了用法）。这里钉的是「别把回收那行删掉」。
+test('⑫ 每个 mkdtempSync 都有回收路径，别让临时目录静默留在 %TEMP%', () => {
+  const files = readdirSync(join(root, 'test')).filter((name) => name.endsWith('.test.js'))
+  const offenders = []
+  for (const name of files) {
+    const source = readFileSync(join(root, 'test', name), 'utf8')
+    if (!source.includes('mkdtempSync')) continue
+    // 回收的任一形态：直接 rmSync、经本文件自定的 removeTempDir、或注册进数组后统一收。
+    const recycles = /rmSync\(|removeTempDir\(|tempDirs\.push\(/
+    if (!recycles.test(source)) offenders.push(name)
+  }
+  assert.deepEqual(offenders, [], `这些测试建了临时目录却没有回收路径：${offenders.join(', ')}`)
 })
