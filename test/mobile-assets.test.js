@@ -198,11 +198,14 @@ test('AC-PERF the session cache is bounded and the resize path refills the trans
   // 现在两条分支都只做「高度（Apple）→ 防抖补页」，视口变化期间**不写 scrollTop**。
   // 复原只留给整段重建那一路（E 的判据 61→61 靠它，未受影响）。
   // 下面两条字面因此是「不含 restoreViewportAnchor」的形状——把它加回来会红，这是有意的。
+  // 0.4.22 又在这一拍最前面加了 applyKeyboardLift()：视口从 resizes-content 换成
+  // resizes-visual 之后，布局不再被键盘压缩，输入区整叠靠 --kb 抬到键盘上方；
+  // 抬起量必须在每一拍 resize 都重算（键盘动画是逐帧的），晚一帧就是输入框慢半拍。
   const viewport = slice(js, 'function scheduleViewportFill()', "document.addEventListener('visibilitychange'")
   assert.ok(viewport.includes('void ensureTranscriptFilled()'), 'the debounced fill reaches the transcript')
   assert.match(
     viewport,
-    /function scheduleViewport\(\)\{if\(viewportRaf\)return;if\(!appleTouchDevice\)\{scheduleViewportFill\(\);return\}/,
+    /function scheduleViewport\(\)\{applyKeyboardLift\(\);if\(viewportRaf\)return;if\(!appleTouchDevice\)\{scheduleViewportFill\(\);return\}/,
     '非 Apple 分支：不建 rAF、不写高度、也不写 scrollTop（视口期间交给浏览器锚定）',
   )
   assert.match(
@@ -796,3 +799,25 @@ test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   }
 })
 
+// --------------------------------------------------------------------------
+// 0.4.22 键盘行为契约（用户 2026-10-11 12:44 三条要求里的 ②③）
+// ② 点输入框 → 键盘弹出，输入框在键盘上方，页面不动
+// ③ 键盘收回，页面到哪就是哪，不闪不弹
+// 实现选择：视口声明 resizes-visual（布局视口不被键盘压缩 ⇒ 没有钳制、没有末段 56px 回弹），
+// 输入区那一整叠（待办卡／排队坞／设置面板都在 .composer 里）用 --kb 自己抬。
+// 把 meta 翻回 resizes-content 会让真机重新出现挤压与回弹，所以这条钉的是 shipped 壳资产。
+test('the keyboard no longer relayouts the page; the composer lifts itself', async () => {
+  const zh = renderMobilePage({ locale: 'zh', boot: null, initialChat: true })
+  const meta = /<meta name="viewport" content="([^"]*)">/.exec(zh)
+  assert.ok(meta && /interactive-widget=resizes-visual/.test(meta[1]), '视口声明 resizes-visual')
+  // 只钉「声明」本身：注释里出现旧值是有意的历史说明，不该被当成违规（我第一版就是这么误红的）
+  assert.ok(!/interactive-widget=resizes-content/.test(zh), '视口声明里不许再出现 resizes-content')
+  const { css, js } = mobilePageAssets({ locale: 'zh' })
+  assert.match(css, /\.composer\{[^}]*transform:translateX\(-50%\) translateY\(calc\(-1\*var\(--kb,0px\)\)\)/,
+    '输入区整叠靠 --kb 抬起来（translateX 还在，别丢了水平居中）')
+  assert.match(css, /\.scroll-anchors\{[^}]*transform:translateY\(calc\(-1\*var\(--kb,0px\)\)\)/,
+    '上下两枚也跟着抬：它们钉在输入区之上，不抬就会掉进键盘后面')
+  assert.match(js, /function applyKeyboardLift\(\)\{const st=document\.documentElement\.style;if\(appleTouchDevice\)\{st\.setProperty\('--kb','0px'\);return\}/,
+    'iOS 那条 --app-height 的路径不叠 --kb（它本来就缩过，再抬就抬两倍）')
+  assert.match(js, /innerHeight-vv\.height-vv\.offsetTop/, '抬起量减掉 offsetTop：浏览器 pan 过就不能重复抬')
+})
