@@ -780,8 +780,10 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   268 000 → 267 000  0.4.23 撤埋点后实测 zh **266 023**（不是回到 265 554）：
 //                     留下的是 0.4.22 的键盘抬起量（--kb 与 applyKeyboardLift，功能不是埋点）
 //                     与 0.4.21 撤抢写后的形状变化。余量 977 B。
+// 0.4.25：埋点按用户要求转为**常设诊断工具**（默认关、6 小时自到期），页内部分回来 ⇒ 实测
+//   zh 267 876（css 43 971 + js 223 905）、en 267 799，预算随之 267 000 → 269 000（余 1 124 B）。
 // 规矩不变：提额只认实测数字，临时东西必须带到期日。
-const ASSET_BUDGET_BYTES = 267_000
+const ASSET_BUDGET_BYTES = 269_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {
