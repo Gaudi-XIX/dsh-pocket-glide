@@ -26,6 +26,29 @@ function makeTempDir(prefix) {
 }
 
 /**
+ * 删掉一整个临时目录，删不动就重试。
+ *
+ * Windows 上文件被刚释放的句柄多占几十毫秒是常态：桥的落盘写是异步的，
+ * 即便 `await t.stop()` 已经回来，最后一个原子改名的句柄也可能还没关。
+ * 裸 `rmSync` 这时抛 EBUSY/EPERM，而它在 `finally` 里 —— 异常会把已经通过的
+ * 断言整档带红，同时把目录留在 `%TEMP%`（实测积到 252 个 `dsh-pocket-mailbag-settings-*`）。
+ * 重试是唯一的办法：`force: true` 只吞 ENOENT，吞不掉共享冲突。
+ */
+async function removeTempDir(dir, attempts = 8) {
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      // maxRetries/retryDelay 交给 fs 自己处理瞬时共享冲突；外面这层兜的是
+      // 桥的异步落盘句柄（释放比 t.stop() 回来晚）。
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 })
+      return
+    } catch (error) {
+      if (i === attempts - 1) throw error
+      await new Promise((resolve) => setTimeout(resolve, 25 * (i + 1)))
+    }
+  }
+}
+
+/**
  * 一只 clawbot 桥，整条外线都是录影。
  *
  * 每个应答同时给 `json()` 和 `text()`：iLink 客户端读 sendmessage 用 `.text()`
@@ -36,7 +59,9 @@ function makeTempDir(prefix) {
  *   contextToken 传空串＝刚绑定还没换到过令牌的存档（首绑那一封回执的判据）
  */
 function makeFixture(behaviour = {}) {
-  const dir = makeTempDir('dsh-pocket-mailbag-')
+  // 传了 settingsStore 就别再开目录：那只目录没人会用、也没人知道它存在，
+  // 于是它留在 %TEMP% 里（实测每跑一轮漏 3 个，两个就是这么来的）。
+  const dir = behaviour.settingsStore ? undefined : makeTempDir('dsh-pocket-mailbag-')
   const store = behaviour.settingsStore ?? createSettingsStore(dir)
   store.save({
     notify: {
@@ -186,7 +211,7 @@ test('一批会话同时跑完只发一封：一封摘要列不下的要说出�
     assert.equal(t.bridge.mailbag.ordinaryCount, 0, '发完包就空了')
   } finally {
     await t.stop()
-    fs.rmSync(fx.dir, { recursive: true, force: true })
+    await removeTempDir(fx.dir)
   }
 })
 
@@ -203,7 +228,7 @@ test('只跑完一件事时不立刻发，等末班车', async () => {
     assert.ok(fx.sent[0].text.includes('已完成'))
   } finally {
     await t.stop()
-    fs.rmSync(fx.dir, { recursive: true, force: true })
+    await removeTempDir(fx.dir)
   }
 })
 
@@ -244,7 +269,7 @@ test('服务端说没额度时信留在包里，下一次入站（哪怕令牌�
     assert.ok(last.includes('（第 1/10 条）'), '续期后从第 1 条重新数')
   } finally {
     await t.stop()
-    fs.rmSync(fx.dir, { recursive: true, force: true })
+    await removeTempDir(fx.dir)
   }
 })
 
@@ -269,7 +294,7 @@ test('「通道已就绪」只在首次绑定发，之后每轮回话不再白�
     assert.equal(receipts.length, 1, '续期不再发回执 ⇒ 那一条额度留给真正的消息')
   } finally {
     await t.stop()
-    fs.rmSync(fx.dir, { recursive: true, force: true })
+    await removeTempDir(fx.dir)
   }
 })
 
@@ -295,7 +320,7 @@ test('挂号信：提问当场就投；这轮投不出去就留着，下次入�
     assert.equal(t.bridge.mailbag.registeredCount, 0, '投出去了就不再留着')
   } finally {
     await t.stop()
-    fs.rmSync(fx.dir, { recursive: true, force: true })
+    await removeTempDir(fx.dir)
   }
 })
 
@@ -316,7 +341,7 @@ test('名字取不到就说「会话」，不许把 sessionId 印到通知第一
     assert.ok(text.includes('有问题需要你回答'), '该说的事照说')
   } finally {
     await t.stop()
-    fs.rmSync(fx.dir, { recursive: true, force: true })
+    await removeTempDir(fx.dir)
   }
 })
 
@@ -341,7 +366,7 @@ test('桌面「测试」当场就投，并顺路把包里的信带走', async ()
     assert.ok(fx.sent[1].text.includes('（第 2/10 条）'), '两次投递数两条')
   } finally {
     await t.stop()
-    fs.rmSync(fx.dir, { recursive: true, force: true })
+    await removeTempDir(fx.dir)
   }
 })
 
@@ -381,8 +406,8 @@ test('落盘：宿主重启后包里的平邮还在、照原时间排队；挂�
     assert.ok(letter.text.includes('乙'), '两封合成一封寄出')
     await t2.stop()
   } finally {
-    fs.rmSync(mailbagDir, { recursive: true, force: true })
-    fs.rmSync(shared ? path.dirname(mailbagPath(mailbagDir)) : mailbagDir, { recursive: true, force: true })
+    await removeTempDir(mailbagDir)
+    await removeTempDir(shared ? path.dirname(mailbagPath(mailbagDir)) : mailbagDir)
   }
 })
 
@@ -407,7 +432,7 @@ test('换到没有额度的通道时解除「额度已尽」，否则包会永�
     assert.equal(t.bridge.mailbag.ordinaryCount, 0, '寄完了')
   } finally {
     await t.stop()
-    fs.rmSync(fx.dir, { recursive: true, force: true })
+    await removeTempDir(fx.dir)
   }
 })
 
@@ -438,6 +463,6 @@ test('没配通道时邮包是哑的：不发信，也不往里堆', async () =>
     assert.equal(t.bridge.mailbag.ordinaryCount, 0, '也不往里堆')
   } finally {
     await t.stop()
-    fs.rmSync(dir, { recursive: true, force: true })
+    await removeTempDir(dir)
   }
 })
