@@ -20,6 +20,34 @@ import process from 'node:process'
 
 const POCKET_LIB = new URL('../lib/', import.meta.url)
 
+/**
+ * 诊断模式（0.4.26 起是面板上的一个开关）：开着时交给手机的公网入口一律带 ?probe=1，
+ * 页内埋点据此武装并把滚动时序回传到 pocket.log。
+ *
+ * 桥自己推地址的两条路已经按开关走了——微信回话那条在 lib/bridge.js 的 inbound 分支，
+ * 配对页那条在 /desktop 的渲染里。这个脚本是第三条路，而它以前得靠人记得手打 ?probe=1：
+ * 开关关着照样能发带诊断的链接，等于开关只管两条半路。所以改成机械跟随：
+ * 开关开着就补，关着就发裸地址，调用方不需要知道这件事。
+ *
+ * URL 的字符集刻意排除中文标点与右括号：推送文案里地址后面常紧跟「，进页面后…」，
+ * 不排除的话问号会插到那个逗号后面，链接当场失效。已带 probe 参数的原样返回，重复调用幂等。
+ */
+function withProbeSuffix(text, probe) {
+  if (!probe || typeof text !== 'string') return text
+  return text.replace(/https?:\/\/[^\s，。、；：！？"'）】〉》]+/g, (raw) => {
+    try {
+      // 用 URL 类构造，不拼字符串：和桥那边出的 https://<host>/?probe=1 逐字节一致，
+      // 两条路发的链接不会出现「有斜杠/没斜杠」两种形状。
+      const url = new URL(raw)
+      if (url.searchParams.get('probe')) return raw
+      url.searchParams.set('probe', '1')
+      return url.toString()
+    } catch {
+      return raw
+    }
+  })
+}
+
 async function main() {
   const [title, body] = process.argv.slice(2)
   if (!title || !body) {
@@ -45,9 +73,11 @@ async function main() {
     return 2
   }
 
-  const delivered = await notifySend(notify, title, body, {
+  const probe = doc.diagnostics?.probe === true
+  const delivered = await notifySend(notify, withProbeSuffix(title, probe), withProbeSuffix(body, probe), {
     log: (level, message) => console.error(`${level}: ${message}`)
   })
+  if (probe) console.error('diagnostics: probe 已开启，推送里的地址已补 ?probe=1')
   console.log(delivered ? 'push-delivered' : 'push-failed')
   return delivered ? 0 : 1
 }
