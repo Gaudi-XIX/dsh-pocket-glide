@@ -334,20 +334,15 @@ test('notify trigger: a running→done edge pushes exactly one completion notice
     // tick observes the flipped flag instead of the baseline's answer.
     t.bridge._sessionListCache = undefined
     await t.bridge.pollNotifyRunning()
-    // 0.4.12：完成通知不再逐条直发，它进信封等一趟车——一条入站只换 10 条额度，
-    // 逐个会话直发会在一个繁忙分钟里把额度烧穿（实测 09:34:23 一秒 13 发 12 拒）。
-    assert.equal(sent.length, 0, 'the settle queues a notice instead of pushing it')
-    assert.equal(t.bridge.mailbag.ordinaryCount, 1, 'one passenger waiting')
-    // A session that stays done does not notify twice.
-    await t.bridge.pollNotifyRunning()
-    assert.equal(t.bridge.mailbag.ordinaryCount, 1, 'the same settle never queues twice')
-    await t.bridge.sendMail('inbound')
-    assert.equal(sent.length, 1)
+    // 0.4.31：完成通知当场就发，不攒、不等车、不看时间。0.4.12–0.4.30 那套邮包
+    // （完成攒进信封、提问挂号当场投、等入站续期顺路带走）已按用户裁定整条作废：
+    // 「有消息就推……不要搞什么搭车不搭车、什么时间、什么信封」。
+    assert.equal(sent.length, 1, 'the settle goes straight to the wire')
     assert.ok(sent[0].startsWith('https://api.day.app/'))
     assert.ok(sent[0].includes(encodeURIComponent('写周报')), 'the session title names the notice')
+    // A session that stays done does not notify twice.
     await t.bridge.pollNotifyRunning()
-    await t.bridge.sendMail('hitchhike')
-    assert.equal(sent.length, 1, 'and nothing departs twice')
+    assert.equal(sent.length, 1, 'the same settle never pushes twice')
     assert.equal(
       t.logs.some(({ message }) => message.includes(REAL_KEY)),
       false,
@@ -447,13 +442,13 @@ test('desktop notify endpoints: masked readback, guarded writes, delivered flag'
     )
     // The test endpoint goes out through the injected channel and answers a
     // delivered flag; failure stays a 200 with delivered:false.
-    // held/quotaSpent (0.4.12) are what let the desktop tell "this channel is
-    // dead" apart from "WeChat is not accepting any more pushes this round".
+    // quotaSpent is what lets the desktop tell "this channel is dead" apart
+    // from "WeChat is not accepting any more pushes this round".
     const test = await httpFetch(`${t.base}/desktop/notify/test`, {
       method: 'POST',
       headers: { Cookie: desktop },
     })
-    assert.deepEqual(await test.json(), { ok: true, delivered: true, held: 0, quotaSpent: false })
+    assert.deepEqual(await test.json(), { ok: true, delivered: true, quotaSpent: false })
     assert.equal(sent.length, 1, 'the test notice went through the injected fetch')
     assert.equal(
       t.logs.some(({ message }) => message.includes(REAL_KEY)),

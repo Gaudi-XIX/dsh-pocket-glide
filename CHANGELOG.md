@@ -4,6 +4,34 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.4.31 — 2026-10-12
+
+**↑ 邮包作废：有消息就推，推送标题带真实会话名**。用户 2026-10-12 00:0x 裁定：「有消息就推，不管是完成
+还是提问错误，只要有会话就推送。不要搞什么『搭车不搭车』、什么时间、什么信封，这些概念全部取消。
+没推到的就没推到，也不用管了。」外加「目前推送的会话没有名称，我看不到……把这个名称显示出来。」
+
+- **删掉整个邮包（0.4.12–0.4.30 的合并车道）**。`lib/mailbag.js`（攒包、封口、`due()` 三条件）
+  与 `lib/mailbag-store.js`（落盘 `notify-mailbag.json`）两个模块连同它们的测试一并删除，
+  数据目录里那份空包也已清掉。桥侧 `sendMail(reason)` 的 `tick|inbound|hitchhike` 三种发车理由、
+  `flushOrdinaryOnRegistered()`、`scheduleMailbagPersist()`/`flushMailbagPersist()`、`restoreMailbag()`、
+  `noteMobilePresence()`（进手机端重置计时）**全部取消**；`held` 字段从桌面接口移除。
+  它们背后的概念——信封、班次、末班车、封顶、顺路搭车、挂号信补投、跨重启恢复——**一起作废**。
+- **改成一条路：`sendNotice(title, body)`**。完成、提问、报错都走它，判到就当场发一条，
+  **发不出去就丢**（日志 `notify dropped: <名字> <原因>`），不攒、不等、不补投、不跨重启。
+  这条同时废掉了「没额度就先扣着，等下一次入站第一件补投」的挂号信车道。
+- **推送标题改为真实会话名**。根因是**读错了字段**：标题在 `item.projections.values.title`
+  （宿主 rc.2 的 projection），旧代码读的是行顶层 `item.title`，那里从来没有值，
+  于是每条推送的标题都退化成字面量「会话」。新增 `sessionTitleOf(item)` 按
+  `projections.values.title` → `sessionTitle` → `session.title` → 顶层 `title` 依次取，
+  取不到仍明说「会话」，**不许**拿 sessionId 冒充名字。手机页 `titleFor()` 早就是这么读的，
+  这也解释了「手机页看得到名字、推送看不到」。
+- 保留未动：`clawbotQuotaTail()` 的「（第 N/10 条）」计数与续期归零、`judgeSessionCompletion`
+  的 settle 判定（quietMs 90s / graceMs 10s / minBusyMs 20s / staleMs 30min）、`lib/notify.js`
+  与 `lib/clawbot.js` 整体。
+- 验证：全量 `node --test --test-concurrency=1 test/*.test.js` ⇒ 1078 tests / 1073 pass / 3 fail / 2 skipped；
+  三个红档（`stream-watermark` AC-A6、`transcript-order` 两条）经 stash 他线文件后单跑 **66/66 全绿**，
+  归属当时并行在改 `lib/pages.js` 的另一条线，与本版无关。
+
 ## 0.4.30 — 2026-10-11
 
 **↑ 只做一件事：把正在读的那条回答的提问放回视口顶**。这一节只收这一件，另有一条线在改会话设置，不在本节范围。

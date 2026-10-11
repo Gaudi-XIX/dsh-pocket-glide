@@ -33,7 +33,6 @@ const ONLINE_MARK = 'Tunnel online'
 // 这些名字不参与"数据根有没有被本档动过"的比对。
 const HOST_OWNED = new Set([
   'mobile-sessions.json',
-  'notify-mailbag.json',
   'mobile-pairing-pin.json',
   'mobile-bridge-settings.json',
   'cloudflared',
