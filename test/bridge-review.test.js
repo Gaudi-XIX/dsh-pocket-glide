@@ -736,13 +736,54 @@ test('B1: an unauthenticated internal request is not bounced across origins', as
     assert.equal(retry.status, 200)
     assert.equal((await retry.json()).redirectUrl, undefined, 'the JSON recovery path carries no redirect either')
     // The pairing funnel is the one hop that stays, and it needs a live token.
+    // 0.4.26：token 不再从 snapshot().pairingUrl 里抠 —— 公网那条现在**故意**是裸地址。
+    // 依据是代码语义：公网路径上 token 不省 PIN（/pair 校验通过后仍渲染 PIN 页），留着只是把
+    // 一次性凭据摊进屏幕/剪贴板/聊天记录。本档要验的性质（LAN /pair?token 迁到公网 origin、
+    // 陌生 token 走本地 /reconnect）一个字没松，只是取凭据改成直读字段。
     t.bridge.rotatePairingToken()
-    const token = new URL(t.bridge.snapshot().pairingUrl).searchParams.get('token')
+    const token = t.bridge.pairingToken
     const migrated = await httpFetch(`${t.base}/pair?token=${token}`)
     assert.equal(migrated.status, 302)
     assert.match(migrated.headers.get('location') ?? '', /^https:\/\/test-tunnel\.trycloudflare\.com\/pair/)
     const stale = await httpFetch(`${t.base}/pair?token=expired-token`)
     assert.equal(stale.headers.get('location'), '/reconnect', 'a stranger goes to the local recovery page')
+  } finally {
+    await t.stop()
+  }
+})
+
+// 0.4.26 用户 14:1x：「电脑面板里公网地址也不要后面那一长串，就裸地址」。
+// 代码依据：公网路径的 token 不省 PIN（/pair 校验通过后仍渲染 PIN 页），只有局域网那条才是
+// 「校验过直接发 cookie、免输 PIN」——所以公网去掉零损失、局域网必须留。这一档钉住两侧。
+test('B1: the public pairing URL is bare while the LAN one keeps its token', async () => {
+  const t = await startBridge({
+    bridgeOptions: {
+      createCloudflareTunnel: async () => ({
+        url: 'https://bare-tunnel.trycloudflare.com',
+        provider: 'cloudflare',
+        stop: async () => {},
+        process: { once: () => {} },
+      }),
+    },
+  })
+  try {
+    await t.bridge.toggleTunnel(true)
+    const pub = new URL(t.bridge.snapshot().pairingUrl)
+    assert.equal(pub.hostname, 'bare-tunnel.trycloudflare.com', '公网指向隧道域名')
+    assert.equal(pub.pathname, '/', '公网是裸根地址，不再挂 /pair')
+    assert.equal(pub.searchParams.get('token'), null, '公网地址不带一次性配对 token')
+
+    // 诊断模式开着时同一位置追加 ?probe=1（页内埋点只认这个；默认关）
+    t.bridge.diagnosticsProbeEnabled = () => true
+    const diag = new URL(t.bridge.snapshot().pairingUrl)
+    assert.equal(diag.searchParams.get('probe'), '1', '诊断模式开 → 交给手机的地址带 ?probe=1')
+    assert.equal(diag.pathname, '/', '开了诊断也不把 token 放回公网地址')
+
+    // 局域网一侧 token 必须还在：它是「扫一次不输 PIN」的唯一机制，去掉就是降级
+    t.bridge.tunnelActive = false
+    const lan = new URL(t.bridge.snapshot().pairingUrl)
+    assert.equal(lan.pathname, '/pair', '局域网仍走 /pair 漏斗')
+    assert.ok(lan.searchParams.get('token'), '局域网仍带 token')
   } finally {
     await t.stop()
   }
