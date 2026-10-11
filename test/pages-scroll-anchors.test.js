@@ -317,15 +317,20 @@ const workspaceSandbox = ({ storage = {}, activeSession = null } = {}) => {
   const body = [
     'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'relativeTime',
     'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
+    // The head notices (0.4.31): wsFlagsOf/wsFlagHtml are top-level on the page, so
+    // the sandbox has to carry them exactly like the renderer it extracts.
+    'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'sessionModelLabel',
+    'normalizeSelection', 'fieldText',
   ]
     .map((name) => extractFunction(js, name))
     .join('\n')
   const host = { innerHTML: '' }
   const make = new Function(
     'workspaces', 'sessionSummaries', 'expandedWsIds', 'revealedLists', 'activeSession', 'container', 'localStorage', `
-    const L=${JSON.stringify({ noWorkspaces: 'none', noTasksHint: 'hint', newChat: 'new', untitled: 'untitled', justNow: 'now', minute: 'm', hour: 'h', day: 'd', moreRows: '{n} more' })}
+    const L=${JSON.stringify({ noWorkspaces: 'none', noTasksHint: 'hint', newChat: 'new', untitled: 'untitled', justNow: 'now', minute: 'm', hour: 'h', day: 'd', moreRows: '{n} more', wsNewDone: 'New', wsQuestion: 'Question', wsError: 'Error' })}
     const BLANK_ROW_VISIBLE_MS=${24 * 60 * 60 * 1000}
     const LIST_ROWS_MAX=${25}
+    const WS_FLAGS_MAX=${2}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}

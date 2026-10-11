@@ -790,7 +790,14 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 // 0.4.25：埋点按用户要求转为**常设诊断工具**（默认关、6 小时自到期），页内部分回来 ⇒ 实测
 //   zh 267 876（css 43 971 + js 223 905）、en 267 799，预算随之 267 000 → 269 000（余 1 124 B）。
 // 规矩不变：提额只认实测数字，临时东西必须带到期日。
-const ASSET_BUDGET_BYTES = 269_000
+// 0.4.31：工作区名旁的三种状态徽标（`.ws-status`/`.ws-flags` CSS）与会话行的模型名
+//   （同一 `.task-copy time` 行、`· ` 分隔）——在**干净 HEAD c13e5bd + 本线 patch** 的独立
+//   worktree 上实测 zh 266 877（css 44 596 + js 222 281）、en 269 761（css 44 596 +
+//   js 225 165）；相对 HEAD 各涨约 2.84 KB。两笔都是用户点名的常驻功能，不是埋点。
+// 同日并线：本工作树里另有「+」改草稿那条线在同时改 pages.js/bridge.js，用户裁定两线合成
+//   一个版本一起发，预算须容得下合成后的出货页（混合树实测 zh 273 651）⇒ 取 275 000
+//   （对合并态余 1 349 B）。提额两次都只认上述实测，不按估算填数。
+const ASSET_BUDGET_BYTES = 275_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

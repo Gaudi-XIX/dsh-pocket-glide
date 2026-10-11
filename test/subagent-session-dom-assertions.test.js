@@ -68,6 +68,9 @@ const HISTORY_IDLE_CAP = Number(js.match(/HISTORY_POLL_IDLE_CAP_MS=(\d+)/)[1]);
 // renderWorkspaces caps the rows it builds per expanded workspace; the sandbox must
 // carry the same ceiling or the cap under test is the test's own, not the page's.
 const LIST_ROWS_MAX = Number(js.match(/LIST_ROWS_MAX=(\d+)/)[1]);
+// The workspace head builds its notices through wsFlagsOf/wsFlagHtml (0.4.31), which
+// read this same ceiling out of page scope — the sandbox has to declare it too.
+const WS_FLAGS_MAX = Number(js.match(/WS_FLAGS_MAX=(\d+)/)[1]);
 
 // loadHistory's catch reads the errorCode off whatever its rpc rejected with, so the
 // sandbox below hands it a hand-written `rpc` stub that throws the Error this file
@@ -198,6 +201,15 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     const L=${JSON.stringify(L)}
     const BLANK_ROW_VISIBLE_MS=${BLANK_ROW_VISIBLE_MS}
     const LIST_ROWS_MAX=${LIST_ROWS_MAX}
+    const WS_FLAGS_MAX=${WS_FLAGS_MAX}
+    // The head notices need the focused-session id (a focused row never reads as
+    // unread); these sandboxes render with nothing open.
+    let activeSession=null
+    const readOpenedMap=()=>({})
+    ${extractFunction(js, 'normalizeSelection')}
+    ${extractFunction(js, 'fieldText')}
+    ${extractFunction(js, 'sessionModelLabel')}
+    ${extractFunction(js, 'isSessionUnread')}
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'visibleSessions')}
@@ -207,6 +219,11 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'relativeTime')}
     ${extractFunction(js, 'timeFor')}
     ${extractFunction(js, 'titleFor')}
+    ${extractFunction(js, 'wsFlagOf')}
+    ${extractFunction(js, 'wsFlagClass')}
+    ${extractFunction(js, 'wsFlagRank')}
+    ${extractFunction(js, 'wsFlagsOf')}
+    ${extractFunction(js, 'wsFlagHtml')}
     ${extractFunction(js, 'renderWorkspaces')}
     ${extractFunction(js, 'pickFocusSession')}
     return {
