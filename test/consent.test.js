@@ -231,3 +231,32 @@ test('consent gate reachability: the SW bypasses /consent and the app rpc walks 
   assert.match(js, /location\.replace\('\/consent\?next=\/'\)/,
     'the rpc walks the browser to the card (aligned with the stage callers)')
 })
+
+// 0.4.24：设备档案里的须知回答，必须对「没有 cookie 的同一台设备」也生效。
+// 原读写两头都要求活会话，而真实顺序永远是先同意、后配对 ⇒ 档案里永远是空
+// （实测两台设备 publicConsentedAt 都是空，用户在微信里卡成死循环：WebView 不存 cookie，
+// 每换一个随机隧道域名就重新问一遍）。这一档钉的就是那条修复，反向也钉：陌生设备照旧要问。
+test('须知回答落在设备档案上：换隧道域名（没有 cookie）也不再问第二遍', async () => {
+  const t = await startBridge()
+  try {
+    const UA = 'PocketTestConsent/9.0 (Linux; Android 12)'
+    await t.pairMobile(UA) // 配对一次 ⇒ 建立设备档案
+    const before = await httpFetch(`${t.base}/`, { headers: { ...tunnelHeaders, 'user-agent': UA } })
+    assert.equal(before.status, 303, '档案还没记 ⇒ 仍然要问一次须知')
+    assert.equal(before.headers.get('location'), '/consent?next=%2F')
+    const accepted = await httpFetch(`${t.base}/consent/accept?next=%2F`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...tunnelHeaders, 'user-agent': UA },
+      body: JSON.stringify({ next: '/' }),
+    })
+    assert.equal(accepted.status, 303)
+    const after = await httpFetch(`${t.base}/`, { headers: { ...tunnelHeaders, 'user-agent': UA } })
+    const loc = after.headers.get('location') || ''
+    assert.ok(!loc.startsWith('/consent'), '同一台设备再来（依旧没有 cookie）⇒ 不该再被送去须知页，实际 ' + loc)
+    const stranger = await httpFetch(`${t.base}/`, { headers: { ...tunnelHeaders, 'user-agent': 'OtherPhone/1.0' } })
+    assert.equal(stranger.status, 303, '没配对过的设备不受影响，照旧要问')
+    assert.equal(stranger.headers.get('location'), '/consent?next=%2F')
+  } finally {
+    await t.stop()
+  }
+})
