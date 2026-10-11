@@ -107,9 +107,9 @@ test('resolveCloudflared falls through to the bare command name', () => {
 
 test('resolveCloudflared honors binaryPath then DSH_POCKET_CLOUDFLARED', () => {
   const saved = saveEnv()
+  const dir = makeTempDir('dsh-pocket-test-bin-')
   try {
     clearEnv()
-    const dir = makeTempDir('dsh-pocket-test-bin-')
     const direct = path.join(dir, 'direct.exe')
     const override = path.join(dir, 'override.exe')
     fs.writeFileSync(direct, 'x')
@@ -122,14 +122,15 @@ test('resolveCloudflared honors binaryPath then DSH_POCKET_CLOUDFLARED', () => {
     assert.equal(resolveCloudflared(direct), direct)
   } finally {
     restoreEnv(saved)
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 })
 
 test('resolveCloudflared reads legacy DSH_PHONE_NATIVE_CLOUDFLARED as fallback', () => {
   const saved = saveEnv()
+  const dir = makeTempDir('dsh-pocket-test-bin-')
   try {
     clearEnv()
-    const dir = makeTempDir('dsh-pocket-test-bin-')
     const legacy = path.join(dir, 'legacy.exe')
     fs.writeFileSync(legacy, 'z')
     process.env.DSH_PHONE_NATIVE_CLOUDFLARED = legacy
@@ -142,20 +143,22 @@ test('resolveCloudflared reads legacy DSH_PHONE_NATIVE_CLOUDFLARED as fallback',
     assert.equal(resolveCloudflared(), current)
   } finally {
     restoreEnv(saved)
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 })
 
 test('resolveCloudflared chain reaches CLOUDFLARED_BIN', () => {
   const saved = saveEnv()
+  const dir = makeTempDir('dsh-pocket-test-bin-')
   try {
     clearEnv()
-    const dir = makeTempDir('dsh-pocket-test-bin-')
     const bin = path.join(dir, 'cf.exe')
     fs.writeFileSync(bin, 'q')
     process.env.CLOUDFLARED_BIN = bin
     assert.equal(resolveCloudflared(), bin)
   } finally {
     restoreEnv(saved)
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 })
 
