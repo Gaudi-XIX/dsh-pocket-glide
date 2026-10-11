@@ -19,3 +19,10 @@ vendor/
 # is a production incident, not a tidy-up problem.
 *.tar
 *.tgz
+
+# Scratch: probe scripts, one-shot run logs, commit-message drafts. Workspace
+# convention puts throwaway artifacts under tmp/<yyyymmdd>-<topic>/ — they are
+# reproducible by design and carry no long-term guarantee. This tree is the
+# host's `link:` loadable target, so an untracked scratch file here is also
+# loadable surface: keeping it out of `git status` keeps real changes visible.
+tmp/
