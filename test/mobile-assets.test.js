@@ -189,23 +189,25 @@ test('AC-PERF the session cache is bounded and the resize path refills the trans
   // branch drives --app-height first, every other device goes straight to the
   // fill, and neither calls ensureTranscriptFilled() inline (the debounce is the
   // whole point — a per-frame fill is the §5b ban).
-  // Literal changed with the E anchor (0.4.18): both branches now call
-  // restoreViewportAnchor() BEFORE the debounced fill. The keyboard folding away
-  // shrinks the scrollable range, so the browser clamps scrollTop down in that same
-  // frame (measured 260→10) and never fires a scroll event — the anchor has to be
-  // re-aimed inside the viewport-change frame; waiting for the 150 ms fill turns one
-  // jump into two. The assertion still pins the same contract: no rAF and no height
-  // write on the non-Apple branch, height first then fill on the Apple one.
+  // 0.4.21 契约翻转，理由是真机一手数据（docs/F真机判读-20261011.md §4）：
+  // 0.4.18 曾在这里加 restoreViewportAnchor()，认为「视口变高浏览器钳了 scrollTop，要同一帧补回去，
+  // 否则晚一帧就是二次弹跳」。12:17 真机埋点推翻它：浏览器**自己会锚**（每次 rz 之后 1–2 ms 就有
+  // 一次 sc，位置已被浏览器校正），我那一写是多余的一手，于是两边互相把对方当扰动来回抢：
+  // sc 2102 → rs 2145 → sc 2086 → rs 2145，6–20 ms 一次，整批 13 次 rs 全发生在「停在会话中间」，
+  // 贴底那几轮一次都没有（followStream 早退）。用户描述的「中间时屏幕闪一下」就是这个来回抖。
+  // 现在两条分支都只做「高度（Apple）→ 防抖补页」，视口变化期间**不写 scrollTop**。
+  // 复原只留给整段重建那一路（E 的判据 61→61 靠它，未受影响）。
+  // 下面两条字面因此是「不含 restoreViewportAnchor」的形状——把它加回来会红，这是有意的。
   const viewport = slice(js, 'function scheduleViewportFill()', "document.addEventListener('visibilitychange'")
   assert.ok(viewport.includes('void ensureTranscriptFilled()'), 'the debounced fill reaches the transcript')
   assert.match(
     viewport,
-    /function scheduleViewport\(\)\{if\(viewportRaf\)return;if\(!appleTouchDevice\)\{restoreViewportAnchor\(\);scheduleViewportFill\(\);return\}/,
-    'the non-Apple branch refills without allocating a rAF or writing the height',
+    /function scheduleViewport\(\)\{if\(viewportRaf\)return;if\(!appleTouchDevice\)\{scheduleViewportFill\(\);return\}/,
+    '非 Apple 分支：不建 rAF、不写高度、也不写 scrollTop（视口期间交给浏览器锚定）',
   )
   assert.match(
     viewport,
-    /viewportRaf=requestAnimationFrame\(\(\)=>\{applyViewportHeight\(\);restoreViewportAnchor\(\);scheduleViewportFill\(\)\}\)/,
+    /viewportRaf=requestAnimationFrame\(\(\)=>\{applyViewportHeight\(\);scheduleViewportFill\(\)\}\)/,
     'the Apple branch still drives the height, then refills',
   )
   assert.ok(js.includes("window.addEventListener('resize',scheduleViewport)"), 'the window resize is wired to it')
