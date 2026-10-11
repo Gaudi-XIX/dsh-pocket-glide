@@ -615,6 +615,13 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
   assert.match(css, /\.setting-pick\{width:100%;height:46px;[^}]*font-size:15px;font-weight:550/, 'the field is a 46px control typed at 15px ink')
   assert.match(css, /\.setting-pick i\{[^}]*rotate\(45deg\)/, 'one CSS-drawn chevron, no image bytes')
   assert.match(css, /\.setting-pick\[aria-expanded=true\]\{/, 'an opened field says so')
+  // B-2 (live report 2026-10-11: 「点下拉后不变上拉、无法恢复」). The chevron was drawn once
+  // at a fixed rotate(45deg) and nothing rotated it when the field opened, so an open list
+  // still pointed down — the panel gave no sign it had opened, and tapping again to close it
+  // read as "nothing happened, and now it will not come back". A state the page claims via
+  // aria-expanded has to be visible, or the claim is only for the screen reader.
+  assert.match(css, /\.setting-pick\[aria-expanded=true\] i\{[^}]*rotate\(225deg\)/, 'the chevron turns to point up while the list is open')
+  assert.ok(!/\.setting-pick\[aria-expanded=true\] i\{[^}]*rotate\(45deg\)/.test(css), 'and it is not left pointing down in the open state')
   assert.match(css, /\.setting-list\{[^}]*overflow-y:auto/, 'the opened list is this page own scroll box')
   assert.match(css, /\.setting-opt\{[^}]*min-height:44px[^}]*font-size:15px/, 'rows are finger-sized and typed like the sheet')
   assert.match(css, /\.setting-opt\.is-on\{color:var\(--brand\)/, 'the current choice is marked by colour plus the ✓ in ::after')

@@ -4,6 +4,39 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.4.28 — 2026-10-11
+
+**输入栏换行 + 模型下拉箭头两处观感/行为修正**，另给 ↑ 加了取证埋点。用户 14:29 报的四个 bug
+（B-1~B-4），本节收掉能确定的两条，另两条留取证。
+
+- **B-4 换行不再变成发送**（用户口径定死：「换行就是换行，发送只点箭头」）。根因是输入栏的 keydown：
+  旧写法 `if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();send()}`——
+  它排掉了输入法合成态，但**排不掉软键盘的 return 键**：Android 把那个键报成 `key==='Enter'` 且
+  `shiftKey===false`，与硬件 Enter 在事件字段上完全同形，所以手机上每次想换行都发出去了一条。
+  修法是**让 Enter 什么都不做**（只留埋点），`<textarea>` 的原生行为就把换行插进去了——这也让代码比原来更短。
+  斜杠菜单仍在 Enter 上优先取词（`slashMenuKeydown` 自己 `preventDefault`），那条路不受影响。
+  新增 `test/composer-enter-newline.test.js` 五条行为测试：软键盘 return 换行且不发送、光标处断行而非行尾、
+  shift+Enter 同样只换行、菜单打开时 Enter 仍取词、以及源码层「该 handler 里不许出现 `send(`/`preventDefault`」。
+- **B-2 下拉打开后箭头改成指上**（用户报「点下拉后不变上拉、无法恢复」）。`togglePickField` 一直在正确写
+  `aria-expanded`，但 chevron 只有一个写死的 `rotate(45deg)`，**没有任何 `[aria-expanded=true] i` 规则去翻它**
+  ——于是列表已经展开、箭头仍朝下，界面等于不承认自己开了；再点一次收起，读起来就是「点了没用、还回不去了」。
+  补 `.setting-pick[aria-expanded=true] i{transform:rotate(225deg) ...}`，并在 `test/mobile-assets.test.js`
+  的 AC-UI9 里钉住「打开态必须指上、且不许停在指下」。
+  **注意这条只修了「状态没被表达」，没有动列表的展开方向**：`.setting-list` 是面板内的常规流块
+  （`margin-top:6px;max-height:min(42vh,300px)`），不是浮层，所以它本来就不会也不该「往上弹」。
+- **B-3 ↑ 加取证埋点**：`.scroll-anchors` 的 click 委托里加 `probeMark('up')`（↑）与 `probeMark('latest')`（↓）。
+  判据：诊断模式开着时点一次 ↑，日志里出现**两条** `up` ＝ 事件双触发（子元素冒泡／重瞄未结束又进一次）；
+  只有**一条**却位移两次 ＝ `settlePromptJump` 的 100ms×4 重瞄在重复推。埋点走既有的 `probeMark`，
+  默认关（`diagnostics.probe`）。
+- **B-1（AI 推消息时瞬移到底）本节不改代码**：这是 handoff 就定下的口径——现有 `bt`/`bf`/`bp`/`rs` 四个标记
+  已足以指认是哪条路，缺的只是**真机上的一次现场**。做法：打开面板诊断开关（或用带 `?probe=1` 的链接进一次）、
+  把会话停在中上部、等 AI 推进来一条，然后读 `pocket.log` 的 `kbprobe`。**拿到那条数据之前不动代码**，
+  否则就是在猜。
+- 字节：zh 壳 **268 305 B**（预算 269 000），`ASSET_BUDGET_BYTES` **不需要提额**——B-4 最终修法比原实现更短，
+  中间那版自建 `insertPromptNewline` 助手（+948 B）已废弃。
+- 全量 **1077 / 1075 pass / 0 fail / 2 skipped**（0.4.27 的 1072 ＋ B-4 新档 5 条）。
+- **需要重启才生效**（改了页与包版本）。
+
 ## 0.4.27 — 2026-10-11
 
 **诊断模式补上面板开关**（用户 14:18 令「做面板开关」）。0.4.26 只落了后端，开关只能靠手改设置档
