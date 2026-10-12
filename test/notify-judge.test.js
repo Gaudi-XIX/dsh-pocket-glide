@@ -9,8 +9,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   NOTIFY_JUDGE_THRESHOLDS,
+  RETRY_STORM_THRESHOLDS,
+  countRetryFailures,
   judgeSessionCompletion,
   sessionActivityAt,
+  sessionRowHasError,
 } from '../lib/bridge.js'
 import { startBridge } from './helpers.js'
 
@@ -313,7 +316,7 @@ test('bridge question push: one notice per question, identified by session title
     t.bridge.rememberPendingQuestion('evt-1', { rpcId: 'r1', sessionId: 's1', questions: [] })
     await drain()
     assert.equal(sent.length, 1, 'the arrival pushes immediately')
-    assert.ok(sent[0].includes(encodeURIComponent('有问题需要你回答')), 'the notice names the wait')
+    assert.ok(sent[0].includes(encodeURIComponent('待回答')), 'the notice names the wait')
     assert.ok(sent[0].includes(encodeURIComponent('部署周报')), 'the session title identifies it')
     // A reconnect replay of the same event id must stay silent.
     t.bridge.rememberPendingQuestion('evt-1', { rpcId: 'r1', sessionId: 's1', questions: [] })
@@ -358,5 +361,205 @@ test('bridge question push: one notice per question, identified by session title
     )
   } finally {
     await t2.stop()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Storm detector (2026-10-12): the 10-11 night had six sessions spinning in
+// compaction-refusal retries for hours with running:true throughout — the
+// settle judge cannot see that shape by design, so the poll now probes the
+// record tail of any suspect and pushes once per storm.
+// ---------------------------------------------------------------------------
+
+test('countRetryFailures: window, the two lanes, and the deliberate double-count guards', () => {
+  const now = 10_000_000
+  const wrapped = (type, ageMs, data) => ({ type: 'event', event: { type, time: now - ageMs, data } })
+  const records = [
+    wrapped('compaction/end', 1_000, { error: '403 dsh_compaction_refused' }),
+    wrapped('compaction/end', 20 * 60_000, { error: 'outside the window' }),
+    wrapped('llm/retry', 2_000, { retry: 1, delayMs: 2930 }),
+    // llm/retry-started rides 1:1 with llm/retry, and an attempt-error finish
+    // rides with the retry that follows: counting either would multiply one
+    // failure into two and trip the threshold on a single unlucky request
+    // (verified 1:1:1 on the 10-11 sample, session 45e600e1).
+    wrapped('llm/retry-started', 2_000, {}),
+    { type: 'event', event: { type: 'assistant/attempt', time: now - 3_000, data: { stream: [{ chunk: { type: 'finish', reason: { kind: 'error', failure: { message: 'x' } } } }] } } },
+    wrapped('compaction/end', 4_000, {}),
+    wrapped('compaction/start', 5_000, { turn: 1 }),
+    // The host stamps every record, so a missing `time` exists only in tests
+    // and malformed rows; counting it errs toward one extra push per cooldown.
+    { type: 'event', event: { type: 'compaction/end', data: { error: 'x' } } },
+    // Bare (unwrapped) event shape is accepted for convenience.
+    { type: 'llm/retry', time: now - 500, data: {} }
+  ]
+  assert.equal(countRetryFailures(records, now, 10 * 60_000), 4)
+  assert.equal(countRetryFailures([], now, 60_000), 0)
+  assert.equal(countRetryFailures(undefined, now, 60_000), 0)
+})
+
+test('sessionRowHasError: the same fields the phone badge reads, truthy-based', () => {
+  assert.equal(sessionRowHasError({ error: true }), true)
+  assert.equal(sessionRowHasError({ lastError: 'boom' }), true)
+  assert.equal(sessionRowHasError({ status: 'error' }), true)
+  assert.equal(sessionRowHasError({ status: 'ok' }), false)
+  assert.equal(sessionRowHasError({}), false)
+  assert.equal(sessionRowHasError(null), false)
+  assert.equal(sessionRowHasError('nope'), false)
+})
+
+test('bridge poll: a settle on an errored row announces 出错了, not 已完成', async () => {
+  const sent = []
+  let clock = 6_000_000
+  let items = []
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname) =>
+        pathname === '/api/session/list' ? { ok: true, value: { items } } : undefined
+    },
+    bridgeOptions: { ...notifyBridgeOptions(sent), now: () => clock }
+  })
+  try {
+    const tick = async () => {
+      t.bridge._sessionListCache = undefined
+      await t.bridge.pollNotifyRunning()
+    }
+    items = [{ sessionId: 's1', running: true, title: '部署', updatedAt: clock }]
+    await tick()
+    items = [{ sessionId: 's1', running: false, title: '部署', updatedAt: clock - 1_000, lastError: 'boom' }]
+    clock += 30_000
+    await tick()
+    clock += 91_000
+    await tick()
+    assert.equal(sent.length, 1, 'the settle still goes straight out')
+    assert.ok(sent[0].includes(encodeURIComponent('出错了')), `the verdict names the error: ${sent[0]}`)
+    assert.ok(!sent[0].includes(encodeURIComponent('已完成')), 'a failed settle never reads as done')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('bridge storm: one push per storm, silent cooldown, fresh bookkeeping after a settle', async () => {
+  const sent = []
+  let clock = 5_000_000
+  let items = []
+  let pageCalls = 0
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname) => {
+        if (pathname === '/api/session/list') return { ok: true, value: { items } }
+        if (pathname === '/api/session/page') {
+          pageCalls += 1
+          // Times are cut relative to the CURRENT clock: a storm keeps failing
+          // now, and a static stamp would age out of the window mid-test.
+          const records = [30_000, 90_000, 150_000].map((age, index) => ({
+            type: 'event',
+            event: { type: 'compaction/end', seq: 100 + index, time: clock - age, data: { error: '403 refused' } }
+          }))
+          return { ok: true, value: { records, hasMore: false } }
+        }
+        return undefined
+      }
+    },
+    bridgeOptions: { ...notifyBridgeOptions(sent), now: () => clock }
+  })
+  try {
+    const tick = async () => {
+      t.bridge._sessionListCache = undefined
+      await t.bridge.pollNotifyRunning()
+    }
+    const runningRow = () => ({ sessionId: 's1', running: true, title: '编译', updatedAt: clock, projections: { asOfSeq: 100 } })
+    items = [runningRow()]
+    await tick()
+    assert.equal(pageCalls, 0, 'a fresh busy run is not yet suspect')
+
+    clock += 30_000 * 20 // 10 min: the busy run crosses suspectAfterMs
+    await tick()
+    assert.equal(pageCalls, 1, 'the suspect got exactly one probe')
+    assert.equal(sent.length, 1, 'three failures inside the window: one push')
+    assert.ok(sent[0].includes(encodeURIComponent('卡在重试')), sent[0])
+    assert.ok(sent[0].includes(encodeURIComponent('编译')), 'the line still names the session')
+
+    clock += 30_000
+    await tick()
+    assert.equal(pageCalls, 1, 'cooling down: no probe, no second push')
+    assert.equal(sent.length, 1)
+
+    clock += RETRY_STORM_THRESHOLDS.cooldownMs
+    await tick()
+    assert.equal(pageCalls, 2, 'cooldown over: the storm is re-probed')
+    assert.equal(sent.length, 2, 'still storming: one re-reminder, then quiet again')
+
+    // Settle — the storm bookkeeping is wiped, the completion still announces.
+    items = [{ sessionId: 's1', running: false, title: '编译', updatedAt: clock - 1_000 }]
+    clock += 30_000
+    await tick()
+    assert.equal(pageCalls, 2, 'a settled session is not probed')
+    clock += 91_000
+    await tick()
+    assert.equal(sent.length, 3, 'the settle announces itself as usual')
+    assert.ok(sent[2].includes(encodeURIComponent('已完成')), sent[2])
+
+    // A brand-new storm starts from a clean slate: suspect → probe → push.
+    items = [runningRow()]
+    clock += 30_000
+    await tick()
+    clock += 30_000 * 20
+    await tick()
+    assert.equal(pageCalls, 3, 'the fresh storm probes without waiting out the old cooldown')
+    assert.equal(sent.length, 4, 'and it pushes again')
+    assert.ok(sent[3].includes(encodeURIComponent('卡在重试')), sent[3])
+  } finally {
+    await t.stop()
+  }
+})
+
+test('bridge storm: a clean tail never pushes, and an unreadable probe is a skipped round', async () => {
+  const sent = []
+  let clock = 7_000_000
+  let items = []
+  let pageAnswer = { ok: true, value: { records: [], hasMore: false } }
+  let pageCalls = 0
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname) => {
+        if (pathname === '/api/session/list') return { ok: true, value: { items } }
+        if (pathname === '/api/session/page') {
+          pageCalls += 1
+          return pageAnswer
+        }
+        return undefined
+      }
+    },
+    bridgeOptions: { ...notifyBridgeOptions(sent), now: () => clock }
+  })
+  try {
+    const tick = async () => {
+      t.bridge._sessionListCache = undefined
+      await t.bridge.pollNotifyRunning()
+    }
+    // A long honest run: probed, zero failures, no push.
+    items = [{ sessionId: 's1', running: true, title: '长任务', updatedAt: clock, projections: { asOfSeq: 5 } }]
+    await tick()
+    clock += 30_000 * 20
+    await tick()
+    assert.equal(pageCalls, 1, 'a suspect is probed even when innocent')
+    assert.equal(sent.length, 0, 'no failures in the tail: silence')
+    clock += RETRY_STORM_THRESHOLDS.probeEveryMs
+    await tick()
+    assert.equal(pageCalls, 2, 'the innocent suspect is re-probed at the throttle cadence')
+    assert.equal(sent.length, 0)
+
+    // A read that comes back not-ok is a skipped round — never a push, never
+    // a false all-clear (the next throttle round re-reads).
+    pageAnswer = { ok: false, error: { message: 'boom' } }
+    clock += RETRY_STORM_THRESHOLDS.probeEveryMs
+    await tick()
+    assert.equal(pageCalls, 3, 'the probe was attempted')
+    assert.equal(sent.length, 0, 'and its failure was a skip, not a verdict')
+  } finally {
+    await t.stop()
   }
 })

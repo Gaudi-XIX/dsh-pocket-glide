@@ -491,3 +491,42 @@ test('the key leaks to no surface: status, boot, phone page, desktop page', asyn
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// The WeChat push is ONE line (user 2026-10-12: 「消息提示就是只显示一行」): the
+// status leads, the session name follows, the quota tail lands last so banner
+// truncation — which always eats from the tail — takes the least important
+// text first.
+test('notify clawbot: the push is one line — status, name, quota tail, in that order', async () => {
+  const seen = []
+  const fetchImpl = async (url, init) => {
+    seen.push({ url: String(url), init })
+    return { ok: true, status: 200, text: async () => '{"ret":0,"message_id":"7514407535056518664"}' }
+  }
+  let tailCalls = 0
+  const clawbotConfig = { channel: 'clawbot', key: 'bot_token_line', clawbot: { contextToken: 'ctx_line', userId: 'u1' } }
+  assert.equal(
+    await notifySend(clawbotConfig, '部署周报', '已完成', {
+      fetchImpl,
+      quotaTail: () => {
+        tailCalls += 1
+        return '（第 3/10 条）'
+      }
+    }),
+    true
+  )
+  assert.equal(tailCalls, 1, 'the quota tail hook fires exactly once per send')
+  const body = JSON.parse(seen[0].init.body)
+  const text = body.msg.item_list[0].text_item.text
+  assert.equal(text, '已完成｜部署周报（第 3/10 条）')
+  assert.ok(!text.includes('\n'), 'one line — the banner shows exactly this')
+
+  // No quotaTail hook (other call sites): the line just ends at the name, and
+  // no serial number is spent.
+  seen.length = 0
+  assert.equal(
+    await notifySend(clawbotConfig, '部署周报', '待回答', { fetchImpl }),
+    true
+  )
+  const bare = JSON.parse(seen[0].init.body).msg.item_list[0].text_item.text
+  assert.equal(bare, '待回答｜部署周报')
+})
