@@ -312,11 +312,12 @@ test('isSessionUnread: activity after last open, excluding running/blank/focused
   assert.equal(isSessionUnread(row, undefined, null), false, 'a missing ledger entry reads as never opened')
 })
 
-const workspaceSandbox = ({ storage = {}, activeSession = null } = {}) => {
+const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } = {}) => {
   const js = assets.zh.js
   const body = [
     'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'relativeTime',
     'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
+    'readLastMessageMap', 'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf',
     // The head notices (0.4.31): wsFlagsOf/wsFlagHtml are top-level on the page, so
     // the sandbox has to carry them exactly like the renderer it extracts.
     'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'sessionModelLabel',
@@ -332,9 +333,11 @@ const workspaceSandbox = ({ storage = {}, activeSession = null } = {}) => {
     const LIST_ROWS_MAX=${25}
     const WS_FLAGS_MAX=${2}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200
+    const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${body}
+    let lastMessageAt=readLastMessageMap()
     return {
       renderWorkspaces,
       markup(){ renderWorkspaces(); return container.innerHTML },
@@ -353,7 +356,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null } = {}) => {
     activeSession,
     host,
     {
-      getItem: (key) => (key in storage ? storage[key] : null),
+      getItem: (key) => (key in storage ? storage[key] : key === 'dsh-pocket-last-msg-at' ? JSON.stringify(lastMsg) : null),
       setItem: (key, value) => { storage[key] = String(value) },
     },
   )

@@ -797,7 +797,19 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 // 同日并线：本工作树里另有「+」改草稿那条线在同时改 pages.js/bridge.js，用户裁定两线合成
 //   一个版本一起发，预算须容得下合成后的出货页（混合树实测 zh 273 651）⇒ 取 275 000
 //   （对合并态余 1 349 B）。提额两次都只认上述实测，不按估算填数。
-const ASSET_BUDGET_BYTES = 275_000
+// 10-12 落地页规则（工作区里 >2 个会话在等 ⇒ 停在主页不自动进会话）：页面侧多两个函数
+//   （needsAttention/landingBusy，复用工作区头的徽标判据）＋一条 bootAttention 与常量注入。
+//   混合树实测 zh 275 113（css 44 600 + js 230 513）⇒ 取 277 000（余 1 887 B）。
+// 10-12 会话行时间改为「该会话最后一条消息的时间」（用户原话见 lib/pages.js LAST_MESSAGE_KEY
+//   上方）：+3 214 B（zh/en 同幅，实测：抹掉本线的注释块＋三处改动后 zh 279 556 → 282 770）。
+//   三笔花销：① 台账本体 LAST_MESSAGE_KEY/readLastMessageMap/pruneLastMessageMap/
+//   noteSessionMessageAt/lastMessageAtOf/sortAtOf/lastMessageTimeOf 七个函数（与
+//   dsh-pocket-opened-at 已读台账同型，try/catch 包 localStorage）；② paintMessages 里一行记账
+//   （typeof 守卫，是该文件的既有写法）；③ 排序键由 updatedAt 换成 sortAtOf —— 少了它就会出现
+//   「第一行显示的时间比第二行旧」。注释块占其中约 1.5 KB，按本文件既有规矩保留（不给下一位读者
+//   留一个没有理由的常量）。本机实测 HEAD 261a0d2 干净页 zh 271 625，本工作树混合态
+//   zh 282 770 / en 282 682（差额是他线在途改动，不是本笔）⇒ 取 284 000（余 1 230 B / 1 318 B）。
+const ASSET_BUDGET_BYTES = 284_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

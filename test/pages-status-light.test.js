@@ -169,15 +169,25 @@ test('#4c reconcileProvisionalSession replaces in place and dedupes a known real
   assert.deepEqual(reconcileProvisionalSession(['pending:1'], 'pending:1', 'real'), ['real'])
 })
 
-test('#4c createSessionIn consumes the two pure organs, inlined into the page script', () => {
+// 0.4.31: tapping "+" no longer creates a Host session. It used to, so a tap
+// followed by no message and a walk back left an untitled row that would not
+// go away. The two pure organs above stay inlined (the ghost-row fallback still
+// reads them) but the tap must not consume them: ensureSession is the page's
+// only session.create caller.
+test('draft creation: "+" mints nothing; ensureSession is the only session.create caller', () => {
   const js = mobilePageAssets({ locale: 'zh' }).js
-  assert.match(js, /function spliceProvisionalSession\(sessionIds, localId\)/, 'the organ must be inlined verbatim')
-  assert.match(js, /function reconcileProvisionalSession\(sessionIds, localId, realId\)/)
-  const create = extractFunction(js, 'createSessionIn')
-  assert.match(create, /spliceProvisionalSession\(/)
-  assert.match(create, /reconcileProvisionalSession\(/)
-  assert.match(create, /provisional:true/)
-  assert.match(create, /pending:/, 'the local provisional id carries the pending: prefix')
+  const draft = extractFunction(js, 'startDraftChat')
+  assert.doesNotMatch(draft, /session\.create/, 'opening a draft must not reach the Host')
+  assert.match(draft, /draftWorkspaceId=workspaceId/, 'the draft remembers its workspace')
+  const ensure = extractFunction(js, 'ensureSession')
+  assert.match(ensure, /rpc\('session\.create'/, 'the session is minted on first real use')
+  assert.match(ensure, /if\(activeSession\)return activeSession/, 'a materialized draft never re-creates')
+  assert.match(js, /startDraftChat\(wsId\)/, 'the + button is wired to the draft, not to a create')
+  // The four actions that mean "this draft is in use" must materialize first.
+  assert.match(extractFunction(js, 'send'), /if\(!activeSession&&!\(await ensureSession\(\)\)\)return/)
+  assert.match(extractFunction(js, 'uploadGenericFile'), /await ensureSession\(\)/)
+  assert.match(extractFunction(js, 'retryDraft'), /await ensureSession\(\)/)
+  assert.match(extractFunction(js, 'openSessionSettings'), /const sessionId=await ensureSession\(\)/)
 })
 
 test('#4c renderWorkspaces paints a provisional row with the spin state and a title fallback', () => {

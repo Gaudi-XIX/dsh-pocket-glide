@@ -105,3 +105,81 @@ test('anchor restore: 锚点行已对齐时不写', () => {
   assert.equal(box.scrollTop, 100)
   assert.deepEqual(marks, [])
 })
+
+// ─── 3) settleOlderShift ───────────────────────────────────────────────
+//
+// 补页（拉到顶边加载更早的历史）时视口会「跳几下」。根因是旧行带
+// content-visibility:auto（.msg-hist，contain-intrinsic-size 每行按 120px 估算）：
+// fetchOlderPage 拼完当场量到的 scrollHeight 是估的，对位按估值算；继续上滑时行被真渲染、
+// 高度再变一次，视口就跟着动。所以拼完那一次对位不够，要在估值变真值的几个时点各重量一次。
+//
+// 与上面那条（restoreTranscriptAnchor）的分工：那条守的是「重渲中间态行数不足，别照错行写」，
+// 这条守的是「行数齐了但高度还是估的，按当下真实布局重瞄」。两者共用 transcriptAnchor。
+
+const SETTLE = slice(js, 'function settleOlderShift(box,anchor,tries){', '// 键盘收/放')
+
+// rows 可以是数组，也可以是函数（每次查询返回不同行高，模拟「估高→真高」）。
+// $('messages') 默认返回 box 本身：settleOlderShift 第一道守卫就是 live!==box（会话已切走就不写）。
+// 传 opts.realTimers=true 时用真 setTimeout，专门测「重试链自己会再量一次」那条路径。
+function buildSettle(rowsOrFn, boxTop = 0, opts = {}) {
+  const marks = []
+  const box = {
+    scrollTop: 100,
+    isConnected: true,
+    querySelectorAll() { return typeof rowsOrFn === 'function' ? rowsOrFn() : rowsOrFn },
+    getBoundingClientRect() { return { top: boxTop } },
+  }
+  const timers = []
+  const schedule = opts.realTimers
+    ? (fn, ms) => { timers.push({ fn, ms }); return timers.length }
+    : () => {}
+  const make = new Function(
+    '$', 'probeMark', 'setTimeout', 'readTranscriptAnchor',
+    `let transcriptAnchor=null;` +
+    `${SETTLE};return {settleOlderShift,peek:()=>transcriptAnchor}`
+  )
+  const api = make(
+    () => (opts.staleBox ? { isConnected: true } : box),
+    (tag) => marks.push(tag),
+    schedule, // 传 tries=1：跑当下这一次、不进重试链（settleOlderShift 的守卫是 tries<=0 直接返回）
+    (b) => ({ index: 0, offset: b.scrollTop })
+  )
+  return { ...api, box, marks, timers }
+}
+
+test('older settle: 行数不足时不动（和 restore 同一条纪律）', () => {
+  const { settleOlderShift, box, marks } = buildSettle([row(10), row(50)])
+  settleOlderShift(box, { index: 5, offset: 50 }, 1)
+  assert.equal(box.scrollTop, 100)
+  assert.deepEqual(marks, [])
+})
+
+test('older settle: 补进来的旧行把锚点顶下去时，按真实布局对回来', () => {
+  const { settleOlderShift, box, marks } = buildSettle([row(10), row(230)])
+  settleOlderShift(box, { index: 1, offset: 50 }, 1) // delta = 230-0-50 = 180
+  assert.equal(box.scrollTop, 280)
+  assert.deepEqual(marks, ['ol'])
+})
+
+test('older settle: 估高转真高只差几像素时不写（抖动是像素级）', () => {
+  const { settleOlderShift, box, marks } = buildSettle([row(10), row(52)])
+  settleOlderShift(box, { index: 1, offset: 50 }, 1) // delta = 2，未过 2px 门槛
+  assert.equal(box.scrollTop, 100)
+  assert.deepEqual(marks, [])
+})
+
+test('older settle: 写完立刻用当下布局重读锚点，重试链跟住真实高度', () => {
+  let heights = [row(10), row(230)]
+  const { settleOlderShift, peek, box } = buildSettle(() => heights)
+  settleOlderShift(box, { index: 1, offset: 50 }, 1)
+  assert.equal(box.scrollTop, 280)
+  // readTranscriptAnchor 的桩返回 offset = 当下的 scrollTop ⇒ 锚点被重新读了。
+  assert.deepEqual(peek(), { index: 0, offset: 280 })
+})
+
+test('older settle: 会话已切走（box 不是当前 #messages）时一个字都不写', () => {
+  const { settleOlderShift, box, marks } = buildSettle([row(10), row(230)], 0, { staleBox: true })
+  settleOlderShift(box, { index: 1, offset: 50 }, 1)
+  assert.equal(box.scrollTop, 100)
+  assert.deepEqual(marks, [])
+})

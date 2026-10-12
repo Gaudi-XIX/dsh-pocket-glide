@@ -71,6 +71,9 @@ const LIST_ROWS_MAX = Number(js.match(/LIST_ROWS_MAX=(\d+)/)[1]);
 // The workspace head builds its notices through wsFlagsOf/wsFlagHtml (0.4.31), which
 // read this same ceiling out of page scope — the sandbox has to declare it too.
 const WS_FLAGS_MAX = Number(js.match(/WS_FLAGS_MAX=(\d+)/)[1]);
+// pickFocusSession now asks landingBusy first (the crowded-workspace rule), and
+// landingBusy reads the threshold and the bridge's count out of page scope.
+const LANDING_ATTENTION_MAX = Number(js.match(/LANDING_ATTENTION_MAX=(\d+)/)[1]);
 
 // loadHistory's catch reads the errorCode off whatever its rpc rejected with, so the
 // sandbox below hands it a hand-written `rpc` stub that throws the Error this file
@@ -202,6 +205,8 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     const BLANK_ROW_VISIBLE_MS=${BLANK_ROW_VISIBLE_MS}
     const LIST_ROWS_MAX=${LIST_ROWS_MAX}
     const WS_FLAGS_MAX=${WS_FLAGS_MAX}
+    const LANDING_ATTENTION_MAX=${LANDING_ATTENTION_MAX}
+    let bootAttention=0
     // The head notices need the focused-session id (a focused row never reads as
     // unread); these sandboxes render with nothing open.
     let activeSession=null
@@ -210,6 +215,12 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'fieldText')}
     ${extractFunction(js, 'sessionModelLabel')}
     ${extractFunction(js, 'isSessionUnread')}
+    ${extractFunction(js, 'readLastMessageMap')}
+    ${extractFunction(js, 'lastMessageAtOf')}
+    ${extractFunction(js, 'lastMessageTimeOf')}
+    ${extractFunction(js, 'sortAtOf')}
+    const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
+    let lastMessageAt=readLastMessageMap()
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'visibleSessions')}
@@ -225,6 +236,8 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'wsFlagsOf')}
     ${extractFunction(js, 'wsFlagHtml')}
     ${extractFunction(js, 'renderWorkspaces')}
+    ${extractFunction(js, 'needsAttention')}
+    ${extractFunction(js, 'landingBusy')}
     ${extractFunction(js, 'pickFocusSession')}
     return {
       renderWorkspaces,

@@ -365,10 +365,10 @@ test('one back action always leaves the chat view', () => {
   assert.ok(js.includes("history.state?.view==='chat'&&history.length>1"), 'a single-entry stack does not press a dead back button')
   assert.ok(js.includes('await openSession(target.sessionId,titleFor(target),false,true)'), 'the resume jump pushes its chat entry: the current entry while the list shows IS the synthetic sessions anchor, and replacing it left back/swipe exiting the app (live report 2026-10-09)')
   assert.ok(
-    js.includes('await openSession(nextFocus.sessionId,titleFor(nextFocus),false,false)'),
-    'the boot reconcile jump does not push history',
+    !js.includes('openSession(nextFocus.sessionId'),
+    'the boot reconcile opens nothing at all: a reconcile jump inside a chat the reader never chose is what put them one entry away from the exit (live report 2026-10-12, back button left the app)',
   )
-  assert.ok(js.includes("openSession(created.sessionId).catch((e)=>showError('listError',e))"), 'creating a session stays user-initiated, so it still pushes history (and a failed open shows the error)')
+  assert.ok(js.includes('await ensureSession()'), 'creating a session stays user-initiated: the draft mints it at the first real action, so that open still pushes history')
   assert.ok(js.includes('void openSession(btn.dataset.id)'), 'opening a session row stays user-initiated, so it still pushes history')
 })
 
@@ -817,6 +817,9 @@ function buildPageFetchSandbox(opts) {
     let transcriptAnchor=null,skipAnchorOnce=false
     function readTranscriptAnchor(){return null}
     function restoreTranscriptAnchor(){return false}
+    // the pull re-aims the anchor once the page lands (older rows swap their 120px
+    // estimate for real height); the sandbox paints nothing, so it is a no-op
+    function settleOlderShift(){}
     async function rpc(method,payload){rpcCalls.push({method,payload});return {events:[],hasMore:false}}
     ${source}
     return { run: fetchOlderPage, calls, rpcCalls, state: () => ({ olderBusy, olderHasMore, olderExhausted }) }

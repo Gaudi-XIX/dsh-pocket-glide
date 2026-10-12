@@ -128,7 +128,10 @@ test('T1 the shared .error class is untouched (listError keeps document flow)', 
 test('T1 showError/clearTransientError chatError call sites unchanged (zero JS drift)', () => {
   const shown = (js.match(/showError\('chatError'/g) || []).length
   const cleared = (js.match(/clearTransientError\('chatError'/g) || []).length
-  assert.equal(shown, 12, 'showError chatError call count must equal the baseline')
+  // 12 baseline + ensureSession()'s create-failure report (2026-10-12 draft new-chat):
+  // a "+" draft whose session cannot be minted must say so on the chat error line —
+  // the list banner it used to hit is no longer where the tap happens. Not drift.
+  assert.equal(shown, 13, 'showError chatError call count: 12 baseline + draft materialize failure')
   // 3 baseline sites + the banner dismiss (2026-10-07-fix-pocket-banner-dismiss-and-ttl):
   // the tap-the-right-end exit must leave through the same guard as the frame exit, so it
   // is a fourth call site by construction, not a drift.
@@ -469,11 +472,13 @@ test('T6 the permission row description speaks plain language', () => {
 test('T6 the named-tunnel panel hints where ingress must point', () => {
   const zhHtml = renderDesktopPairingPage({ locale: 'zh', pairingUrl: 'http://x', qrSvg: '' })
   const enHtml = renderDesktopPairingPage({ locale: 'en', pairingUrl: 'http://x', qrSvg: '' })
-  // The tunnel panel is the last block of #deviceExtras, so the next thing the
-  // page emits after it is the inline <script>. Slicing on a sibling div used to
-  // work while the panels sat inside .pairing-content; they now follow it.
+  // 2026-10-12: the tunnel panel was lifted out of #deviceExtras (nested there, its
+  // .show asked for the tunnel view while its parent only ever opened in the devices
+  // view, so it was unreachable in every state). It is now a top-level block, and
+  // #deviceExtras is the next sibling — slice on that instead of on <script>, or the
+  // slice would swallow the notify/diag panels and grade the wrong block.
   const panelStart = zhHtml.indexOf('<div id="tunnelConfigPanel"')
-  const panelEnd = zhHtml.indexOf('<script', panelStart)
+  const panelEnd = zhHtml.indexOf('<div id="deviceExtras"', panelStart)
   assert.notEqual(panelStart, -1)
   assert.notEqual(panelEnd, -1)
   const panel = zhHtml.slice(panelStart, panelEnd)
@@ -489,7 +494,8 @@ test('T6 the named-tunnel panel hints where ingress must point', () => {
   assert.ok(hintAt < saveAt, 'and before the save actions')
   assert.match(panel, /<a href="https:\/\/one\.dash\.cloudflare\.com\/"[^>]*>Cloudflare Zero Trust<\/a>/, 'the link is an anchor, not escaped text')
   assert.match(panel, /127\.0\.0\.1/, 'the loopback target is still named')
-  const enPanel = enHtml.slice(enHtml.indexOf('<div id="tunnelConfigPanel"'), enHtml.indexOf('<script', enHtml.indexOf('<div id="tunnelConfigPanel"')))
+  const enStart = enHtml.indexOf('<div id="tunnelConfigPanel"')
+  const enPanel = enHtml.slice(enStart, enHtml.indexOf('<div id="deviceExtras"', enStart))
   assert.match(enPanel, /<a href="https:\/\/one\.dash\.cloudflare\.com\/"[^>]*>Cloudflare Zero Trust<\/a>/, 'en hint links too')
   assert.doesNotMatch(zhHtml, /127\.0\.0\.1:\d{2,5}</, 'no hardcoded bridge port in the rendered page')
 })

@@ -83,16 +83,30 @@ const openableFocus = (() => {
 })()
 
 // Drive the real reconcileBoot over a stub boot payload and record every open.
+// warmLikelySession is stubbed at its own seam and fillListFromServer is a no-op:
+// since 2026-10-12 the landing opens nothing at all, so the only way this sandbox
+// can observe a chat being entered is if the guard let one through — the positive
+// control below therefore watches the prewarm instead, which runs on the same
+// candidate. The prewarm is called with no argument, so the stub reads the page's
+// own pendingFocusId: that is what makes the control say "the candidate reached
+// warmLikelySession" rather than merely "some function was called".
 function runReconcileBoot({ fresh, activeSession = null, previousFocus = null }) {
   const opened = []
+  const warmed = []
   const fetchCalls = []
   const scope = [
     'var activeSession = opts.activeSession;',
     'var embeddedFocus = null;',
-    'var provisionalSession = true;',
+    'var draftWorkspaceId = null;var provisionalSession = true;',
+    'var bootListPartial = false;',
+    'var pendingFocusId = null;',
+    'function warmLikelySession(){ __warmed.push(pendingFocusId); }',
+    'function setPendingFocusId(value){ pendingFocusId = value; }',
+    'var __warmed = [];',
     extractFunction(js, 'openableFocus'),
     extractFunction(js, 'reconcileBoot'),
-    'return async function(){ await reconcileBoot(); return provisionalSession; }',
+    'const __run = async function(){ await reconcileBoot(); return { provisionalSession: provisionalSession, warmed: __warmed }; };',
+    'return { run: __run, setPendingFocusId: setPendingFocusId };',
   ].join('\n')
   const build = new Function(
     'opts',
@@ -104,9 +118,13 @@ function runReconcileBoot({ fresh, activeSession = null, previousFocus = null })
     'paintInstantSession',
     'titleFor',
     'openSession',
+    'warmLikelySession',
+    'setPendingFocusId',
+    'fillListFromServer',
+    'document',
     scope,
   )
-  const run = build(
+  const built = build(
     { activeSession },
     async (url, init) => {
       fetchCalls.push({ url, init })
@@ -122,8 +140,17 @@ function runReconcileBoot({ fresh, activeSession = null, previousFocus = null })
     async (sessionId) => {
       opened.push(sessionId)
     },
+    (sessionId) => {
+      warmed.push(sessionId)
+    },
+    (value) => {
+      // the init names its candidate here, and the reconcile prewarm reads it back
+      built.setPendingFocusId(value)
+    },
+    async () => {},
+    { hidden: false },
   )
-  return { run, opened, fetchCalls }
+  return { run: built.run, opened, warmed, fetchCalls, setPendingFocusId: (value) => built.setPendingFocusId(value) }
 }
 
 test('AC-1 the bridge picker no longer offers a subagent row as the boot focus', async () => {
@@ -247,10 +274,17 @@ test('AC-6 the guard judges the origin, never the host sentence or the bridge er
   )
 })
 
-test('AC-7 the boot redirect opens a subagent focus no more, and still opens a look-alike one', async () => {
+test('AC-7 the boot redirect opens a subagent focus no more, and still prewarms a look-alike one', async () => {
   // Both directions in one case on purpose: reconcileBoot swallows every throw,
   // so a stub typo or a missing name would make the negative control pass for
   // the wrong reason. The positive control is what proves the sandbox ran.
+  //
+  // The landing stopped opening chats entirely on 2026-10-12 (a cold open that
+  // opened one replaced the list's own history entry, so the back button left the
+  // app — live report "点返回直接退出"), which is why this case now watches the
+  // prewarm rather than openSession. The guard it protects is unchanged: the
+  // candidate is still taken through openableFocus, and a subagent row still
+  // reaches neither the stream nor the history fetch.
   const subagent = {
     ws: {},
     sess: { items: [{ sessionId: 'child', origin: 'subagent' }] },
@@ -262,13 +296,17 @@ test('AC-7 the boot redirect opens a subagent focus no more, and still opens a l
     focus: { sessionId: 'child', history: { events: [] } },
   }
 
-  const blocked = runReconcileBoot({ fresh: subagent, activeSession: 'parent', previousFocus: { sessionId: 'parent' } })
-  await blocked.run()
+  const blocked = runReconcileBoot({ fresh: subagent, previousFocus: { sessionId: 'parent' } })
+  blocked.setPendingFocusId('child')
+  const blockedState = await blocked.run()
   assert.deepEqual(blocked.opened, [], 'a subagent focus must not reach openSession')
+  assert.deepEqual(blockedState.warmed, [], 'a subagent focus must not be prewarmed either')
 
-  const opened = runReconcileBoot({ fresh: lookAlike, activeSession: 'parent', previousFocus: { sessionId: 'parent' } })
-  await opened.run()
-  assert.deepEqual(opened.opened, ['child'], 'the same shape without the verdict still opens')
+  const opened = runReconcileBoot({ fresh: lookAlike, previousFocus: { sessionId: 'parent' } })
+  opened.setPendingFocusId('child')
+  const openedState = await opened.run()
+  assert.deepEqual(opened.opened, [], 'the landing no longer opens a chat on its own')
+  assert.deepEqual(openedState.warmed, ['child'], 'the same shape without the verdict is still taken as the candidate')
 })
 
 test('AC-8 the guard leaves the existing reopen gate alone', async () => {
@@ -317,8 +355,8 @@ test('AC-11 the list projection and its landing points are untouched', () => {
     assert.ok(extractFunction(js, name).includes(needle), `${name} must still project its answer`)
   }
   assert.ok(
-    extractFunction(js, 'createSessionIn').includes("if(created.origin!=='subagent'){const summary="),
-    'the local summary is still origin-guarded (optimistic creation converts or drops the provisional row)',
+    extractFunction(js, 'ensureSession').includes("if(created.origin!=='subagent'&&!sessionSummaries.some("),
+    'a materialized draft leaves an origin-guarded summary (a subagent one leaves none)',
   )
   assert.ok(
     !/sessionSummaries\s*=\s*(?:value|sessions|sessInput)\.items/.test(js),

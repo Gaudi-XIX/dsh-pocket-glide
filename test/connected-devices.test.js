@@ -168,10 +168,11 @@ test('the mode bar carries the third key: a mode-devices handle that stays enabl
 })
 
 // 2026-10-10: the task-notification panel used to be emitted INSIDE
-// `.pairing-content`, and `.phone-connected .pairing-content{display:none}`
-// hides that container outright — so on a paired desktop (the everyday state)
-// the notification block was in the DOM but never visible. The panel has to be
-// a sibling of `.pairing-content`, not a descendant.
+// `.pairing-content`, which the connected state hid outright — so on a paired
+// desktop (the everyday state) the notification block was in the DOM but never
+// visible. That hiding rule is gone (2026-10-12: a live phone may not lock the
+// page), but the sibling requirement stands on its own: the devices view hides
+// `.pairing-content` as a whole, so anything trapped in it still disappears with it.
 function ancestorChainOf(html, id) {
   const at = html.indexOf(`id="${id}"`)
   assert.notEqual(at, -1, `#${id} is rendered`)

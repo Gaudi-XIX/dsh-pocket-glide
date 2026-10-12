@@ -305,6 +305,19 @@ test('the remove affordance is the same 13px stroke icon family as steer/edit', 
   assert.ok(js.includes('+esc(L.queueRemove)+\'">\'+REMOVE_SVG+\'</button>'), 'the remove button renders REMOVE_SVG')
 })
 
+test('the goal bar clear affordance is the same 13px stroke icon family as pause/edit', () => {
+  const { js } = mobilePageAssets({ locale: 'zh' })
+  // Same defect as the queue row's remove button, one surface over: the goal
+  // bar's clear verb shipped as a bare text × while pause/resume/edit beside it
+  // were 13×13 stroke SVGs. Measured at 390×844 the text ×'s ink box was 19px
+  // tall and its centre sat 4.4px below the pause icon's (ink centre 74.5 vs
+  // 70.5); after unifying on the SVG the spread is 0.41px. Red is-danger stays
+  // as the destructive marker — only the glyph unifies.
+  assert.ok(js.includes('GOAL_CLEAR_SVG=\'<svg width="13" height="13"'), 'clear ships as a 13×13 stroke SVG like its siblings')
+  assert.ok(!js.includes('+esc(L.goalClear)+\'"\'+(busy?\' disabled\':\'\')+\'>×</button>'), 'the bare × glyph is gone from the clear button')
+  assert.ok(js.includes('+esc(L.goalClear)+\'"\'+(busy?\' disabled\':\'\')+\'>\'+GOAL_CLEAR_SVG+\'</button>'), 'the clear button renders GOAL_CLEAR_SVG')
+})
+
 test('a refused action toasts the failure and clears the busy flag', async () => {
   const box = buildQueueActionSandbox(async (method) => {
     if (method === 'session.updateQueue') throw new Error('queued item is no longer pending');

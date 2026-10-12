@@ -54,12 +54,16 @@ const ago = (minutes) => Date.now() - Math.round(minutes * MINUTE)
 // the real renderer plus every page global it reads, driven by synthetic rows.
 // `L` and UNREAD_OPEN_KEY are the page's OWN copies, so a renamed notice or a moved
 // ledger key shows up here as a text mismatch instead of a silent pass.
-const listSandbox = ({ summaries = [], ledger = {}, activeSession = null } = {}) => {
+const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMsg = {} } = {}) => {
   const host = { innerHTML: '' }
+  const writes = []
+  const storageReads = { n: 0 }
   const make = new Function(
-    'workspaces', 'sessionSummaries', 'expandedWsIds', 'revealedLists', 'activeSession', 'container', 'localStorage', `
+    'workspaces', 'sessionSummaries', 'expandedWsIds', 'revealedLists', 'activeSession', 'container', 'localStorage', 'writes', 'storageReads', `
     const L=${JSON.stringify(L)}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at'
+    const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
+    const LAST_MESSAGE_MAX=${Number(js.match(/LAST_MESSAGE_MAX=(\d+)/)[1])}
     const BLANK_ROW_VISIBLE_MS=${24 * 60 * 60 * 1000}
     const LIST_ROWS_MAX=${25}
     const WS_FLAGS_MAX=${Number(js.match(/WS_FLAGS_MAX=(\d+)/)[1])}
@@ -69,9 +73,16 @@ const listSandbox = ({ summaries = [], ledger = {}, activeSession = null } = {})
       'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'relativeTime',
       'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
       'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'sessionModelLabel',
+      'readLastMessageMap', 'pruneLastMessageMap', 'noteSessionMessageAt',
+      'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf',
       'normalizeSelection', 'fieldText',
     ].map((name) => extractFunction(js, name)).join('\n')}
-    return { renderWorkspaces, markup(){ renderWorkspaces(); return container.innerHTML } }
+    let lastMessageAt=${JSON.stringify(lastMsg)}
+    let openedLedgerRaw=${JSON.stringify(JSON.stringify(ledger))}
+    localStorage={}
+    localStorage.getItem=(key)=>{storageReads.n+=1;return key===LAST_MESSAGE_KEY?JSON.stringify(lastMsg):openedLedgerRaw}
+    localStorage.setItem=(key,value)=>{writes.push([key,value])}
+    return { renderWorkspaces, lastMessageTimeOf, sortAtOf, noteSessionMessageAt, lastMessageAtOf, writes, storageReads:()=>storageReads.n, clockWrites:()=>writes.filter(([k])=>k===LAST_MESSAGE_KEY).length, markup(){ renderWorkspaces(); return container.innerHTML } }
   `)
   return make(
     [{ workspaceId: 'w1', title: 'DSH', sessionIds: summaries.map((row) => row.sessionId) }],
@@ -80,11 +91,15 @@ const listSandbox = ({ summaries = [], ledger = {}, activeSession = null } = {})
     new Set(),
     activeSession,
     host,
-    { getItem: () => JSON.stringify(ledger), setItem: () => {} },
-  ).markup()
+    {},
+    writes,
+    storageReads,
+  )
 }
-
 const row = (over) => ({ blank: false, updatedAt: ago(5), ...over })
+// Every existing case reads the markup only; the clock-semantics cases below also
+// reach into the runtime (to drive the real sortAtOf / lastMessageTimeOf).
+const listSandbox = (over) => listRuntime(over).markup()
 // Head notice text in the order it is painted — the badges render left to right.
 const headFlags = (markup) => [...markup.matchAll(/<span class="ws-status is-\w+">([^<]*)<\/span>/g)].map((m) => m[1])
 const wsTime = (markup) => (markup.match(/<span class="ws-last-time">([^<]*)<\/span>/) || [null, null])[1]
@@ -195,4 +210,70 @@ test('the shipped page carries the notice copy in both locales', () => {
       assert.ok(typeof table[name] === 'string' && table[name], `${locale}: L.${name} must exist`)
     }
   }
+})
+
+// ------------------------------------------------- 3. the clock is the last message
+//
+// User intent (verbatim, 2026-10-12): 「现在对话里的每一条消息上都有时间了。在工作区里，请直接
+// 读取对话下方显示的最后一个消息的时间，用作工作区里面会话显示的那个时间」. The host row owns
+// no message time — it only has updatedAt, which also moves on tool traffic, todos and
+// projections, and freezes the moment a turn's last event lands. So the phone stamps what
+// it painted and falls back to updatedAt for a session it has never opened.
+
+const idsInOrder = (markup) => [...markup.matchAll(/data-id="([^"]+)"/g)].map((m) => m[1])
+
+test('a row whose last message is newer outranks one whose host clock is newer', () => {
+  // The failure this guards: stamping last-message clocks while still sorting on
+  // updatedAt puts a visibly older row on top of the list.
+  const markup = listSandbox({
+    summaries: [
+      row({ sessionId: 'churn', updatedAt: ago(1) }), // host clock new: tool traffic, no message since
+      row({ sessionId: 'said', updatedAt: ago(6) }), // host clock old, but it just said something
+    ],
+    lastMsg: { churn: ago(30), said: ago(2) },
+  })
+  assert.deepEqual(idsInOrder(markup), ['said', 'churn'], 'the row that spoke last leads')
+  assert.equal(wsTime(markup), '2' + L.minute, 'and the head clock is that message, not the row that churned')
+})
+
+test('a session this phone never opened still shows its host clock', () => {
+  const markup = listSandbox({ summaries: [row({ sessionId: 'unopened', updatedAt: ago(4) })] })
+  assert.equal(wsTime(markup), '4' + L.minute, 'no ledger entry means updatedAt, never a blank')
+})
+
+test('which bubble the row inherits: the last one that finished', () => {
+  const { lastMessageTimeOf } = listRuntime()
+  const settled = ago(3)
+  assert.equal(lastMessageTimeOf([{ messageTime: settled }]), settled, 'one finished bubble is the row clock')
+  assert.equal(
+    lastMessageTimeOf([{ messageTime: settled }, { messageTime: ago(1), streaming: true }]),
+    settled,
+    'a still-streaming tail has no settled clock of its own — the row must not inherit it',
+  )
+  assert.equal(lastMessageTimeOf([{ messageTime: ago(9) }, { messageTime: settled }]), settled, 'the last bubble wins')
+  assert.equal(lastMessageTimeOf([]), 0, 'nothing painted means no stamp at all')
+  assert.equal(lastMessageTimeOf([{ messageTime: Number.MAX_SAFE_INTEGER + 10 }]), 0, 'a junk clock is refused, not rendered')
+})
+
+test('the ledger only moves forward, and one session cannot evict another', () => {
+  // noteSessionMessageAt is monotonic: history arrives oldest-first and the tail
+  // streams, so a re-paint that hands it an older clock must not roll the row's
+  // stamp backwards. It writes through to localStorage under the phone's own key
+  // (the map is rebuilt from storage on the next open).
+  const rt = listRuntime({ lastMsg: { a: ago(3) } })
+  const first = rt.clockWrites()
+  const readsBefore = rt.storageReads()
+  rt.noteSessionMessageAt('a', ago(9))
+  assert.equal(rt.clockWrites(), first, 'an older clock is refused — no write')
+  assert.equal(rt.storageReads(), readsBefore, 'and it does not even re-read the ledger to refuse it')
+  assert.equal(rt.lastMessageAtOf({ sessionId: 'a' }), rt.lastMessageAtOf({ sessionId: 'a' }), 'and the stamp still reads')
+  rt.noteSessionMessageAt('a', ago(1))
+  assert.equal(rt.clockWrites(), first + 1, 'a newer clock is written once')
+  const [key, payload] = rt.writes.filter(([k]) => k === 'dsh-pocket-last-msg-at').pop()
+  assert.equal(key, 'dsh-pocket-last-msg-at', 'under the phone’s own key, not the unread ledger’s')
+  assert.ok(JSON.parse(payload).a > 0, 'and it carries the clock it just accepted')
+  rt.noteSessionMessageAt('', ago(1))
+  rt.noteSessionMessageAt(null, ago(1))
+  rt.noteSessionMessageAt('a', 0)
+  assert.equal(rt.clockWrites(), first + 1, 'no session id or no clock writes nothing at all')
 })

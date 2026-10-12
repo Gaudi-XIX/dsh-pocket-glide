@@ -193,6 +193,9 @@ test('AC-A6 the head pull really goes out with no beforeSeq', async () => {
     let transcriptAnchor=null,skipAnchorOnce=false
     function readTranscriptAnchor(){return null}
     function restoreTranscriptAnchor(){return false}
+    // the pull re-aims the anchor once the page lands (older rows swap their 120px
+    // estimate for real height); this sandbox paints nothing, so it is a no-op
+    function settleOlderShift(){}
     async function rpc(method,payload){calls.push({method,payload});return {events:[],hasMore:false}}
     ${source}
     return { run: fetchOlderPage, calls, state: () => ({ olderHasMore, olderExhausted }) }
