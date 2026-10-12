@@ -58,7 +58,7 @@ function renderSandbox(locale) {
   const names = [
     'toolActivityCategory', 'diffLineSplit', 'toolSummaryLine', 'clusterToolBlocks', 'stepTitleFor',
     'renderBlock', 'toolClusterState', 'toolArgsOf', 'diffRowsHtml', 'renderToolDiff',
-    'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'pretty',
+    'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'stableLiveTitle', 'pretty',
   ]
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
@@ -72,9 +72,10 @@ function renderSandbox(locale) {
      function activityChevron(){return '<c></c>'}
      function reasoningSummary(){return ''}
      const turnOpenState=new Map()
+     const liveTitle={session:null,text:'',desired:'',shownAt:0,timer:null}
      const transcriptView='verbose'
      const pendingQuestion=null
-     return { renderBlock, renderToolCard, renderTurnProcess, clusterToolBlocks, toolActivityCategory, diffLineSplit, toolSummaryLine }`,
+     return { renderBlock, renderToolCard, renderTurnProcess, clusterToolBlocks, toolActivityCategory, diffLineSplit, toolSummaryLine, stableLiveTitle, liveTitle }`,
   )(labels(locale), STEP_TABLE(locale), 's1')
 }
 
@@ -431,17 +432,63 @@ test('merged edit clusters fold each row into its own diff', () => {
   assert.ok(html.includes('diff-line-del'), 'and carries its diff')
 })
 
-test('a live turn narrates the last cluster in the in-progress tense', () => {
+test('a live turn folds into the same single container and narrates the running verb', () => {
   const sandbox = renderSandbox('zh')
   const html = sandbox.renderTurnProcess({
     turnKey: '9',
     streaming: true,
     blocks: [tool('read', 'done', { file_path: '/w/a.ts' }), tool('bash', 'running', { command: 'npm test' })],
   })
-  assert.ok(html.includes('turn-process-live'), 'the live container shape is unchanged')
-  assert.ok(html.includes('已读取文件'), 'the settled call speaks past tense even mid-turn')
-  assert.ok(html.includes('正在运行命令'), 'the running call speaks the in-progress verb')
-  assert.ok(!html.includes('已调用'), 'no past tense leaks onto the running call')
+  // 0.4.40: the live phase speaks the desktop's shape — ONE fold from the moment
+  // it appears (ProcessGroupHeader port), not a flat stack that collapses at the
+  // flip. The header narrates the newest running cluster in the in-progress tense.
+  assert.ok(html.startsWith('<div class="message assistant"><details class="turn-process" data-live="1" data-state="running"'), 'the live turn renders the same turn-process fold, marked live')
+  const headerAt = html.indexOf('<span class="activity-title">正在运行命令</span>')
+  assert.ok(headerAt >= 0 && headerAt < html.indexOf('<div class="turn-process-body">'), 'the header narrates the running call in the in-progress tense')
+  assert.ok(html.includes('已读取文件'), 'the settled call inside the body speaks past tense even mid-turn')
+  assert.ok(!html.includes('turn-process-live'), 'the flat live stack is retired')
+})
+
+test('a live turn with nothing running narrates the Host thinking verb', () => {
+  const sandbox = renderSandbox('zh')
+  const html = sandbox.renderTurnProcess({
+    turnKey: '9b',
+    streaming: true,
+    blocks: [tool('read', 'done', { file_path: '/w/a.ts' })],
+  })
+  assert.ok(html.includes('<span class="activity-title">正在分析请求</span>'), 'the header falls back to message.stepProcess.thinking, not the done tally')
+})
+
+test('live and done folds share one open-state key, so the flip preserves expansion', () => {
+  const sandbox = renderSandbox('zh')
+  const keyOf = (html) => html.match(/data-open-key="([^"]*)"/)[1]
+  const live = sandbox.renderTurnProcess({ turnKey: '9c', streaming: true, blocks: [tool('read', 'running', { file_path: '/w/a.ts' })] })
+  const done = sandbox.renderTurnProcess({ turnKey: '9c', streaming: false, blocks: [tool('read', 'done', { file_path: '/w/a.ts' })] })
+  assert.equal(keyOf(live), keyOf(done), 'one key space across the flip — a user-opened fold stays open')
+  assert.equal(keyOf(live), 'turn:9c')
+})
+
+test('in the standard view a live fold stays closed, like the desktop collapsed grouping', () => {
+  const sandbox = briefSandbox('zh', 'standard')
+  const html = sandbox.renderTurnProcess({ turnKey: '9d', streaming: true, blocks: [tool('read', 'running', { file_path: '/w/a.ts' })] })
+  assert.ok(html.includes('<details class="turn-process" data-live="1" data-state="running" data-open-key="turn:9d">'), 'live fold closed by default under the standard work-details view')
+})
+
+test('the live header holds each verb for a minimum beat before switching', async () => {
+  const { stableLiveTitle, liveTitle } = renderSandbox('zh')
+  assert.equal(stableLiveTitle('正在读取文件', 50), '正在读取文件', 'first render adopts immediately')
+  assert.equal(stableLiveTitle('正在运行命令', 50), '正在读取文件', 'a fast switch holds the previous verb')
+  await new Promise((resolve) => setTimeout(resolve, 70))
+  assert.equal(stableLiveTitle('正在运行命令', 50), '正在运行命令', 'after the beat the new verb lands')
+  assert.equal(liveTitle.text, '正在运行命令', 'the hold state committed the latest desired verb')
+})
+
+test('entering another session adopts its live title without holding', () => {
+  const { stableLiveTitle, liveTitle } = renderSandbox('zh')
+  assert.equal(stableLiveTitle('正在读取文件', 60000), '正在读取文件')
+  assert.equal(stableLiveTitle('正在运行命令', 60000), '正在读取文件', 'within the beat it holds')
+  liveTitle.session = 's2'
+  assert.equal(stableLiveTitle('正在搜索代码', 60000), '正在搜索代码', 'a session switch adopts immediately, never the stale verb')
 })
 
 test('a pending question still hides while its composer owns the floor', () => {
@@ -475,7 +522,7 @@ function briefSandbox(locale, view) {
   const names = [
     'toolActivityCategory', 'diffLineSplit', 'toolSummaryLine', 'clusterToolBlocks', 'stepTitleFor',
     'renderBlock', 'toolClusterState', 'toolArgsOf', 'diffRowsHtml', 'renderToolDiff',
-    'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'pretty',
+    'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'stableLiveTitle', 'pretty',
   ]
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
@@ -487,6 +534,7 @@ function briefSandbox(locale, view) {
      function activityChevron(){return '<c></c>'}
      function reasoningSummary(){return ''}
      const turnOpenState=new Map()
+     const liveTitle={session:null,text:'',desired:'',shownAt:0,timer:null}
      const pendingQuestion=null
      return { renderTurnProcess, renderToolCard }`,
   )(labels(locale), STEP_TABLE(locale), view, 's1')
