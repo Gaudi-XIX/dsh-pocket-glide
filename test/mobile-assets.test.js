@@ -815,7 +815,12 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //      窗内的帧记 pendingFollowFrame 而不是重上膛 followStream（程序化写与重排钳位都发真 scroll 事件）；
 //      ③ send 路径的两处 paintMessages 由硬编 true 改为发信前锁下的 readIntent。
 //   余量 1 764 B（zh）/ 1 852 B（en）——下一次抬之前先问「这笔增长解决了什么痛点」。
-const ASSET_BUDGET_BYTES = 288_000
+//   2026-10-12 拥挤规则台账同步（0.4.33）再抬一次 288 000 → 290 000：isSessionUnread 加
+//   「从未打开但近期完成也算未读」分支＋台账上桥三器官（syncOpenedMapNow/schedule/flush，
+//   POST /api/opened-at、2s 防抖、60s 退避、pagehide 冲刷）＋注入常量，本线约 +1.6 KB。
+//   混合树实测 zh 287 864 / en 287 776（含并行草稿扇出线在途增量，非本笔全责）⇒ 取 290 000。
+//   余量 ~2.1 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
+const ASSET_BUDGET_BYTES = 290_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

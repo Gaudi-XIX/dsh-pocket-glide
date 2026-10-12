@@ -8,20 +8,26 @@
 // pickers rather than matching literals: the boundary is a comparison, and
 // 「two opens, three does not」 cannot be told apart by a string.
 //
-//   - the bridge (`pickFocusItem` / the document's `initialChat`) knows running,
-//     failed and waiting-on-an-answer. It cannot know 「finished but unread」 —
-//     that ledger is each phone's own localStorage — so it publishes its count as
-//     `sess.attention` instead of deciding alone;
-//   - the page (`pickFocusSession`) adds the unread term over the rows it holds and
-//     takes `max(own, bridge)`, never a sum: both counts cover overlapping rows.
+//   - the bridge (`pickFocusItem` / the document's `initialChat`) counts running,
+//     failed, waiting-on-an-answer — and, since 0.4.33, 「finished but unread」
+//     over the ledger each phone syncs up (`POST /api/opened-at`), keyed by the
+//     requesting device's fingerprint. Before that sync existed the bridge
+//     published its three-state count as `sess.attention` and the page walked
+//     the document back out of the chat it had embedded — the 2026-10-12 report
+//     that looked like 「the rule doesn't work」;
+//   - the page (`pickFocusSession`) re-counts over its LIVE ledger (a sync in
+//     flight or just failed must not matter) and takes `max(own, bridge)`,
+//     never a sum: both counts cover overlapping rows.
 //
-// Cases 5-8 are the reason the split exists: three quietly finished conversations
-// are invisible to the bridge, and are exactly the situation the user named.
+// A ledger entry is positive proof of a read. Its ABSENCE is not proof of
+// anything, so it falls back to recency (`UNREAD_RECENCY_MS`): a conversation
+// that finished inside the window and was never opened on this phone counts as
+// waiting — exactly the blind spot the 2026-10-12 report was made of.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { LanMobileBridge } from '../lib/bridge.js'
-import { LANDING_ATTENTION_MAX, landingAttention } from '../lib/projections.js'
+import { LANDING_ATTENTION_MAX, UNREAD_RECENCY_MS, landingAttention } from '../lib/projections.js'
 import { mobilePageAssets } from '../lib/pages.js'
 
 const { js } = mobilePageAssets({ locale: 'zh' })
@@ -60,14 +66,18 @@ const running = (id, at) => ({ sessionId: id, updatedAt: at ?? ago(1), running: 
 const awaiting = (id, at) => ({ sessionId: id, updatedAt: at ?? ago(2), awaitingQuestion: true })
 const failed = (id, at) => ({ sessionId: id, updatedAt: at ?? ago(3), error: 'boom' })
 const quiet = (id, at) => ({ sessionId: id, updatedAt: at ?? ago(9) })
+// 72h old — outside the never-opened recency window, so an absent ledger entry
+// reads as 「old business」, not unread. The boundary tests use it to hold the
+// 「two opens, three does not」 comparison steady while the census gained a term.
+const ancient = (id) => quiet(id, ago(72 * 60))
 
 test('two waiting conversations still open one, three do not', () => {
   // The boundary the user set is 「超过两个」 — strictly more than two. Two live
   // conversations still land in the newest of them; a third one parks the phone
   // on the workspace page instead of picking a fighter.
-  const two = [running('r1'), awaiting('q1'), quiet('old')]
+  const two = [running('r1'), awaiting('q1'), ancient('old')]
   assert.equal(pick.call({}, two).sessionId, 'q1', 'two waiting still land somewhere (an answer owed wins)')
-  const three = [running('r1'), awaiting('q1'), failed('e1'), quiet('old')]
+  const three = [running('r1'), awaiting('q1'), failed('e1'), ancient('old')]
   assert.equal(pick.call({}, three), null, 'a third one stops the landing from choosing')
 })
 
@@ -75,9 +85,42 @@ test('the count counts the four cases and nothing else', () => {
   assert.equal(landingAttention([running('a'), awaiting('b'), failed('c')]), 3)
   assert.equal(landingAttention([running('a', 0), { ...running('d'), descendantRunning: true }]), 2,
     'a parent whose child is still working is 正在推进 too')
-  assert.equal(landingAttention([quiet('a'), quiet('b'), quiet('c')]), 0,
-    'finished-but-unread is not the bridge call to make')
+  assert.equal(landingAttention([ancient('a'), ancient('b'), ancient('c')]), 0,
+    'quiet rows outside the recency window are old business, not waiting')
   assert.equal(landingAttention(undefined), 0)
+})
+
+test('the synced ledger decides the unread term: read rows quiet, unread rows count', () => {
+  // 0.4.33: each phone uploads its dsh-pocket-opened-at map and the count runs
+  // over the REQUESTING device's copy. A row opened after it finished is read;
+  // one opened before it finished (or absent from the ledger) is unread.
+  const rows = [quiet('a'), quiet('b'), quiet('c')]
+  const allRead = { a: ago(1), b: ago(1), c: ago(1) }
+  assert.equal(landingAttention(rows, { openedAt: allRead }), 0,
+    'opened after their ago(9) finish → read → nothing waiting')
+  assert.equal(landingAttention(rows, { openedAt: { a: ago(60) } }), 3,
+    'a ledger entry OLDER than the finish is unread, and so is an absent entry')
+  assert.equal(landingAttention([quiet('a'), running('b')], { openedAt: { b: ago(0) } }), 2,
+    'a running row counts as running; it is never double-counted')
+})
+
+test('a row the phone never opened counts only while it is fresh', () => {
+  // The 2026-10-12 blind spot: conversations that finished while the phone was
+  // away and were never opened on it. With no ledger entry, recency decides.
+  const fresh = [quiet('a'), quiet('b'), quiet('c')]
+  assert.equal(landingAttention(fresh), 3, 'no ledger: recent finishes count (never-opened, inside the window)')
+  const stale = [ancient('a'), ancient('b'), ancient('c')]
+  assert.equal(landingAttention(stale), 0, 'ancient never-opened rows stay quiet')
+  assert.equal(landingAttention([ancient('a'), ancient('b'), quiet('fresh')]), 1,
+    'one fresh finish among old business is one waiting conversation')
+})
+
+test('the census runs on the requesting device\'s ledger, never a shared one', () => {
+  const rows = [quiet('a'), quiet('b'), quiet('c')]
+  const thisDevice = { a: ago(1), b: ago(1), c: ago(1) }
+  assert.equal(landingAttention(rows, { openedAt: thisDevice }), 0)
+  assert.equal(landingAttention(rows, { openedAt: {} }), 3,
+    'the same rows against an empty ledger (another phone, or prewarm) read as unread')
 })
 
 test('a row the phone may not open cannot crowd the landing', () => {
@@ -139,14 +182,14 @@ test('the boot payload ships a page of rows, not one row, so the phone can judge
   // paths now ship the same page of rows — the newest ones, where an unread
   // finish still is (469 rows measured 195 KB, which is why it stays a page).
   const rows = []
-  for (let i = 0; i < 20; i += 1) rows.push(quiet('q' + i, ago(i + 1)))
+  for (let i = 0; i < 20; i += 1) rows.push(ancient('q' + i))
   const bridge = makeBridge({ items: rows })
   const payload = await bridge.buildMobileBoot({ history: false, listLimit: 12 })
 
   assert.equal(payload.sess.items.length, 12)
   assert.equal(payload.sess.partial, true)
   assert.equal(payload.sess.total, 20, 'a page says it is a page')
-  assert.equal(payload.sess.attention, 0)
+  assert.equal(payload.sess.attention, 0, 'old quiet business is nothing to wait for')
 
   const source = readFileSync(new URL('../lib/bridge.js', import.meta.url), 'utf8')
   const calls = source.match(/buildMobileBoot\(\{[^)]*\}\)/g) ?? []
@@ -173,14 +216,19 @@ function extractFunction(source, name) {
 }
 
 const PAGE_THRESHOLD = Number(js.match(/LANDING_ATTENTION_MAX=(\d+)/)[1])
+const PAGE_RECENCY = Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])
 test('the two sides ship one threshold', () => {
   assert.equal(PAGE_THRESHOLD, LANDING_ATTENTION_MAX, 'the page constant is injected, not retyped')
+})
+test('the two sides ship one recency window', () => {
+  assert.equal(PAGE_RECENCY, UNREAD_RECENCY_MS, 'the page constant is injected, not retyped')
 })
 
 function pageSandbox({ summaries = [], ledger = {}, activeSession = null, attention = 0 } = {}) {
   const make = new Function(
     'sessionSummaries', 'activeSession', 'bootAttention', 'localStorage', `
     const LANDING_ATTENTION_MAX=${PAGE_THRESHOLD}
+    const UNREAD_RECENCY_MS=${PAGE_RECENCY}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at'
     const $=(id)=>({textContent:''})
     ${[
@@ -199,14 +247,28 @@ const readRow = (id, over) => ({ sessionId: id, updatedAt: ago(2), blank: false,
 const readLongAgo = Object.fromEntries(['a', 'b', 'c', 'd', 'q1', 'q2'].map((id) => [id, ago(60)]))
 
 test('three finished-but-unread conversations stop the landing, two do not', () => {
-  // The case the bridge cannot see at all: nothing running, nothing failed, nobody
-  // asking — three conversations that simply finished while the phone was away.
+  // The case the bridge used to be blind to, and the page judged alone before
+  // the ledger synced: nothing running, nothing failed, nobody asking — three
+  // conversations that simply finished while the phone was away.
   const three = [readRow('a'), readRow('b'), readRow('c')]
   assert.equal(pageSandbox({ summaries: three, ledger: readLongAgo }).pickFocusSession(), null,
     'three unread finishes park the phone on the workspace page')
   const two = [readRow('a', { updatedAt: ago(6) }), readRow('b', { updatedAt: ago(2) })]
   assert.equal(pageSandbox({ summaries: two, ledger: readLongAgo }).pickFocusSession().sessionId, 'b',
     'two still opens the newest of them')
+})
+
+test('a conversation the phone never opened still counts while it is fresh', () => {
+  // The other half of the 2026-10-12 report: rows with no ledger entry at all.
+  // Fresh finishes are unread by definition; ancient ones are old business.
+  const three = [readRow('a'), readRow('b'), readRow('c')]
+  assert.equal(pageSandbox({ summaries: three, ledger: {} }).pickFocusSession(), null,
+    'never-opened recent finishes are unread — no entry is not a read receipt')
+  assert.ok(pageSandbox({ summaries: [readRow('a'), readRow('b')], ledger: {} }).pickFocusSession(),
+    'two of them still land somewhere')
+  const ancientRows = [readRow('a', { updatedAt: ago(72 * 60) }), readRow('b', { updatedAt: ago(72 * 60) }), readRow('c', { updatedAt: ago(72 * 60) })]
+  assert.ok(pageSandbox({ summaries: ancientRows, ledger: {} }).pickFocusSession(),
+    'ancient never-opened rows do not park the phone')
 })
 
 test('a conversation the phone has read since its last activity is not waiting', () => {

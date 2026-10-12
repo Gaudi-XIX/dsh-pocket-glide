@@ -258,17 +258,25 @@ test('paintMessages tags the history tail through the real markHistoryTail', () 
 
 const unreadSandbox = (storage = {}) => {
   const js = assets.zh.js
-  const body = ['readOpenedMap', 'pruneOpenedMap', 'noteSessionOpened', 'isSessionUnread']
+  const body = [
+    'readOpenedMap', 'pruneOpenedMap', 'noteSessionOpened', 'isSessionUnread',
+    // 0.4.33: noteSessionOpened schedules the ledger upload, so the sync organs
+    // ride along and `fetch` gets a stub — the sandbox must never touch a network.
+    'syncOpenedMapNow', 'scheduleOpenedMapSync', 'flushOpenedMapSync',
+  ]
     .map((name) => extractFunction(js, name))
     .join('\n')
-  return new Function('localStorage', `
+  return new Function('localStorage', 'fetchImpl', `
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200;
+    const UNREAD_RECENCY_MS=${Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])};
+    let openedAtSyncTimer=null,openedAtSyncFailAt=0
+    const fetch=fetchImpl
     ${body}
     return { readOpenedMap, pruneOpenedMap, noteSessionOpened, isSessionUnread }
   `)({
     getItem: (key) => (key in storage ? storage[key] : null),
     setItem: (key, value) => { storage[key] = String(value) },
-  })
+  }, () => ({ then: () => ({ catch: () => {} }) }))
 }
 
 test('readOpenedMap accepts only positive finite timestamps and survives garbage', () => {
@@ -310,7 +318,11 @@ test('isSessionUnread: activity after last open, excluding running/blank/focused
   assert.equal(isSessionUnread(row, 4000, null), true, 'activity since last open')
   assert.equal(isSessionUnread(row, 5000, null), false, 'opened at the exact activity time')
   assert.equal(isSessionUnread(row, 6000, null), false)
-  assert.equal(isSessionUnread(row, 0, null), false, 'never opened → quiet (a restarted host must not light every row)')
+  assert.equal(isSessionUnread(row, 0, null), false, 'never opened and ancient → quiet (a restarted host must not light every row)')
+  assert.equal(isSessionUnread({ ...row, updatedAt: Date.now() - 60 * 1000 }, 0, null), true,
+    '0.4.33: never opened but finished inside the recency window → unread (the 2026-10-12 blind spot)')
+  assert.equal(isSessionUnread({ ...row, updatedAt: Date.now() - 72 * 60 * 60 * 1000 }, 0, null), false,
+    'never opened and older than the recency window → quiet')
   assert.equal(isSessionUnread({ ...row, running: true }, 0, null), false, 'running sessions stay quiet')
   assert.equal(isSessionUnread({ ...row, blank: true }, 0, null), false, 'blank shells have nothing to read')
   assert.equal(isSessionUnread(row, 0, 's1'), false, 'the focused session never dots itself')
@@ -340,6 +352,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     const LIST_ROWS_MAX=${25}
     const WS_FLAGS_MAX=${2}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200
+    const UNREAD_RECENCY_MS=${Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])}
     const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}

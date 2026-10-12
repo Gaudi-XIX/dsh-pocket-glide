@@ -206,6 +206,11 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     const LIST_ROWS_MAX=${LIST_ROWS_MAX}
     const WS_FLAGS_MAX=${WS_FLAGS_MAX}
     const LANDING_ATTENTION_MAX=${LANDING_ATTENTION_MAX}
+    // These tests pin projection/row/pill behavior, not the unread census: recency 0
+    // keeps never-opened rows quiet exactly as they were before 0.4.33 (every fixture
+    // here is fresh + the ledger is empty). The census itself is pinned in
+    // test/landing-attention.test.js and test/pages-scroll-anchors.test.js.
+    const UNREAD_RECENCY_MS=0
     let bootAttention=0
     // The head notices need the focused-session id (a focused row never reads as
     // unread); these sandboxes render with nothing open.

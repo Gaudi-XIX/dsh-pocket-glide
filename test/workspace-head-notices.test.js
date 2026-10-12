@@ -62,6 +62,7 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
     'workspaces', 'sessionSummaries', 'expandedWsIds', 'revealedLists', 'activeSession', 'container', 'localStorage', 'writes', 'storageReads', `
     const L=${JSON.stringify(L)}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at'
+    const UNREAD_RECENCY_MS=${Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])}
     const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
     const LAST_MESSAGE_MAX=${Number(js.match(/LAST_MESSAGE_MAX=(\d+)/)[1])}
     const BLANK_ROW_VISIBLE_MS=${24 * 60 * 60 * 1000}
@@ -141,13 +142,17 @@ test('rank: error beats question beats finished-unread', () => {
   assert.deepEqual(headFlags(listSandbox({ summaries: swapped, ledger: readLongAgo })), [L.wsQuestion, L.wsNewDone], 'rank wins over recency')
 })
 
-test('finished-but-unread only counts rows this phone has actually opened', () => {
+test('finished-but-unread counts fresh finishes, read ones quiet down', () => {
   const summaries = [row({ sessionId: 'q', updatedAt: ago(1) }), row({ sessionId: 'u', updatedAt: ago(2) })]
-  assert.deepEqual(headFlags(listSandbox({ summaries, ledger: {} })), [], 'a ledger with no entry is not unread')
+  // 0.4.33: an absent ledger entry is 「never opened on this phone」, and a fresh
+  // finish is unread by definition — the 2026-10-12 blind spot, closed.
+  assert.deepEqual(headFlags(listSandbox({ summaries, ledger: {} })), [L.wsNewDone], 'never opened + fresh → unread')
   assert.deepEqual(headFlags(listSandbox({ summaries, ledger: { q: ago(30) } })), [L.wsNewDone], 'one row opened long ago and moved since — unread')
   assert.deepEqual(headFlags(listSandbox({ summaries, ledger: { q: ago(0.5), u: ago(0.5) } })), [], 'both opened after they last moved — quiet')
   assert.deepEqual(headFlags(listSandbox({ summaries: [row({ sessionId: 'u', running: true, updatedAt: ago(2) })], ledger: { u: ago(30) } })), [], 'a running row is not unread')
   assert.deepEqual(headFlags(listSandbox({ summaries, ledger: { q: ago(30), u: ago(30) }, activeSession: 'q' })), [L.wsNewDone], 'the focused row never dots itself, its neighbour still may')
+  const ancient = [row({ sessionId: 'o1', updatedAt: ago(72 * 60) }), row({ sessionId: 'o2', updatedAt: ago(72 * 60) })]
+  assert.deepEqual(headFlags(listSandbox({ summaries: ancient, ledger: {} })), [], 'never opened but ancient → old business, quiet')
 })
 
 test('a quiet workspace keeps exactly the head it had before', () => {
