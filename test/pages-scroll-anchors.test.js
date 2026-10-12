@@ -368,6 +368,8 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     const WS_FLAGS_MAX=${2}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200
     const UNREAD_RECENCY_MS=${Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])}
+    // 12h 窗与未读点无关：此档钉 ledger 语义，窗口豁免防 fixture 新旧把行藏进「更多」。窗口钉在 ROWS-RECENT。
+    const RECENT_WINDOW_MS=Infinity
     let openedAtLedgerReady=true
     const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
     const $=(id)=>container

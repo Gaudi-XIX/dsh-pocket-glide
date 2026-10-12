@@ -69,6 +69,7 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
     const BLANK_ROW_VISIBLE_MS=${24 * 60 * 60 * 1000}
     const LIST_ROWS_MAX=${25}
     const WS_FLAGS_MAX=${Number(js.match(/WS_FLAGS_MAX=(\d+)/)[1])}
+    const RECENT_WINDOW_MS=${Number(js.match(/RECENT_WINDOW_MS=(\d+)/)[1])}
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${[

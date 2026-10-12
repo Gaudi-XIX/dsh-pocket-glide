@@ -68,6 +68,9 @@ const HISTORY_IDLE_CAP = Number(js.match(/HISTORY_POLL_IDLE_CAP_MS=(\d+)/)[1]);
 // renderWorkspaces caps the rows it builds per expanded workspace; the sandbox must
 // carry the same ceiling or the cap under test is the test's own, not the page's.
 const LIST_ROWS_MAX = Number(js.match(/LIST_ROWS_MAX=(\d+)/)[1]);
+// The 12h default cap the expanded card applies (0.4.36); ROWS-RECENT pins it,
+// everything else here passes Infinity so fixture age cannot hide rows.
+const RECENT_WINDOW_MS = Number(js.match(/RECENT_WINDOW_MS=(\d+)/)[1]);
 // The workspace head builds its notices through wsFlagsOf/wsFlagHtml (0.4.31), which
 // read this same ceiling out of page scope — the sandbox has to declare it too.
 const WS_FLAGS_MAX = Number(js.match(/WS_FLAGS_MAX=(\d+)/)[1]);
@@ -189,7 +192,7 @@ test('R1.1 the control: an ordinary failure still paints the retry row', async (
 // workspaces (a collapsed card renders its rows on the next tap, so 469 hidden
 // rows stop costing a phone 300 KB of markup per refresh). A test that wants the
 // collapsed behaviour must say so — `expanded: []`.
-function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, revealed = null } = {}) {
+function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, revealed = null, recentWindowMs = Infinity } = {}) {
   const host = fakeElement();
   const make = new Function(
     'workspaces',
@@ -197,6 +200,7 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     'expandedWsIds',
     'revealedLists',
     'container',
+    'RECENT_WINDOW_MS',
     `
     const L=${JSON.stringify(L)}
     const BLANK_ROW_VISIBLE_MS=${BLANK_ROW_VISIBLE_MS}
@@ -249,7 +253,7 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     }
   `,
   );
-  const sandbox = make(workspaces, summaries, new Set(expanded ?? workspaces.map((w) => w.workspaceId)), new Set(revealed ?? []), host);
+  const sandbox = make(workspaces, summaries, new Set(expanded ?? workspaces.map((w) => w.workspaceId)), new Set(revealed ?? []), host, recentWindowMs);
   sandbox.host = host;
   return sandbox;
 }
@@ -627,4 +631,32 @@ test('ROWS-3 revealing one workspace lifts its cap without touching another', ()
   assert.doesNotMatch(w1, /data-action="more"/, 'and stops offering more');
   assert.equal((w2.match(/data-id="/g) ?? []).length, LIST_ROWS_MAX, 'the other card keeps its own cap');
   assert.match(w2, /data-action="more"/, 'and still offers its rest');
+});
+
+test('ROWS-RECENT the default cap follows the 12h window, floored at one row', () => {
+  const stale = manyRows(3, 'old').map((r) => ({ ...r, updatedAt: Date.now() - RECENT_WINDOW_MS * 2 }));
+  const fresh = manyRows(2, 'new');
+  const workspaces = [{ workspaceId: 'w1', title: 'DSH', path: 'F:/x', sessionIds: [...fresh, ...stale].map((r) => r.sessionId) }];
+  const summaries = [...fresh, ...stale];
+  const sandbox = buildRenderSandbox({ workspaces, summaries, recentWindowMs: RECENT_WINDOW_MS });
+  sandbox.renderWorkspaces();
+  assert.deepEqual(sandbox.rowIds(), fresh.map((r) => r.sessionId), 'only rows touched inside the window paint by default');
+  assert.ok(
+    sandbox.markup.includes('>' + L.moreRows.replace('{n}', String(stale.length)) + '<'),
+    'the stale rows wait behind the more row',
+  );
+
+  // Floor: a workspace whose every conversation is old still shows its newest one.
+  const allOld = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/x', sessionIds: stale.map((r) => r.sessionId) }],
+    summaries: stale,
+    recentWindowMs: RECENT_WINDOW_MS,
+  });
+  allOld.renderWorkspaces();
+  assert.equal(allOld.rowIds().length, 1, 'one row is always visible');
+
+  // Revealing lifts the window entirely.
+  const revealed = buildRenderSandbox({ workspaces, summaries, revealed: ['w1'], recentWindowMs: RECENT_WINDOW_MS });
+  revealed.renderWorkspaces();
+  assert.equal(revealed.rowIds().length, 5, 'the more row shows the full table regardless of age');
 });
