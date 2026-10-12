@@ -274,6 +274,28 @@ test('settings store: preserves and sanitizes clawbot configuration', () => {
     const doc2 = store.load()
     assert.equal(doc2.notify.enabled, false)
     assert.equal(doc2.notify.clawbot.contextToken, 'ctx_1')
+
+    // 回归钉（2026-10-13 事故）：额度落盘每推一条就 save 一次 {clawbot:{quotaUsed}}，
+    // 旧实现把 patch 未提名的 channel/enabled/key 落回默认 off/false/''——内存里配置
+    // 仍是对的所以推送照常，重启读盘通道即死（微信双向全哑）。部分节保存必须保留
+    // 盘上现值，只有提名的字段才允许改变。
+    store.save({ notify: { enabled: true } })
+    store.save({
+      notify: {
+        clawbot: {
+          botToken: 'secret_token_123456789',
+          userId: 'user_1',
+          contextToken: 'ctx_1',
+          quotaUsed: 7
+        }
+      }
+    })
+    const doc3 = store.load()
+    assert.equal(doc3.notify.channel, 'clawbot', '部分节保存不抹 channel')
+    assert.equal(doc3.notify.enabled, true, '部分节保存不抹 enabled')
+    assert.equal(doc3.notify.key, 'secret_token_123456789', '部分节保存不抹 key')
+    assert.equal(doc3.notify.clawbot.quotaUsed, 7, '要写的字段真的写进去了')
+    assert.equal(doc3.notify.clawbot.contextToken, 'ctx_1')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
@@ -491,6 +513,97 @@ test('clawbot quota: 计数真的进了发给微信的那段文字，入站一�
     const pushes = sent.filter((s) => s.text.includes('这是一条测试通知'))
     assert.equal(pushes.length, 3)
     assert.ok(!pushes[2].text.includes('/10 条'), '同令牌重复入站也算续期：重新从无声计数开始')
+  } finally {
+    await t.stop()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// 门地址回话与推送吃的是**同一条服务器额度**（一条入站换 10 条出站，服务器数所有出站）。
+// 2026-10-13 前它不计数：一次隧道换址交接就让账本比服务器落后一条，此后「第 10 条捎话」
+// 永远差一条——额度耗尽的那条被服务端静默拒收，用户只看到消息停了、没有任何解释。
+// 直呼 ensureTunnelForInbound（不经入站 watcher）：入站会先续期归零，只有直呼才能摆出
+// 「交接恰好是第 10 条」的位形；tunnel 打桩理由见上一档测试。
+test('clawbot quota: 门地址回话占同一条额度——计数、捎话、拒收挂起、丢失回滚', async () => {
+  const dir = makeTempDir('dsh-pocket-quota-door-')
+  const store = createSettingsStore(dir)
+  store.save({
+    notify: {
+      channel: 'clawbot',
+      key: 'bot_token_door',
+      enabled: true,
+      // 令牌已在档 ⇒ 不进就绪回执分支，这条线上只有门地址回话一条出站。
+      clawbot: { botToken: 'bot_token_door', userId: 'user_door', contextToken: 'ctx_door' }
+    }
+  })
+  const sent = []
+  let mode = 'ok'
+  const notifyFetchImpl = async (url, options) => {
+    if (String(url).includes('/sendmessage')) {
+      const body = JSON.parse(options.body)
+      sent.push(body.msg.item_list[0].text_item.text)
+      // sendTextMessage 从 res.text() 里拿 message_id/ret（64 位整数不走 JSON.parse），
+      // 假响应必须带 text()——只带 json() 会在解析处抛 TypeError，被当成传输丢失。
+      if (mode === 'refuse') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ ret: -2, errmsg: 'prepare failed: no quota' })
+        }
+      }
+      if (mode === 'lost') {
+        return { ok: false, status: 503 }
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ ret: 0, message_id: '7514520117146685577' })
+      }
+    }
+    return { ok: true, status: 200, json: async () => ({ ret: 0 }) }
+  }
+  const t = await startBridge({
+    bridgeOptions: {
+      settingsStore: store,
+      notifyFetchImpl,
+      createCloudflareTunnel: async () => ({
+        url: 'https://door-test.trycloudflare.com',
+        provider: 'cloudflare',
+        stop: async () => {},
+        process: { once: () => {} }
+      })
+    }
+  })
+  try {
+    const baseUrl = t.bridge.options.clawbotBaseUrl
+    const ensure = () => t.bridge.ensureTunnelForInbound(notifyFetchImpl, baseUrl, undefined)
+
+    // 账本已记 9 条 ⇒ 这次交接就是本轮第 10 条，捎话必须搭这条车。
+    t.bridge.clawbotQuotaUsed = 9
+    await ensure()
+    assert.equal(sent.length, 1, '地址与上次不同（首次）＝必须回话')
+    assert.ok(sent[0].includes('Pocket 已打开'), sent[0])
+    assert.ok(sent[0].includes('额度用完'), '第 10 条的交接回话必须捎上额度用完（2026-10-13 漏捎回归钉）')
+    assert.equal(t.bridge.clawbotQuotaUsed, 10, '交接占的额度进了账本')
+
+    // 服务端拒收（prepare failed）＝额度态本身：不回滚、挂起后续通知。
+    mode = 'refuse'
+    t.bridge.clawbotDoorUrl = ''
+    t.bridge.clawbotQuotaUsed = 3
+    await ensure()
+    assert.equal(sent.length, 2)
+    assert.equal(t.bridge.clawbotQuotaSpent, true, '拒收＝本轮额度已尽，挂起')
+    assert.equal(t.bridge.clawbotQuotaUsed, 4, '拒收不回滚计数')
+
+    // 传输丢失（HTTP 503，服务端没收到）＝「没发出去的不算」：回滚预占。
+    mode = 'lost'
+    t.bridge.clawbotDoorUrl = ''
+    t.bridge.clawbotQuotaSpent = false
+    t.bridge.clawbotQuotaUsed = 5
+    await ensure()
+    assert.equal(sent.length, 3)
+    assert.equal(t.bridge.clawbotQuotaUsed, 5, '传输丢失回滚预占的那一条')
+    assert.equal(store.load()?.notify?.clawbot?.quotaUsed, 5, '回滚同步落盘')
   } finally {
     await t.stop()
     fs.rmSync(dir, { recursive: true, force: true })
