@@ -8,6 +8,8 @@
 // clock, and the scroll problem is solved where it lives — a render whose
 // markup did not change leaves the DOM (and the scroll position) untouched.
 //   A. back to the list  → always `refreshList`; repaint only on real change;
+//   A2. the re-read glows while it travels (0.4.39): the header spinner plus a
+//       slight list dim — the poll (section E) stays silent by design;
 //   B. landing standing  → the quiet LIST_POLL_MS poll (see section E);
 //   C. into a session    → an instant paint seeds `lastHistoryKey` with the
 //      SAME expression `applyHistory` uses, so a follow-up fetch that changes
@@ -18,6 +20,7 @@ import assert from 'node:assert/strict'
 import { mobilePageAssets } from '../lib/pages.js'
 
 const js = mobilePageAssets({ locale: 'zh' }).js
+const css = mobilePageAssets({ locale: 'zh' }).css
 
 const sliceTo = (start, end) => {
   const from = js.indexOf(start)
@@ -62,7 +65,49 @@ test('A the manual refresh still forces the read', () => {
   // The gate lives in showSessionList only. The button and the error paths call
   // refreshList directly, so a reader who wants the truth always gets it.
   assert.match(js, /\$\('listRefresh'\)\.onclick=[\s\S]*?refreshList\(true\)/, 'the list refresh button bypasses the window')
-  assert.ok(js.includes('async function refreshList(showFeedback=false){try{await loadListData()'), 'refreshList itself never asks permission')
+  assert.match(js, /async function refreshList\(showFeedback=false\)\{beginListGlow\(\);try\{await loadListData\(\)/, 'refreshList itself never asks permission')
+})
+
+// ---------------------------------------------------------------------------
+// A2 — the mandatory re-read is lubricated, not a hard cut (2026-10-13, 0.4.39)
+//
+// 0.4.37 made the return-to-landing re-fetch unconditional, but during the
+// tunnel round-trip the stale snapshot just sat there with no signal and the
+// fresh rows popped in after silence (user: 「中间加一个转圈圈的动画……不要
+// 那种硬切过去，而是中间有一个润滑」). The glow rides the header refresh
+// button (spinner, the pattern the manual button already had) plus a slight
+// list dim; endListGlow keeps both on for ≥400ms so a fast read does not flash.
+// ---------------------------------------------------------------------------
+
+test('A2 the glow marks the list and the header button, with a 400ms floor', () => {
+  const glow = sliceTo('function beginListGlow()', 'let tabWasHidden=document.hidden;')
+  assert.match(glow, /function beginListGlow\(\)\{[\s\S]*?\$\('workspaces'\)\.classList\.add\('is-refreshing'\)[\s\S]*?btn\.classList\.add\('spinning'\)/, 'begin dims the list and spins the header button')
+  assert.match(glow, /function endListGlow\(\)\{[\s\S]*?Math\.max\(0,400-\(Date\.now\(\)-listGlowAt\)\)/, 'end keeps the indicator on for at least 400ms — a fast read must not flash')
+  assert.match(glow, /finally\{endListGlow\(\)\}\}/, 'refreshList retires the glow on success and failure alike')
+})
+
+test('A2 the glow covers the return paths, the quiet poll stays invisible', () => {
+  // resumeOnReturn serves two masters: the reader who just came back (a tab
+  // return, a bfcache restore — same surprise as back-navigation, same glow)
+  // and the slow LIST_POLL_MS clock (must stay silent — a 60s visual pulse
+  // would be noise). quiet already means "announce nothing", so it gates the
+  // glow exactly as it gates the error banner.
+  assert.match(js, /resumeInFlight=true;if\(!quiet\)beginListGlow\(\)/, 'a user-initiated resume glows')
+  assert.match(js, /finally\{if\(!quiet\)endListGlow\(\);resumeInFlight=false\}\}/, 'and retires it even when the read fails')
+  assert.match(js, /void resumeOnReturn\(true\)\.finally\(startListPoll\)/, 'the background poll stays quiet — no glow, no banner')
+})
+
+test('A2 the manual button hands spinning to the glow and keeps only its guard', () => {
+  // The old onclick painted and unpainted its own spinner with a bare 400ms
+  // timeout; that logic now lives in begin/endListGlow where every path shares
+  // it. What must stay at the button is the re-entry guard against double reads.
+  assert.match(js, /\$\('listRefresh'\)\.onclick=\(\)=>\{if\(\$\('listRefresh'\)\.classList\.contains\('spinning'\)\)return;refreshList\(true\)\}/, 'guard stays, spinner choreography is the glow\'s job')
+})
+
+test('A2 the dim lives in the stylesheet and honours reduced motion', () => {
+  assert.match(css, /\.workspaces\{[^}]*transition:opacity \.18s ease\}/, 'the container eases between opaque and dimmed')
+  assert.match(css, /\.workspaces\.is-refreshing\{opacity:\.55\}/, 'the refresh state dims the standing rows instead of blanking them')
+  assert.match(css, /@media\(prefers-reduced-motion:reduce\)\{\.anchor-fab\{transition:none\}\.workspaces\{transition:none\}\}/, 'reduced motion switches the dim instantly, no ease')
 })
 
 // ---------------------------------------------------------------------------

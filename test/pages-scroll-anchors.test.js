@@ -460,7 +460,7 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   assert.match(assets.zh.document, /id="scrollAnchors"/, 'the anchor deck ships in the document')
   assert.match(js, /anchor-fab/, 'the fab styling ships')
   assert.match(assets.zh.css, /\.msg-hist\{content-visibility:auto;contain-intrinsic-size:auto 120px\}/)
-  assert.match(assets.zh.css, /@media\(prefers-reduced-motion:reduce\)\{\.anchor-fab\{transition:none\}\}/, 'the fade respects reduced motion')
+  assert.match(assets.zh.css, /@media\(prefers-reduced-motion:reduce\)\{\.anchor-fab\{transition:none\}\.workspaces\{transition:none\}\}/, 'the fade respects reduced motion (0.4.39 shares the block with the landing glow)')
   assert.match(assets.zh.css, /\.task-row\.is-unread \.task-status::after/)
   // the stream-watermark paint sandbox extracts paintMessages WITHOUT the new
   // organs — the typeof guards are what keep that file's sandboxes alive

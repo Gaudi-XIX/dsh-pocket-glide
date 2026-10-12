@@ -436,6 +436,18 @@ test('S-1 opening the settings panel no longer resets the catalog (stale-while-r
   assert.ok(open.includes('void refreshSessionSettings(sessionId)'), 'the refresh rides behind the paint, never in front of it')
   assert.ok(refresh.includes('if(activeSession!==sessionId||modelCatalog)return'), 'a failed refresh keeps the stale catalog on screen; only the cache-less first open takes the error path')
 })
+test('S-2 entering a session or a draft must not wipe the settings catalog either', () => {
+  // The catalog is host-global — session/modelCatalog takes no session argument —
+  // so wiping it on every chat entry put each visit's first settings open back
+  // behind the loading shell while the host answered (~1.4s per call measured,
+  // pocket.log 2026-10-13 01:22). The 0.4.36 fix only ever helped repeat toggles
+  // inside one visit; the entry paths are where the every-time lag lived.
+  for (const name of ['openSession', 'startDraftChat']) {
+    const fn = extractFunction(js, name)
+    assertSpliceable(fn, name)
+    assert.ok(!fn.includes('modelCatalog=null'), `${name} must leave the catalog standing: the panel paints it cached and refreshSessionSettings revalidates behind the open`)
+  }
+})
 test('PB the pairing page poll cannot stack and skips a hidden tab', () => {
   const start = source.indexOf('function renderDesktopPairingPage(')
   const end = source.indexOf('export function renderPairingPinPage(', start)
