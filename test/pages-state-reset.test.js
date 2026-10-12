@@ -428,6 +428,14 @@ test('B-8 the cache is touched on a warm open and trimmed when the list comes ba
 
 // ------------------------------------------------------------------------ PB-poll
 
+test('S-1 opening the settings panel no longer resets the catalog (stale-while-revalidate)', () => {
+  const open = extractFunction(js, 'openSessionSettings')
+  const refresh = extractFunction(js, 'refreshSessionSettings')
+  assertSpliceable(open, 'openSessionSettings')
+  assert.ok(!open.includes('modelCatalog=null'), 'the tap must not wipe the catalog: the panel paints the cached one and the refresh lands behind it (0.4.36 walk-through: two tunnel round trips before anything appeared)')
+  assert.ok(open.includes('void refreshSessionSettings(sessionId)'), 'the refresh rides behind the paint, never in front of it')
+  assert.ok(refresh.includes('if(activeSession!==sessionId||modelCatalog)return'), 'a failed refresh keeps the stale catalog on screen; only the cache-less first open takes the error path')
+})
 test('PB the pairing page poll cannot stack and skips a hidden tab', () => {
   const start = source.indexOf('function renderDesktopPairingPage(')
   const end = source.indexOf('export function renderPairingPinPage(', start)
