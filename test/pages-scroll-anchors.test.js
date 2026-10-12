@@ -263,6 +263,9 @@ const unreadSandbox = (storage = {}) => {
     // 0.4.33: noteSessionOpened schedules the ledger upload, so the sync organs
     // ride along and `fetch` gets a stub — the sandbox must never touch a network.
     'syncOpenedMapNow', 'scheduleOpenedMapSync', 'flushOpenedMapSync',
+    // 0.4.35: boot pulls the ledger back from the bridge (per-origin localStorage
+    // wipes on every tunnel hostname change) and max-merges it into the local map.
+    'mergeOpenedMapFromBridge',
   ]
     .map((name) => extractFunction(js, name))
     .join('\n')
@@ -270,9 +273,10 @@ const unreadSandbox = (storage = {}) => {
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200;
     const UNREAD_RECENCY_MS=${Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])};
     let openedAtSyncTimer=null,openedAtSyncFailAt=0
+    let openedAtLedgerReady=true
     const fetch=fetchImpl
     ${body}
-    return { readOpenedMap, pruneOpenedMap, noteSessionOpened, isSessionUnread }
+    return { readOpenedMap, pruneOpenedMap, noteSessionOpened, isSessionUnread, mergeOpenedMapFromBridge, setLedgerReady(v){openedAtLedgerReady=v} }
   `)({
     getItem: (key) => (key in storage ? storage[key] : null),
     setItem: (key, value) => { storage[key] = String(value) },
@@ -331,6 +335,17 @@ test('isSessionUnread: activity after last open, excluding running/blank/focused
   assert.equal(isSessionUnread(row, undefined, null), false, 'a missing ledger entry reads as never opened')
 })
 
+test('isSessionUnread: the never-opened inference is suspended until the ledger pull settles', () => {
+  // 0.4.35「先默认全灭」：拉回未落定＋本地无条目＝未知，未知不当未读；落定后 48h 规则恢复。
+  const sandbox = unreadSandbox({})
+  sandbox.setLedgerReady(false)
+  assert.equal(sandbox.isSessionUnread({ sessionId: 's1', updatedAt: Date.now() - 60 * 1000 }, 0, null), false,
+    'not ready → unknown is not unread')
+  sandbox.setLedgerReady(true)
+  assert.equal(sandbox.isSessionUnread({ sessionId: 's1', updatedAt: Date.now() - 60 * 1000 }, 0, null), true,
+    'settled → the recency rule applies again')
+})
+
 const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } = {}) => {
   const js = assets.zh.js
   const body = [
@@ -353,6 +368,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     const WS_FLAGS_MAX=${2}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200
     const UNREAD_RECENCY_MS=${Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])}
+    let openedAtLedgerReady=true
     const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -398,11 +414,28 @@ test('renderWorkspaces paints is-unread on exactly the rows the ledger marks', (
 
 // ---------------------------------------------------- 5. the wiring (source)
 
+test('mergeOpenedMapFromBridge restores lost history without downgrading newer local stamps', () => {
+  // 0.4.35: a tunnel hostname change is a new origin — the browser hands the
+  // page an empty localStorage and every row lights up as unread. The bridge
+  // kept this device's ledger by fingerprint; the merge puts it back. max()
+  // per key: an OLDER bridge stamp must never clobber a newer local one.
+  const storage = { 'dsh-pocket-opened-at': JSON.stringify({ s1: 5000 }) }
+  const sandbox = unreadSandbox(storage)
+  const merged = sandbox.mergeOpenedMapFromBridge({ s1: 4000, s2: 3000, junk: 'not-a-number', gone: 0 })
+  assert.equal(merged.s1, 5000, 'local newer stamp survives the bridge copy')
+  assert.equal(merged.s2, 3000, 'history the browser lost comes back from the bridge')
+  assert.equal(merged.junk, undefined, 'non-numeric bridge values are dropped, not trusted')
+  assert.equal(merged.gone, undefined, 'non-positive bridge values are dropped')
+  assert.deepEqual(JSON.parse(storage['dsh-pocket-opened-at']), { s1: 5000, s2: 3000 }, 'the merged map lands back in storage')
+  assert.deepEqual(sandbox.mergeOpenedMapFromBridge('garbage'), sandbox.readOpenedMap(), 'a foreign body is a no-op, not a wipe')
+})
+
 test('the page wires the machine where the tests cannot reach: scroll, open, leave', () => {
   const js = assets.zh.js
   assert.match(js, /followStream=isNearBottom\(live\)/, 'the scroll handler re-decides the follow from the live band')
   assert.match(js, /activeSession=id;const summary=sessionSummaries\.find\(item=>item\.sessionId===id\);sessionBlank=summary\?\.blank\?\?true;noteSessionOpened\(id\);followStream=true;/, 'openSession stamps the ledger and re-arms the follow')
   assert.match(js, /poll=null;if\(activeSession\)noteSessionOpened\(activeSession\);/, 'leaving to the list stamps the ledger (activity seen live is read)')
+  assert.match(js, /scheduleOpenedMapSync\(\);void pullOpenedMapRemote\(\);/, 'boot pulls the ledger back from the bridge after the first paint (0.4.35)')
   assert.match(js, /latest\.classList\.toggle\('show',state\.latest\);prompt\.classList\.toggle\('show',state\.prompt\)/, 'each anchor button is wired to its OWN state — no mutual exclusion in the DOM either')
   // Literal grew with the E anchor (0.4.18): this same rAF tick now does a FOURTH
   // thing — it records the reader's row (`transcriptAnchor=readTranscriptAnchor(live)`)
@@ -543,7 +576,7 @@ test('the offline page copy is bilingual-tight and the SW still satisfies the ol
   const sw = renderServiceWorker()
   const bypassLine = sw.split('\n').find((line) => line.includes('const BYPASS='))
   assert.match(bypassLine, /\(api\|/, 'api stays bypassed (no-store boundary)')
-  assert.match(bypassLine, /\|consent\)/, 'consent stays bypassed; the restart goodbye joins the list (0.4.34)')
+  assert.match(bypassLine, /\|consent\|bye\)/, 'consent stays bypassed; the restart goodbye joins the list (0.4.34)')
   assert.match(sw, /const V='pocket-v3'/)
   assert.match(renderServiceWorker('9f2c1a4b7e01'), /const V='pocket-9f2c1a4b7e01'/)
   assert.doesNotMatch(sw, /nonce/)

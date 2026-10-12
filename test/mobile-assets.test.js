@@ -824,7 +824,13 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   确认浮层卡（四条丑话文案 zh/en 双份）＋开关卡/确认/武装的页面 JS，本线约 +1.3 KB
 //   （POST /api/host/restart 的桥侧代码不进壳）。痛点＝重启不再靠在会话里喊 AI 调脚本，
 //   用户 2026-10-12 明令要这个按钮。实测 zh 291 308 ⇒ 取 293 000，余量 ~1.7 KB——同一句老话。
-const ASSET_BUDGET_BYTES = 293_000
+//   2026-10-12 台账回源（0.4.35）再抬一次 293 000 → 295 000：mergeOpenedMapFromBridge＋
+//   pullOpenedMapRemote＋openedAtLedgerReady 悬置位（「先默认全灭，台账到手再亮」——用户裁定）
+//   ＋boot 接线，本线约 +2.1 KB。痛点＝隧道每次换新域名手机端已读记忆清零、未读点全亮
+//   （用户实测「太多了，这咋点呢」），修法是开机从桥上领回自己那份而不是加「全部已读」按钮。
+//   混合树实测 zh 293 594 / en 293 514（含重启线在途增量，非本笔全责）⇒ 取 295 000，
+//   余量 ~1.4 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
+const ASSET_BUDGET_BYTES = 295_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

@@ -139,10 +139,11 @@ test('the upload route stores per device, refuses garbage, and the landing obeys
       })
       assert.equal(cross.status, 403, 'cross-site uploads are refused at the same gate as every other POST')
 
+      const uploaded = { a: ago(1), b: ago(1), c: ago(1), d: ago(1) }
       const upload = await httpFetch(`${base}/api/opened-at`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ openedAt: { a: ago(1), b: ago(1), c: ago(1), d: ago(1) } }),
+        body: JSON.stringify({ openedAt: uploaded }),
       })
       assert.equal(upload.status, 200)
       assert.deepEqual(await upload.json(), { ok: true, entries: 4 })
@@ -154,6 +155,15 @@ test('the upload route stores per device, refuses garbage, and the landing obeys
         'the same list, all four synced as read → the landing is calm and opens the newest')
       assert.match(first.logs.map((l) => l.message).join('\n'), /ledger=4/,
         'the doc line names the ledger size, so a real-device check can see the sync landed')
+
+      // The pull half (0.4.35): the same device reads its ledger back — this is
+      // what a phone does at boot after a tunnel hostname change wiped its
+      // localStorage. Cross-site pulls are refused at the same gate.
+      const pull = await httpFetch(`${base}/api/opened-at`, { headers: { cookie, origin: base } })
+      assert.equal(pull.status, 200)
+      assert.deepEqual(await pull.json(), { ok: true, openedAt: uploaded })
+      const crossPull = await httpFetch(`${base}/api/opened-at`, { headers: { cookie, origin: 'https://evil.example' } })
+      assert.equal(crossPull.status, 403, 'cross-site pulls are refused at the same gate')
     } finally {
       await first.stop()
     }
@@ -174,10 +184,23 @@ test('the upload route stores per device, refuses garbage, and the landing obeys
       assert.match(await doc.text(), /<body class="chat-open">/,
         'a restart keeps the read ledger — the cold open IS the after-restart navigation')
 
-      const otherPhone = await second.pairMobile('OtherHandset/2.0')
+      // The second handset goes through the FULL funnel (pairMobile alone cannot
+      // authorize a brand-new device — the LAN 302 only hands out a pending
+      // cookie, and the page below would be the reconnect page passing the
+      // chat-open assertion for the wrong reason; the GET route's honest 401 is
+      // what exposed that).
+      const otherPhone = await second.pairMobileTunnel('OtherHandset/2.0')
       const otherDoc = await httpFetch(`${base}/`, { headers: { cookie: otherPhone } })
       assert.doesNotMatch(await otherDoc.text(), /<body class="chat-open">/,
         'and another device with no synced ledger still sees four waiting conversations')
+
+      // Pull-side isolation (0.4.35): the restarted device reads its own four
+      // entries back; the other handset is never served someone else's reads.
+      const samePull = await httpFetch(`${base}/api/opened-at`, { headers: { cookie: samePhone, origin: base } })
+      assert.equal(Object.keys((await samePull.json()).openedAt).length, 4,
+        'the ledger survives the restart on the pull side too')
+      const otherPull = await httpFetch(`${base}/api/opened-at`, { headers: { cookie: otherPhone, origin: base } })
+      assert.deepEqual((await otherPull.json()).openedAt, {}, 'a ledger is never served across devices')
     } finally {
       await second.stop()
     }

@@ -211,6 +211,8 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     // here is fresh + the ledger is empty). The census itself is pinned in
     // test/landing-attention.test.js and test/pages-scroll-anchors.test.js.
     const UNREAD_RECENCY_MS=0
+    // 0.4.35 的台账就绪位：这些沙箱不测「拉回前的悬置」，直接置就绪。
+    let openedAtLedgerReady=true
     let bootAttention=0
     // The head notices need the focused-session id (a focused row never reads as
     // unread); these sandboxes render with nothing open.

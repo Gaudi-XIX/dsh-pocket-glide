@@ -229,13 +229,14 @@ function pageSandbox({ summaries = [], ledger = {}, activeSession = null, attent
     'sessionSummaries', 'activeSession', 'bootAttention', 'localStorage', `
     const LANDING_ATTENTION_MAX=${PAGE_THRESHOLD}
     const UNREAD_RECENCY_MS=${PAGE_RECENCY}
+    let openedAtLedgerReady=true
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at'
     const $=(id)=>({textContent:''})
     ${[
       'readOpenedMap', 'isSessionUnread', 'taskState', 'wsFlagOf', 'wsFlagClass', 'wsFlagRank',
       'needsAttention', 'landingBusy', 'pickFocusSession',
     ].map((name) => extractFunction(js, name)).join('\n')}
-    return { landingBusy, pickFocusSession }
+    return { landingBusy, pickFocusSession, setLedgerReady(v){openedAtLedgerReady=v} }
   `)
   return make(summaries, activeSession, attention, {
     getItem: () => JSON.stringify(ledger),
@@ -269,6 +270,20 @@ test('a conversation the phone never opened still counts while it is fresh', () 
   const ancientRows = [readRow('a', { updatedAt: ago(72 * 60) }), readRow('b', { updatedAt: ago(72 * 60) }), readRow('c', { updatedAt: ago(72 * 60) })]
   assert.ok(pageSandbox({ summaries: ancientRows, ledger: {} }).pickFocusSession(),
     'ancient never-opened rows do not park the phone')
+})
+
+test('before the ledger pull settles, unknown unread suspends; the three states still count', () => {
+  // 「先默认全灭，台账到手再亮」（0.4.35）：换域名后的空台账不许把手机侧冷开普查推过
+  // 阈值——桥明明知道真相。悬置只作用于未读推断：running 照数，落定后推断恢复。
+  const freshUnread = [quiet('a'), quiet('b'), quiet('c')]
+  const notReady = pageSandbox({ summaries: freshUnread, ledger: {}, attention: 0 })
+  notReady.setLedgerReady(false)
+  assert.ok(notReady.pickFocusSession(), 'unknown unread does not park the landing')
+  const withRunning = pageSandbox({ summaries: [running('r1'), running('r2'), quiet('a')], ledger: {}, attention: 0 })
+  withRunning.setLedgerReady(false)
+  assert.ok(withRunning.pickFocusSession(), 'two live conversations still land somewhere while suspended')
+  assert.equal(pageSandbox({ summaries: freshUnread, ledger: {} }).pickFocusSession(), null,
+    'settled (the fixture default): the 48h never-opened rule applies again')
 })
 
 test('a conversation the phone has read since its last activity is not waiting', () => {

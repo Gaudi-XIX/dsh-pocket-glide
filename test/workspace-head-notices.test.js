@@ -63,6 +63,7 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
     const L=${JSON.stringify(L)}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at'
     const UNREAD_RECENCY_MS=${Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])}
+    let openedAtLedgerReady=true
     const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
     const LAST_MESSAGE_MAX=${Number(js.match(/LAST_MESSAGE_MAX=(\d+)/)[1])}
     const BLANK_ROW_VISIBLE_MS=${24 * 60 * 60 * 1000}
