@@ -1,22 +1,18 @@
-// Navigation must not re-load what is already on screen (2026-10-10, 0.4.17).
+// Navigation and the landing list clock (reworked 2026-10-13, 0.4.37).
 //
-// The phone's view switch is a SPA (`history.pushState`, no document reload), but
-// every navigation used to re-prove the data:
-//   • back to the list  → `showSessionList()` awaited a full `session.list`, which
-//     the Host answers as EVERY session of EVERY workspace (~195 KB / 469 rows),
-//     and then rebuilt the list DOM — so the list you were already looking at
-//     re-fetched, re-painted and lost its scroll position;
-//   • into a session    → the cached transcript painted, then `applyHistory`
-//     repainted the same messages because `openSession` resets `lastHistoryKey` to
-//     '' and an empty key never equals a real one.
-// Both reads are deliberate (the list must not go stale), so the fix is a window
-// and a key, not a cache:
-//   A. back-navigation re-fetches only when the catalogue is older than
-//      LIST_FRESH_MS, OR when the session being left is live (running / waiting on
-//      an answer) — that row is exactly what a reader goes back to look at;
-//   B. an instant paint seeds `lastHistoryKey` with the SAME expression
-//      `applyHistory` uses, so a follow-up fetch that changes nothing repaints
-//      nothing (and does not yank the transcript to the bottom).
+// The phone's view switch is a SPA (`history.pushState`, no document reload).
+// 0.4.17 gated the back-navigation re-fetch behind a freshness window because
+// the repaint flung the scroll to the top. 2026-10-13 the user ruled the other
+// way: a returning reader must see the truth immediately (「进入到主页面的时
+// 候就马上一次刷新」), a landing left standing re-reads on the slow LIST_POLL_MS
+// clock, and the scroll problem is solved where it lives — a render whose
+// markup did not change leaves the DOM (and the scroll position) untouched.
+//   A. back to the list  → always `refreshList`; repaint only on real change;
+//   B. landing standing  → the quiet LIST_POLL_MS poll (see section E);
+//   C. into a session    → an instant paint seeds `lastHistoryKey` with the
+//      SAME expression `applyHistory` uses, so a follow-up fetch that changes
+//      nothing repaints nothing (and does not yank the transcript to the
+//      bottom).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mobilePageAssets } from '../lib/pages.js'
@@ -32,39 +28,34 @@ const sliceTo = (start, end) => {
 }
 
 // ---------------------------------------------------------------------------
-// A — the list read on back-navigation is gated, not unconditional
+// A — the list read on back-navigation is unconditional; the paint is not
 // ---------------------------------------------------------------------------
 
-test('A the freshness window is a named constant and the stamp is declared', () => {
-  assert.match(js, /const SESSION_CACHE_MAX=\d+,LIST_FRESH_MS=\d+,LIST_ROWS_MAX=\d+;/, 'the navigation caps live together as named constants')
-  assert.match(js, /let bootListPartial=[\s\S]*?,listFetchedAt=\d+,openPrefetch=null;/, 'listFetchedAt and the prefetch slot are declared with the boot list state')
+test('A the navigation caps live together as named constants', () => {
+  assert.match(js, /const SESSION_CACHE_MAX=\d+,LIST_ROWS_MAX=\d+,LIST_POLL_MS=\d+;/, 'the navigation caps live together as named constants')
 })
 
-test('A applying a catalogue stamps its age, and a partial one stamps as expired', () => {
-  // `bootListPartial` is the SWR stand-in: a list that came from the stale window
-  // must not earn a fresh stamp, or the first back press would keep showing it.
-  assert.match(js, /listFetchedAt=bootListPartial\?0:Date\.now\(\)/, 'the stamp is taken where the list is applied')
-  const boot = sliceTo('function applyBootData(b){', 'function taskGlyph')
-  assert.match(boot, /listFetchedAt=bootListPartial/, 'and it is inside applyBootData, so every reader that applies rows stamps it')
-})
-
-test('A going back re-fetches only when the rows are old or the session being left is live', () => {
+test('A going back re-fetches unconditionally — the 0.4.17 window is retired', () => {
+  // 用户 2026-10-13：「进入到主页面的时候就马上一次刷新」。A reader who taps a
+  // row, reads the reply and comes back wants the CURRENT row, not the one they
+  // left behind — no age window decides otherwise.
   const leaving = sliceTo('async function showSessionList(){', 'function paintInstantHistory')
   assert.match(
     leaving,
-    /const wasLive=agentRunning\|\|pendingQuestion!==null;/,
-    'the live-ness is captured BEFORE syncPendingQuestion(null) clears it',
+    /\$\('sessionsView'\)\.classList\.add\('active'\);await refreshList\(false\);startListPoll\(\)\}/,
+    'the fetch is unconditional and arming the clock is the last statement of the leave path',
   )
-  assert.ok(
-    leaving.indexOf('const wasLive=') < leaving.indexOf('syncPendingQuestion(null)'),
-    'capturing after the reset would read false and starve the list of a refresh',
-  )
-  assert.match(
-    leaving,
-    /if\(wasLive\|\|Date\.now\(\)-listFetchedAt>LIST_FRESH_MS\)await refreshList\(false\)/,
-    'the fetch is conditional, and it is still the last statement of the leave path',
-  )
-  assert.doesNotMatch(leaving, /;\s*await refreshList\(false\)\}/, 'an unconditional re-fetch is not back')
+  assert.ok(!leaving.includes('LIST_FRESH_MS'), 'no freshness window survives')
+  assert.ok(!leaving.includes('wasLive'), 'no live-ness gate survives — every return re-reads')
+})
+
+test('A an unchanged catalogue repaints nothing, so the mandatory re-fetch keeps the scroll', () => {
+  // innerHTML always rebuilds nodes, even for an identical string — the 0.4.17
+  // scroll complaint lived exactly there. The repaint now happens only when the
+  // markup actually differs.
+  const render = sliceTo('function renderWorkspaces(){', 'function relativeTime')
+  assert.match(render, /const html=workspaces\.map\(/, 'the markup is built into a local first')
+  assert.match(render, /if\(host\.innerHTML!==html\)host\.innerHTML=html/, 'and assigned only when it differs')
 })
 
 test('A the manual refresh still forces the read', () => {
@@ -72,6 +63,56 @@ test('A the manual refresh still forces the read', () => {
   // refreshList directly, so a reader who wants the truth always gets it.
   assert.match(js, /\$\('listRefresh'\)\.onclick=[\s\S]*?refreshList\(true\)/, 'the list refresh button bypasses the window')
   assert.ok(js.includes('async function refreshList(showFeedback=false){try{await loadListData()'), 'refreshList itself never asks permission')
+})
+
+// ---------------------------------------------------------------------------
+// E — the landing keeps a slow clock of its own (2026-10-13, 0.4.37)
+//
+// Leaving a live session refreshed the list once, and then nothing on the
+// landing ever moved again: schedulePoll exits on !activeSession, so the row
+// kept its exit-moment state and timestamp until the reader happened to switch
+// tabs back (the only other resumeOnReturn trigger). The poll closes that gap.
+// ---------------------------------------------------------------------------
+
+test('E the landing poll re-arms itself and reads through resumeOnReturn, quietly', () => {
+  const poller = sliceTo('function stopListPoll()', 'function showToast')
+  assert.match(
+    poller,
+    /listPoll=setTimeout\(\(\)=>\{listPoll=null;if\(activeSession\|\|draftWorkspaceId\|\|document\.hidden\)return;void resumeOnReturn\(true\)\.finally\(startListPoll\)\},LIST_POLL_MS\)/,
+    'one tick re-arms the next, and a chat, a draft or a hidden tab stops the chain instead of racing it',
+  )
+  assert.match(
+    js,
+    /async function resumeOnReturn\(quiet\)\{[\s\S]*?if\(!quiet\)showError\('listError',e\)/,
+    'a background miss must not flash the error banner — announcing failure stays the manual refresh button\'s job',
+  )
+})
+
+test('E the poll lives exactly on the landing: armed on entry, disarmed into a chat', () => {
+  const leaving = sliceTo('async function showSessionList(){', 'function paintInstantHistory')
+  assert.match(leaving, /await refreshList\(false\);startListPoll\(\)\}/, 'back to the list arms the clock as its last statement')
+  const open = sliceTo('async function openSession(id,title', 'function handleHistory')
+  assert.match(open, /clearTimeout\(poll\);stopListPoll\(\);closeSessionStream\(\);/, 'entering a session disarms it beside the session poll')
+  const draft = sliceTo('function startDraftChat(workspaceId){', 'async function ensureSession()')
+  assert.match(draft, /stopListPoll\(\);draftWorkspaceId=workspaceId;/, 'a new-chat draft counts as a chat too')
+})
+
+test('E the poll also stops for a hidden tab and restarts with the page', () => {
+  assert.match(
+    js,
+    /pauseEventPolling\(\);stopListPoll\(\);return\}/,
+    'hidden stops the chain — visibilitychange is what restarts it',
+  )
+  assert.match(
+    js,
+    /else\{if\(tabWasHidden\)void resumeOnReturn\(\);startListPoll\(\)\}void checkConnection\(\)/,
+    'back on the landing the clock restarts (and the immediate resume still runs)',
+  )
+  assert.match(
+    js,
+    /scheduleOpenedMapSync\(\);void pullOpenedMapRemote\(\);startListPoll\(\);/,
+    'boot arms it too — the landing is on screen from the first paint',
+  )
 })
 
 // ---------------------------------------------------------------------------

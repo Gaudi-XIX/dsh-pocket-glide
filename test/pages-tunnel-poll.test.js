@@ -445,7 +445,7 @@ test('the page is wired: openSession goes through openRealtime and the SSE liste
   assert.ok(streamSlice.includes('applyTokenFrame(sessionId,frame)'), 'and so does the token listener')
   const closing = js.slice(js.indexOf('function closeSessionStream()'), js.indexOf('function applyHistory('))
   assert.ok(closing.includes("if(typeof stopEventPolling==='function')stopEventPolling()"), 'leaving a session stops the poller too')
-  assert.ok(js.includes('pauseEventPolling();return}'), 'hidden pauses the poll')
+  assert.ok(js.includes('pauseEventPolling();stopListPoll();return}'), 'hidden pauses the polls (events + the landing list clock)')
   assert.ok(js.includes('reopenRealtime();'), 'foreground goes through the dispatcher')
   const checking = 'async ' + extractFunction(js, 'checkConnection')
   const live = extractFunction(js, 'applyLiveStatus')
