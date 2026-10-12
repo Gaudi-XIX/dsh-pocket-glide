@@ -809,7 +809,13 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   「第一行显示的时间比第二行旧」。注释块占其中约 1.5 KB，按本文件既有规矩保留（不给下一位读者
 //   留一个没有理由的常量）。本机实测 HEAD 261a0d2 干净页 zh 271 625，本工作树混合态
 //   zh 282 770 / en 282 682（差额是他线在途改动，不是本笔）⇒ 取 284 000（余 1 230 B / 1 318 B）。
-const ASSET_BUDGET_BYTES = 284_000
+//   2026-10-12 P1（瞬移到底）再抬一次 284 000 → 288 000：三处修法共 +3 466 B（zh 286 236 / en 286 148），
+//   ① isNearBottom 的带宽不再恒为 120px，改为 `Math.min(SCROLL_FOLLOW_PX, Math.round(settled/2))`，
+//      短转录上 120px 不再等于「读者还在跟随」；② 滚动监听器加 250ms programmaticScroll 静默窗，
+//      窗内的帧记 pendingFollowFrame 而不是重上膛 followStream（程序化写与重排钳位都发真 scroll 事件）；
+//      ③ send 路径的两处 paintMessages 由硬编 true 改为发信前锁下的 readIntent。
+//   余量 1 764 B（zh）/ 1 852 B（en）——下一次抬之前先问「这笔增长解决了什么痛点」。
+const ASSET_BUDGET_BYTES = 288_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

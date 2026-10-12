@@ -51,8 +51,15 @@ const scrollOrgans = (locale = 'zh') => {
   const js = assets[locale].js
   const names = ['transcriptDistance', 'isNearBottom', 'anchorVisibleState', 'markHistoryTail']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
+  // 2026-10-12 P1: isNearBottom no longer trusts the raw 120px band alone — it caps the
+  // band at half the settled transcript height, so a 120px band cannot mean "the reader
+  // is still following" on a transcript that is barely taller than the viewport. That
+  // pulls settledTranscriptHeight (and its lastScrollHeight fallback) into this sandbox.
   return new Function(`
     const SCROLL_FOLLOW_PX=120,ANCHOR_LATEST_SCREENS=1.5,ANCHOR_LEAVE_SCREENS=1,ANCHOR_PROMPT_SCREENS=1,CV_TAIL_KEEP=8;
+    let lastScrollHeight=0;
+    function settledTranscriptHeight(){const box=$('messages');return box&&box.scrollHeight?box.scrollHeight:lastScrollHeight}
+    function $(){return null}
     ${body}
     return { transcriptDistance, isNearBottom, anchorVisibleState, markHistoryTail }
   `)()
@@ -390,7 +397,7 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   // The contract this assertion carries is unchanged and still holds: all of it
   // happens in ONE tick, so the re-decision, the anchor, the scroll anchors and the
   // top-edge pull can never be spread across frames and fight each other.
-  assert.match(js, /followStream=isNearBottom\(live\);if\(!followStream\)transcriptAnchor=readTranscriptAnchor\(live\);syncScrollAnchors\(\);topEdgePull\(live\)/, 'the same rAF tick re-decides the anchors and the top edge')
+  assert.match(js, /followStream=isNearBottom\(live\);if\(!followStream\)transcriptAnchor=readTranscriptAnchor\(live\);pendingFollowFrame=false\}else\{pendingFollowFrame=true\}syncScrollAnchors\(\);topEdgePull\(live\)/, 'the same rAF tick re-decides the anchors and the top edge（2026-10-12 P1 加入 programmaticScroll 静默窗：窗内的帧不许重上膛，改记 pendingFollowFrame）')
   // The deck's own geometry: the ↑ tile sits in the upper slot and ↓ in the lower one,
   // and ↑ chases the nearest question ABOVE the fold rather than the last question
   // (live report 2026-10-10: the tiles were stacked the wrong way round and ↑ died
@@ -401,7 +408,7 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   assert.match(js, /if\(anchorTopOf\(box,row\)<box\.scrollTop-JUMP_EDGE_PX\)return row/, 'and stops at the first one above the fold')
   assert.match(js, /function topEdgePull\(box\)\{probeMark\('sc'\);if\(box\.scrollTop>0\)\{topEdgeArmed=false;return\}if\(topEdgeArmed\)return;topEdgeArmed=true;/, 'the top-edge load is edge-triggered, one page per arrival（开头是滚动时序埋点的打点；边缘触发与一次到达只取一页两条语义不变）')
   assert.match(js, /if\(!activeSession\|\|!olderHasMore\|\|olderBusy\|\|olderRunBusy\)return;void loadOlder\(\)/, 'and it obeys every lock the deliberate pull obeys')
-  assert.match(js, /if\(typeof followStream==='undefined'\|\|followStream\)\{box\.scrollTop=box\.scrollHeight;if\(typeof probeMark==='function'\)probeMark\('bp'\)\}/, 'patchLastStreamMessage gates the stick on followStream（花括号里是可选打点 bp，门槛语义没变；守卫是为了测试沙箱按名抽取时不 ReferenceError）')
+  assert.match(js, /const stick=typeof followStream==='undefined'\|\|followStream;if\(stick\)\{if\(typeof programmaticScroll==='function'\)programmaticScroll\(\);box\.scrollTop=box\.scrollHeight;if\(typeof probeMark==='function'\)probeMark\('bp'\)\}/, 'patchLastStreamMessage gates the stick on followStream（花括号里是可选打点 bp，门槛语义没变；守卫是为了测试沙箱按名抽取时不 ReferenceError）')
   assert.match(assets.zh.document, /id="scrollAnchors"/, 'the anchor deck ships in the document')
   assert.match(js, /anchor-fab/, 'the fab styling ships')
   assert.match(assets.zh.css, /\.msg-hist\{content-visibility:auto;contain-intrinsic-size:auto 120px\}/)

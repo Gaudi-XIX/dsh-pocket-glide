@@ -152,7 +152,13 @@ test('the history page is merged into the live buffer, never assigned over it', 
 
 test('a send repaints from the live buffer, not from a stale snapshot', () => {
   const { js } = mobilePageAssets({ locale: 'zh' })
-  assert.ok(js.includes('paintMessages(messagesWithOptimistic(currentTranscript()),true)'))
+  // 2026-10-12 P1: the send path used to hard-code stickToBottom=true, so sending
+  // yanked a reader who was parked in the middle down to the bottom. It now repaints
+  // with the reader's own intent (latched before the send), so assert the live buffer
+  // AND that the latch is what is passed — not a bare `true`.
+  assert.ok(js.includes('const readIntent=typeof followStream===\'undefined\'?true:followStream'), 'the send must latch the reader intent before it mutates state')
+  assert.ok(js.includes('paintMessages(messagesWithOptimistic(currentTranscript()),readIntent)'))
+  assert.ok(!js.includes('paintMessages(messagesWithOptimistic(currentTranscript()),true)'), 'a send must not force a scroll to the bottom')
   assert.ok(!js.includes('paintMessages([...lastDurableMessages,...optimisticPrompts.map('))
 })
 

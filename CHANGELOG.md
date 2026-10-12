@@ -48,6 +48,35 @@
 `script-embedding` 的 PARSE 档绿。**渲染层与实机观感未覆盖**——观感类改动字符层绿不构成依据，
 目验单见 `docs/GUI-CHECKLIST.md`；真机验收项按各线 handoff 逐条走。
 
+### 0.4.32 补笔（2026-10-12 10:5x）：读者停在中间不再被新消息拽到底
+
+来源：`docs/HANDOFF-pocket瞬移到底与模型默认副作用-20261011.md` 的 **P1**（协调线 `session-451057b8`，
+8 发实锤、最大位移 13 042 px）。**这是本版唯一由值守线自己施工的一项**，其余六条均为代各线入库。
+
+三条口子各修一处，都在页内脚本的滚动机器里：
+
+- **带宽不再恒为 120 px**。`isNearBottom` 原写死 `dist<=SCROLL_FOLLOW_PX`（120），在一个只比视口高一点的
+  转录上，120 px 已接近半屏——代码自己在 `anchorVisibleState` 的注释里就承认过「Screens, not pixels：
+  一个像素数在长转录与短转录上不可能都表示『读者离开了』」，但那条认知只用在按钮上。现改为
+  `dist<=Math.min(SCROLL_FOLLOW_PX,Math.round(settled/2))`，短转录上带宽自动收窄。
+- **滚动监听器加 250 ms 静默窗**。它原来看见任何 scroll 就用原始几何重上膛 `followStream`，**不看事件来源**：
+  程序化写 `scrollTop`（每次绘制、每次锚点还原、每个 settle 循环）会发真 scroll 事件，重排把 `scrollTop`
+  往新的最大值钳一次也会发（键盘收放、`content-visibility` 估高转真高）。两者都曾在读者背后把跟随重新打开。
+  现在 `programmaticScroll()` 只在每个写点盖一个 `followReArmAllowedAt=now+250`，窗内到达的帧记
+  `pendingFollowFrame=true` 而不动 `followStream`，并由 `applyHistory` 在下一帧按当时的真实几何补一次判定
+  （窗长 250 ms > 本文件最长的 settle 链：`settlePromptJump` 4×100 ms、`settleOlderShift` 4×120 ms）。
+- **send 路径不再硬编贴底**。两处 `paintMessages(…,true)`（成功路径与失败回滚路径）改为发信前锁下的
+  `readIntent`：读者停在中间时发消息，乐观回显与失败回滚都留在原处；他本来就贴着底部时照旧跟随。
+
+同批：壳字节预算 `ASSET_BUDGET_BYTES` 284 000 → **288 000**（实测 zh 286 236 / en 286 148，余 1 764 / 1 852）。
+三处测试同步：`transcript-order` 的「send 从活缓冲重绘」档改钉 `readIntent` 并**断言不许再出现硬编 `true`**；
+`pages-scroll-anchors` 的 rAF 时序档补上 `pendingFollowFrame` 分支、`patchLastStreamMessage` 档改钉 `stick`
+新形状、`scrollOrgans` 沙箱补 `settledTranscriptHeight` 与 `$`（`isNearBottom` 新依赖，缺了它该档直接
+`ReferenceError`——正是本仓「沙箱漏名单」那条老坑）。
+
+验证：全量单跑（10:5x，无并发写入）＝**1102 项／1100 通过／0 失败／2 skip**。**实机观感未验**：
+本条修的是滚动时序，字符层绿不构成依据，须按 `docs/GUI-CHECKLIST.md` 真机复看「停在中间来新消息」一项。
+
 ## 0.4.31 — 2026-10-12
 
 **↑ 邮包作废：有消息就推，推送标题带真实会话名**。用户 2026-10-12 00:0x 裁定：「有消息就推，不管是完成
