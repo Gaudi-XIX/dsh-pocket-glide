@@ -107,7 +107,7 @@ test('the upload persists per device and survives a new bridge over the same sto
 
 // ------------------------------------------------------ the route, over HTTP
 
-test('the upload route stores per device, refuses garbage, and the landing obeys the synced ledger', async () => {
+test('the upload route stores per device, refuses garbage, and the ledger feeds the doc line', async () => {
   const dataDir = tempDataDir()
   try {
     const first = await startBridge({ bridgeOptions: { openedAtStore: createDefaultOpenedAtStore(dataDir) } })
@@ -151,8 +151,8 @@ test('the upload route stores per device, refuses garbage, and the landing obeys
 
       const doc2 = await httpFetch(`${base}/`, { headers: { cookie } })
       const markup2 = await doc2.text()
-      assert.match(markup2, /<body class="chat-open">/,
-        'the same list, all four synced as read → the landing is calm and opens the newest')
+      assert.doesNotMatch(markup2, /class="[^"]*chat-open/,
+        'the landing never opens a conversation (0.4.36) — the ledger decides the unread dots, not the jump')
       assert.match(first.logs.map((l) => l.message).join('\n'), /ledger=4/,
         'the doc line names the ledger size, so a real-device check can see the sync landed')
 
@@ -181,18 +181,19 @@ test('the upload route stores per device, refuses garbage, and the landing obeys
 
       const samePhone = await second.pairMobile('LandingCensus/1.0')
       const doc = await httpFetch(`${base}/`, { headers: { cookie: samePhone } })
-      assert.match(await doc.text(), /<body class="chat-open">/,
-        'a restart keeps the read ledger — the cold open IS the after-restart navigation')
+      assert.doesNotMatch(await doc.text(), /class="[^"]*chat-open/,
+        'the landing never opens a conversation (0.4.36) — the restart-persistent ledger now feeds the unread dots and the doc ledger line')
 
       // The second handset goes through the FULL funnel (pairMobile alone cannot
       // authorize a brand-new device — the LAN 302 only hands out a pending
       // cookie, and the page below would be the reconnect page passing the
-      // chat-open assertion for the wrong reason; the GET route's honest 401 is
+      // ledger assertion for the wrong reason; the GET route's honest 401 is
       // what exposed that).
       const otherPhone = await second.pairMobileTunnel('OtherHandset/2.0')
       const otherDoc = await httpFetch(`${base}/`, { headers: { cookie: otherPhone } })
-      assert.doesNotMatch(await otherDoc.text(), /<body class="chat-open">/,
-        'and another device with no synced ledger still sees four waiting conversations')
+      await otherDoc.text()
+      assert.match(second.logs.map((l) => l.message).join('\n'), /doc [^\n]*ledger=0/,
+        'another device with no synced ledger starts from an empty ledger line')
 
       // Pull-side isolation (0.4.35): the restarted device reads its own four
       // entries back; the other handset is never served someone else's reads.

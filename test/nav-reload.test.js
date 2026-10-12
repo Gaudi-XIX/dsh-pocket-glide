@@ -95,8 +95,8 @@ test('C a boot payload that names the transport sets it before the first stream'
   )
   const startup = sliceTo('const boot=takeHandoffBoot()', 'reconcileBoot()')
   assert.ok(
-    startup.indexOf('applyBootData(boot)') < startup.indexOf('openSession(target.sessionId'),
-    'the mode is adopted before startup opens its first realtime channel',
+    startup.includes('applyBootData(boot)') && !startup.includes('openSession('),
+    'the payload is consumed and startup never opens a session — the landing is the list (0.4.36)',
   )
 })
 
@@ -145,7 +145,7 @@ test('B a re-entry that painted from cache does not show the skeleton', () => {
   const open = sliceTo('async function openSession(id,title', 'function handleHistory')
   assert.match(
     open,
-    /const hadInstant=paintInstantSession\(!fromHistory\),instantPainted=hadInstant&&!!\$\('messages'\)\.querySelector\('\.message'\);/,
+    /const hadInstant=paintInstantSession\(\),instantPainted=hadInstant&&!!\$\('messages'\)\.querySelector\('\.message'\);/,
     'instantPainted is the real question: did pixels land, not did a branch run',
   )
   assert.match(open, /if\(!instantPainted\)\$\('messages'\)\.innerHTML=loadingShell\(\)/, 'the skeleton only replaces nothing')

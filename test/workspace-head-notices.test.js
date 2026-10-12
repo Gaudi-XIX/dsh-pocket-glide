@@ -176,7 +176,7 @@ test('a notice comes with the newest row clock, and the notice rows keep their o
 
 // ---------------------------------------------------- 2. the model on every row
 
-test('each row names the model its session runs on, in the clock line', () => {
+test('each row names the model its session runs on, provider first (desktop parity)', () => {
   const markup = listSandbox({
     summaries: [
       row({ sessionId: 'a', updatedAt: ago(1), projections: { values: { modelSelection: { next: { provider: 'dsh', model: 'deepseek-chat' } } } } }),
@@ -185,8 +185,8 @@ test('each row names the model its session runs on, in the clock line', () => {
   })
   const clocks = [...markup.matchAll(/<time>([^<]*)<\/time>/g)].map((m) => m[1])
   assert.equal(clocks.length, 2, 'one clock line per row')
-  assert.ok(clocks[0].endsWith(' · deepseek-chat'), `row a clock carries its model — got ${clocks[0]}`)
-  assert.ok(clocks[1].endsWith(' · deepseek-reasoner'), `row b clock carries its own — got ${clocks[1]}`)
+  assert.ok(clocks[0].endsWith(' · dsh/deepseek-chat'), `row a clock carries provider/model — got ${clocks[0]}`)
+  assert.ok(clocks[1].endsWith(' · dsh/deepseek-reasoner'), `row b clock carries its own — got ${clocks[1]}`)
 })
 
 test('no selection projection means the clock stands alone (nothing invented)', () => {

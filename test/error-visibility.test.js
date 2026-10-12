@@ -662,32 +662,7 @@ test('AC-D4 a disconnect and a snapshot both drop the half-finished token bubble
 
 // ----------------------------------------------------------------------- AC-X2 (X3-1)
 
-test('AC-X2 the same-session early exit clears handoffPainted', async () => {
-  // Behaviour level: run the real early return and watch the flag.
-  const source = 'async ' + extractFunction(js, 'openSession')
-  const make = new Function(`
-    let activeSession='s1',streamConnected=true,handoffPainted=true,poll=null
-    function closeSessionStream(){throw new Error('the early exit must not tear the stream down')}
-    function clearTimeout(){return 0}
-    ${source}
-    return { openSession, get handoffPainted(){return handoffPainted} }
-  `)
-  const sandbox = make()
-  await sandbox.openSession('s1', '标题')
-  assert.equal(sandbox.handoffPainted, false, 'the flag may not survive a no-op openSession')
-})
 
-test('AC-X2 the handoff fast path still keeps its flag', () => {
-  // The reset belongs on the early exit only: noteHandoffCoverage sets the flag before
-  // openSession is entered, so a blanket reset at the top would make every handoff pay
-  // the 900ms history RPC again (WP-A1 AC-A5).
-  const open = between('async function openSession(id,title', 'function armSkeletonWatchdog')
-  const early = open.indexOf('if(activeSession===id&&streamConnected&&!fromHistory)')
-  assert.notEqual(early, -1, 'the early exit is still there')
-  const reset = open.indexOf('handoffPainted=false', early)
-  assert.ok(reset > -1 && reset < open.indexOf('return', early), 'the reset runs on that path')
-  assert.ok(js.includes('if(activeSession===id&&firstFrame!==true&&!handoffPainted)await loadHistory(true);'), 'the skip it protects is intact')
-})
 
 // -------------------------------------- 三条更早消息的路径必须同构（WP-A1 残留不对称）
 

@@ -366,7 +366,7 @@ test('desktop endpoints: /desktop/notify/clawbot/qr and /status work end-to-end'
 // 额度计数（用户 2026-10-10 提的要求：推送上给个计数）。一条入站消息换 10 条出站——
 // 本机 11:00 受控实验实测（就绪回执 + 9 条推送全成功，第 11 条起 ret=-2 prepare failed），
 // 所以正文尾巴上的「第 N/10 条」就是用户唯一的可见刻度：看到 10 就知道该回一句了。
-test('clawbot quota: 计数预占、第 10 条之后改说已超、别的通道一个字都不加', async () => {
+test('clawbot quota: 数字不上屏、最后一条捎话、计数落盘、别的通道一个字都不加', async () => {
   const dir = makeTempDir('dsh-pocket-quota-note-')
   const t = await startBridge({
     bridgeOptions: {
@@ -376,17 +376,23 @@ test('clawbot quota: 计数预占、第 10 条之后改说已超、别的通道�
   })
   try {
     const clawbot = { channel: 'clawbot' }
-    assert.equal(t.bridge.clawbotQuotaTail(clawbot), '（第 1/10 条）')
+    const store = t.bridge.options.settingsStore
+    assert.equal(t.bridge.clawbotQuotaTail(clawbot), '', '第 9 条之前正文一个字不加（数字不再上屏）')
     let tail = ''
     for (let i = 0; i < CLAWBOT_QUOTA_LIMIT - 1; i++) tail = t.bridge.clawbotQuotaTail(clawbot)
-    assert.equal(tail, `（第 ${CLAWBOT_QUOTA_LIMIT}/${CLAWBOT_QUOTA_LIMIT} 条）`, '第 10 条仍是序号')
+    assert.equal(tail, '（额度用完，在微信回一句就续上）', '第 10 条＝额度内最后一条，捎话必须在通道死掉之前说')
+    assert.equal(store.load()?.notify?.clawbot?.quotaUsed, CLAWBOT_QUOTA_LIMIT, '计数落盘：重启不再从 0 骗小')
     tail = t.bridge.clawbotQuotaTail(clawbot)
-    assert.ok(tail.includes('已超') && tail.includes('在微信回一句'), '超出的说法要给出下一步动作')
+    assert.equal(tail, '', '超限后的推送本就被服务端拒（onQuota 挂起），不再文案')
     assert.equal(t.bridge.clawbotQuotaTail({ channel: 'bark' }), '', '其它渠道没有这份额度')
     assert.equal(t.bridge.clawbotQuotaTail({ channel: 'off' }), '')
     assert.equal(t.bridge.clawbotQuotaUsed, CLAWBOT_QUOTA_LIMIT + 1, '别的通道不能占计数')
     t.bridge.refillClawbotQuota()
-    assert.equal(t.bridge.clawbotQuotaTail(clawbot), '（第 1/10 条）', '续期后从头数')
+    assert.equal(store.load()?.notify?.clawbot?.quotaUsed, 0, '入站续期把归零也写进盘')
+    assert.equal(t.bridge.clawbotQuotaTail(clawbot), '', '续期后重新从无声计数开始')
+    assert.equal(store.load()?.notify?.clawbot?.quotaUsed, 1, '预占的那条也落盘')
+    t.bridge.rollbackClawbotQuota()
+    assert.equal(store.load()?.notify?.clawbot?.quotaUsed, 0, '传输丢失回滚预占的那一条')
   } finally {
     await t.stop()
     fs.rmSync(dir, { recursive: true, force: true })
@@ -456,10 +462,12 @@ test('clawbot quota: 计数真的进了发给微信的那段文字，入站一�
         step()
       })
 
-    // 第一条入站：watcher 回就绪回执，回执自己就是第 1 条。
+    // 第一条入站：watcher 回就绪回执。数字不再上屏（2026-10-12 用户拍板）——
+    // 回执自己仍占一条额度，只是不再把「第 1/10」印出来。
     await wait(() => sent.length >= 1)
     assert.equal(sent[0].token, 'ctx_fresh', '回执用刚换到的新令牌')
-    assert.ok(sent[0].text.includes('（第 1/10 条）'), '就绪回执也带计数——它确实吃掉一条额度')
+    assert.ok(sent[0].text.includes('已就绪'), '就绪回执正文在')
+    assert.ok(!sent[0].text.includes('/10 条'), '数字不再上屏')
 
     const push = () =>
       httpFetch(`${t.base}/desktop/notify/test`, { method: 'POST', headers }).then((r) => r.json())
@@ -469,9 +477,9 @@ test('clawbot quota: 计数真的进了发给微信的那段文字，入站一�
     // 隧道是异步拉起来的（cloudflared 冷启动要下载），它什么时候落到 sent[] 里不保证，
     // 所以这里按**测试推送**取，不按下标——按下标会被地址那条挤位。
     const pushAt = (n) => sent.filter((s) => s.text.includes('这是一条测试通知'))[n]
-    assert.ok(pushAt(0).text.includes('（第 2/10 条）'), pushAt(0).text)
-    assert.ok(pushAt(1).text.includes('（第 3/10 条）'), pushAt(1).text)
-    assert.ok(pushAt(1).text.includes('这是一条测试通知'), '计数是尾巴，不是替换正文')
+    assert.ok(!pushAt(0).text.includes('/10 条'), pushAt(0).text)
+    assert.ok(!pushAt(1).text.includes('/10 条'), pushAt(1).text)
+    assert.ok(pushAt(1).text.includes('这是一条测试通知'), '测试推送正文在')
 
     // 再来一条入站，令牌字符串与存档**相同**（isNew 为假、不进回执分支），
     // 计数照样必须归零——这正是「落盘时间不能当判据」那条铁律的代码侧版本。
@@ -482,7 +490,7 @@ test('clawbot quota: 计数真的进了发给微信的那段文字，入站一�
     // 「说一句就能拿到能打开的地址」），那是另一条线，拿总条数当替身会把它算进来。
     const pushes = sent.filter((s) => s.text.includes('这是一条测试通知'))
     assert.equal(pushes.length, 3)
-    assert.ok(pushes[2].text.includes('（第 1/10 条）'), '同令牌重复入站也算续期：重新从第 1 条数')
+    assert.ok(!pushes[2].text.includes('/10 条'), '同令牌重复入站也算续期：重新从无声计数开始')
   } finally {
     await t.stop()
     fs.rmSync(dir, { recursive: true, force: true })

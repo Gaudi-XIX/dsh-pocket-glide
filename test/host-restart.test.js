@@ -22,11 +22,12 @@ test('the phone home document carries the header button and the confirm card say
     assert.match(html, /id="hostRestart" class="head-icon"/, 'the power button sits in the home header')
     assert.match(html, /id="hostCard" class="host-card"/)
     assert.match(html, /id="hostGo" type="button" class="is-danger"/)
-    // 用户 2026-10-12 定的四条丑话，确认卡必须写全，让用户自适应：
+    // 用户 2026-10-12 定的丑话（原四条，额度与隧道两条同年精简合并为一条），
+    // 确认卡必须写全，让用户自适应：
     assert.match(html, /所有会话中断/)
     assert.match(html, /唯一回执是微信推送/)
     assert.match(html, /回任意一句话/)
-    assert.match(html, /公网隧道是关着的/)
+    assert.match(html, /隧道默认关着/)
     // 页面 JS 在外链 /app.js（壳资产）里：退出调用要在那里验，不在文档里。
     const appJs = await httpFetch(t.base + '/app.js', { headers: { cookie } })
     assert.equal(appJs.status, 200)

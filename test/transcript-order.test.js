@@ -191,14 +191,9 @@ test('short transcripts keep pulling older pages until the viewport is filled', 
   assert.ok(js.includes('pages<8'), 'the fill loop must be bounded')
   assert.ok(js.includes('const deadline=Date.now()+6000'), 'the fill loop needs a time budget')
   assert.ok(js.includes('void ensureTranscriptFilled()'), 'a finished page triggers the next fill')
-  // 2026-10-02: the handoff path (paintInstantHistory) deliberately skips the
-  // history RPC, and openSession's own call ran before the handoff had set
-  // olderHasMore, so the fill loop was never armed on the normal phone boot
-  // path: a short handoff left the chat half empty on a tall screen.
-  assert.ok(js.includes('void ensureTranscriptFilled();return true}'), 'the embedded handoff must arm the fill loop')
   assert.ok(
-    js.split('void ensureTranscriptFilled()').length - 1 >= 3,
-    'fill must be armed at boot, after every page, and after openSession',
+    js.split('void ensureTranscriptFilled()').length - 1 >= 2,
+    'fill must be armed after every page and from the viewport refiller',
   )
   // The page size belongs to the transport, not to the layout: raising it to
   // "show more messages" is the treadmill the fix exists to avoid.
@@ -275,10 +270,6 @@ test('AC-PERF the exhausted latch follows its session and never blocks an empty 
   assert.ok(
     js.includes('olderHasMore=cached.olderHasMore;olderExhausted=cached.olderExhausted===true;'),
     'the cached latch comes back with its own session',
-  )
-  assert.ok(
-    js.includes('olderHasMore=embeddedFocus.history.hasMore===true;olderExhausted=false;'),
-    'a fresh handoff snapshot clears it',
   )
 
   // The latch only ever closes the row for a session that has real content; an
@@ -369,7 +360,10 @@ test('one back action always leaves the chat view', () => {
     'a stale duplicate chat entry collapses to the session list instead of reopening the same chat',
   )
   assert.ok(js.includes("history.state?.view==='chat'&&history.length>1"), 'a single-entry stack does not press a dead back button')
-  assert.ok(js.includes('await openSession(target.sessionId,titleFor(target),false,true)'), 'the resume jump pushes its chat entry: the current entry while the list shows IS the synthetic sessions anchor, and replacing it left back/swipe exiting the app (live report 2026-10-09)')
+  assert.ok(
+    !js.includes('await openSession(target.sessionId'),
+    'the landing opens nothing at all (0.4.36「默认点链接就进主页面」): the retired resume jump pushed a chat entry the reader never asked for',
+  )
   assert.ok(
     !js.includes('openSession(nextFocus.sessionId'),
     'the boot reconcile opens nothing at all: a reconcile jump inside a chat the reader never chose is what put them one entry away from the exit (live report 2026-10-12, back button left the app)',
@@ -423,18 +417,6 @@ test('handleHistory leaves the chat when a stale chat entry arrives while it is 
   }
 })
 
-// 2026-10-02 live report: from a freshly reconnected chat, the browser's own edge
-// swipe left the app instead of returning to the workspace list. The in-app back
-// button can compensate with history.length>1, the edge swipe cannot — so a boot
-// that adopts the conversation must already have a list entry underneath it.
-test('a boot straight into the conversation keeps a workspace entry under it', () => {
-  const { js } = mobilePageAssets({ locale: 'zh' })
-  assert.ok(js.includes("history.replaceState({view:'sessions'},'')"), 'the landing entry is a sessions entry')
-  assert.ok(
-    js.includes("if(document.body.classList.contains('chat-open'))history.pushState({view:'sessions'},'')"),
-    'the adopted chat view needs a second sessions entry below it, or a swipe leaves the app',
-  )
-})
 
 // 2026-10-02 live report: reconnecting to an already-paired phone lands on a chat
 // whose transcript arrives one tunnel round trip later (the desktop deliberately

@@ -202,6 +202,37 @@ test('rows without projections and non-row values survive', () => {
   assert.equal(compactSessionRows(undefined), undefined)
 })
 
+// A session the host flags as errored must reach the phone STILL flagged as
+// errored (user report 2026-10-12: a died session showed a green check). The
+// common shape — a long lastError prose string — failed isSmallRowValue and was
+// dropped whole; the compact row now always carries a bounded signal in the
+// field taskState already reads, so it can never disagree with the raw row the
+// bridge's own notify check reads.
+test('a long lastError survives compaction as a bounded signal', () => {
+  const prose = 'x'.repeat(600) + ' — boom'
+  const [row] = compactSessionRows([{ sessionId: 'e1', updatedAt: 1, lastError: prose }])
+
+  assert.equal(typeof row.lastError, 'string')
+  assert.ok(row.lastError.length <= SESSION_ROW_TEXT_LIMIT, 'bounded to the same 200-char cap')
+  assert.ok(row.lastError.length > 0, 'non-empty: taskState only needs the flag, not the prose')
+})
+
+test('an object-shaped error still marks the compact row as errored', () => {
+  const [row] = compactSessionRows([{ sessionId: 'e2', updatedAt: 1, error: { code: -32000, message: 'y'.repeat(400) } }])
+
+  assert.equal(typeof row.lastError, 'string')
+  assert.ok(row.lastError.length > 0)
+})
+
+test('a short lastError and a clean row pass through untouched', () => {
+  const [short] = compactSessionRows([{ sessionId: 'e3', updatedAt: 1, lastError: 'short boom' }])
+  assert.equal(short.lastError, 'short boom')
+
+  const [clean] = compactSessionRows([{ sessionId: 'e4', updatedAt: 1 }])
+  assert.equal(clean.lastError, undefined)
+  assert.equal('lastError' in clean, false)
+})
+
 // ---------------------------------------------------------------------------
 // RC-3 (2026-10-02 rescan): the allowlist named `todos` and `modelSelection` by
 // intent, not by size, and `compactRowValues` `continue`d past the string cap

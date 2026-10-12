@@ -204,20 +204,6 @@ test('B-3 a second arm does not strand the first await on the fallback timer', a
 
 // ---------------------------------------------------------------------------- B-4
 
-test('B-4 provisionalSession is declared before the boot IIFE reads it', () => {
-  const declared = js.indexOf('provisionalSession=false')
-  const boot = js.indexOf('const boot=takeHandoffBoot()')
-  assert.notEqual(declared, -1, 'the flag must be initialised in the page-wide declaration chain')
-  assert.notEqual(boot, -1, 'the boot IIFE must still read a handoff boot')
-  assert.ok(declared < boot, 'a later declaration would leave the boot IIFE in its temporal dead zone')
-  assert.equal(
-    (js.match(/let provisionalSession/g) || []).length,
-    0,
-    'the flag must not be re-declared below the boot IIFE',
-  )
-  assert.ok(js.includes('provisionalSession=true'), 'the handoff path still marks the visit provisional')
-  assert.ok(js.includes('if(!provisionalSession)return;'), 'and the first real gesture still drops the provisional claim')
-})
 
 // ---------------------------------------------------------------------------- B-5
 
@@ -335,23 +321,12 @@ test('B-6 the cancel button cannot reject unhandled', () => {
 
 // ---------------------------------------------------------------------------- B-7
 
-test('B-7 a re-entry into the session already on screen drops the handoff claim', () => {
-  // Anchored on the guard itself rather than on the function that follows it: the
-  // next declaration is not a stable anchor, but this exact condition only occurs here.
-  const start = js.indexOf('if(activeSession===id&&streamConnected&&!fromHistory)')
-  assert.notEqual(start, -1, 'the re-entry guard must exist')
-  const body = js.slice(start, start + 120)
+test('B-7 a re-entry into the session already on screen stays a no-op', () => {
+  const body = extractFunction(js, 'openSession')
+  assertSpliceable(body, 'openSession')
   assert.ok(
-    body.startsWith('if(activeSession===id&&streamConnected&&!fromHistory){handoffPainted=false;return}'),
-    'the early exit must clear the handoff paint flag, or the fetch path stays vetoed for the rest of the visit',
-  )
-  assert.ok(
-    !js.includes('&&!fromHistory)return;'),
-    'the unconditional form of that early exit must be gone',
-  )
-  assert.ok(
-    js.includes('if(activeSession===id&&streamConnected&&!fromHistory)'),
-    'and the guard it belongs to is unchanged',
+    body.includes('if(activeSession===id&&streamConnected&&!fromHistory)return;'),
+    'the same-session early exit survives — the handoff flag it used to clear retired with the handoff (0.4.36)',
   )
 })
 
@@ -365,7 +340,7 @@ test('B-8 closing a session empties the per-session state the next visit would i
     let tokenStream=null,streamConnected=false,streamEvents=[],olderEvents=[]
     let olderHasMore=false,olderBusy=false,olderExhausted=false
     let streamProjections=null,streamNeedsFullPaint=false,streamRevision=0
-    let activeSession='s1',embeddedFocus={sessionId:'s1',history:{events:[]}}
+    let activeSession='s1'
     const turnOpenState=new Map(),streamWatermarks=new Map()
     function clearSkeletonWatchdog(){}
     function clearStreamStaleWatch(){}
@@ -387,7 +362,7 @@ test('B-8 closing a session empties the per-session state the next visit would i
         streamWatermarks.set('s1',42)
       },
       state:()=>({ tokenStream,streamConnected,streamEvents,olderEvents,olderHasMore,olderBusy,olderExhausted,
-        streamProjections,streamNeedsFullPaint,streamRevision,turnOpenState,streamWatermarks,embeddedFocus }),
+        streamProjections,streamNeedsFullPaint,streamRevision,turnOpenState,streamWatermarks }),
     }
   `)
   const sandbox = make()
@@ -407,7 +382,6 @@ test('B-8 closing a session empties the per-session state the next visit would i
   assert.equal(state.streamRevision, 0)
   assert.equal(state.turnOpenState.size, 0, 'the open/closed turn map is per session')
   assert.equal(state.streamWatermarks.has('s1'), false, 'and so is the watermark of the session being left')
-  assert.equal(state.embeddedFocus, null, 'the handoff focus must not outlive the session it names')
 })
 
 test('B-8 the two fill locks release themselves instead of being cleared from outside', () => {

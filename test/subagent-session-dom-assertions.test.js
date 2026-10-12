@@ -11,7 +11,7 @@
 //   * the control that makes the busy assertion mean anything — an ordinary failure
 //     MUST still paint the retry row. Without it, "no writes" would also be what a
 //     broken render path produces, and the busy test would pass for the wrong reason;
-//   * renderWorkspaces()/pickFocusSession() run against synthetic state, so the blank-row
+//   * renderWorkspaces() runs against synthetic state, so the blank-row
 //     fallback that keeps a filtered id from ghosting is observed rather than described;
 //   * a mutation case: feed the UNPROJECTED rows and watch the rule break. That is the
 //     discriminating-power receipt for this whole file — see the R1.3 comment.
@@ -71,9 +71,6 @@ const LIST_ROWS_MAX = Number(js.match(/LIST_ROWS_MAX=(\d+)/)[1]);
 // The workspace head builds its notices through wsFlagsOf/wsFlagHtml (0.4.31), which
 // read this same ceiling out of page scope — the sandbox has to declare it too.
 const WS_FLAGS_MAX = Number(js.match(/WS_FLAGS_MAX=(\d+)/)[1]);
-// pickFocusSession now asks landingBusy first (the crowded-workspace rule), and
-// landingBusy reads the threshold and the bridge's count out of page scope.
-const LANDING_ATTENTION_MAX = Number(js.match(/LANDING_ATTENTION_MAX=(\d+)/)[1]);
 
 // loadHistory's catch reads the errorCode off whatever its rpc rejected with, so the
 // sandbox below hands it a hand-written `rpc` stub that throws the Error this file
@@ -205,7 +202,6 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     const BLANK_ROW_VISIBLE_MS=${BLANK_ROW_VISIBLE_MS}
     const LIST_ROWS_MAX=${LIST_ROWS_MAX}
     const WS_FLAGS_MAX=${WS_FLAGS_MAX}
-    const LANDING_ATTENTION_MAX=${LANDING_ATTENTION_MAX}
     // These tests pin projection/row/pill behavior, not the unread census: recency 0
     // keeps never-opened rows quiet exactly as they were before 0.4.33 (every fixture
     // here is fresh + the ledger is empty). The census itself is pinned in
@@ -243,12 +239,8 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'wsFlagsOf')}
     ${extractFunction(js, 'wsFlagHtml')}
     ${extractFunction(js, 'renderWorkspaces')}
-    ${extractFunction(js, 'needsAttention')}
-    ${extractFunction(js, 'landingBusy')}
-    ${extractFunction(js, 'pickFocusSession')}
     return {
       renderWorkspaces,
-      pickFocusSession,
       visibleSessions,
       taskState,
       taskGlyph,
@@ -279,12 +271,8 @@ test('R1.2 focus is picked from the projected rows only', () => {
   const sandbox = buildRenderSandbox({ summaries: projected });
 
   assert.deepEqual(projected.map((s) => s.sessionId), ['s2', 's1'], 'the subagent row never reaches sessionSummaries');
-  assert.equal(sandbox.pickFocusSession(), running, 'a subagent asking a question cannot steal focus');
-
-  // With nothing but blanks and missing summaries left there is no focus to pin — null,
-  // not a stale row. (pickFocusSession filters !missingSummary && !blank before counting.)
-  const empty = buildRenderSandbox({ summaries: [{ sessionId: 'x', blank: true }, { sessionId: 'y', missingSummary: true }] });
-  assert.equal(empty.pickFocusSession(), null, 'no usable row means no pinned session');
+  // The focus picker itself retired with the landing jump (0.4.36); what is pinned
+  // here is that the projection the list renders is the one visibleSessions keeps.
 });
 
 test('R1.2 the workspace list paints the projected row and nothing else', () => {
@@ -326,14 +314,13 @@ test('R1.2 a projected-away id lands on the empty state, not on a ghost row', ()
 
 // ------------------------------------------------------------------ R1.3 mutation
 
-test('R1.3 mutation: unprojected rows ghost, leak and steal focus — the projection is load-bearing', () => {
+test('R1.3 mutation: unprojected rows ghost and leak — the projection is load-bearing', () => {
   // This is the discriminating-power receipt for the whole file. It feeds the SAME
-  // renderWorkspaces()/pickFocusSession() the three tests above used, with the ONE
-  // difference that the rows skipped visibleSessions(). Every guarantee above inverts:
+  // renderWorkspaces() the tests above used, with the ONE difference that the rows
+  // skipped visibleSessions(). Every guarantee above inverts:
   //
   //   * the subagent becomes a clickable row twice (once per workspace),
-  //   * its transcript title leaks into the markup,
-  //   * pickFocusSession() pins the child session.
+  //   * its transcript title leaks into the markup.
   //
   // If any assertion in this file were "rewritten until true" instead of observed, this
   // case would have to go red with it — it runs the page's real render, so a fake
@@ -358,9 +345,6 @@ test('R1.3 mutation: unprojected rows ghost, leak and steal focus — the projec
 
   assert.deepEqual(sandbox.rowIds(), ['sub1', 's1', 'sub1'], 'the child is a row in both workspaces');
   assert.ok(sandbox.markup.includes('CHILD-SECRET'), 'and its title is on screen');
-  const focused = sandbox.pickFocusSession();
-  assert.equal(focused.sessionId, 'sub1', 'focus follows the child asking the question');
-  assert.equal(focused.projections.values.title, 'CHILD-SECRET', 'and the pinned row is the leaking one');
 });
 
 // --------------------------------- R1-audit item 4 (change 2026-10-04-fix-pocket-r1-audit-batch)
