@@ -8,7 +8,12 @@
 //   A 把 #tunnelConfigPanel 塞回 #deviceExtras 里 -> A 红
 //   B 把 #pendingPairings 放回 .pairing-content   -> B 红
 //   C 给 body 重新加 phone-connected 并按连接态隐藏 .pairing-content -> C 红
-//   D 给两个连接模式键重新按 connected 上 disabled / 给 switchMode 加 phoneConnected 早退 -> D 红
+//   D 连上时给两个连接模式键去掉 disabled / 去掉 switchMode 的 phoneConnected 早退 -> D 红
+//
+// D 的取向是用户 2026-10-12 09:3x 定的（原话：这个风险还不如不让切换呢）：
+// 连接态切模式会真把隧道切掉，正走公网的手机会掉线 —— 该风险大于「提前填固定地址」的收益，
+// 所以两键在连接态保持禁用。桥侧能力不变（M4「A live phone is not a reason to refuse」
+// 与 /desktop/tunnel/config 无门禁都还在），被禁的只是页面这一层。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -72,11 +77,12 @@ test('A the fixed-hostname panel is reachable: it is not a descendant of the dev
     assert.ok(!chain.some((item) => item.includes('pairing-content')),
       `#tunnelConfigPanel is not inside .pairing-content either (${chain.join(' > ')})`)
   }
-  // Its own gate is the tunnel view — and that view is openable, see D.
+  // Its own gate is the tunnel view. Reachable on a fresh page; with a phone on the
+  // line the mode keys are disabled (see D), so it is reachable once that phone goes away.
   assert.match(freshPage(), /<div id="tunnelConfigPanel" class="pin-panel show"/,
     'the fresh page lands on the tunnel view, so the panel opens')
   assert.match(connectedPage(), /<div id="tunnelConfigPanel" class="pin-panel"/,
-    'the connected page lands on the devices view, so it starts closed but is one tab away')
+    'the connected page lands on the devices view, so it starts closed')
 })
 
 test('B the pairing requests are never behind the connection card', () => {
@@ -120,19 +126,22 @@ test('C nothing is hidden because a phone is connected', () => {
   }
 })
 
-test('D the connection-mode keys stay live while a phone is connected', () => {
+test('D the connection-mode keys are disabled while a phone is connected', () => {
   const page = connectedPage()
   for (const id of ['btnLan', 'btnTunnel']) {
     const tag = (page.match(new RegExp(`<button id="${id}"[^>]*>`)) ?? [''])[0]
     assert.ok(tag, `${id} renders`)
-    assert.ok(!tag.includes('disabled'), `${id} is not gated on the connection state`)
+    assert.ok(tag.includes('disabled'), `${id} is gated on the connection state`)
   }
-  assert.match(PAGES_SOURCE, /function syncModeControls\(connected\)\{phoneConnected=connected;const disabled=modeSwitching/,
-    'only an in-flight switch disables the keys')
-  assert.match(PAGES_SOURCE, /async function switchMode\(enableTunnel\)\{if\(modeSwitching\)return/,
-    'switchMode no longer refuses a live phone, matching the bridge ruling')
-  assert.ok(!/if\(phoneConnected\|\|modeSwitching\)return/.test(PAGES_SOURCE),
-    'the old connected-gate on switchMode stays deleted')
+  // A fresh page has no phone, so the keys are live and the mode can be chosen.
+  for (const id of ['btnLan', 'btnTunnel']) {
+    const tag = (freshPage().match(new RegExp(`<button id="${id}"[^>]*>`)) ?? [''])[0]
+    assert.ok(!tag.includes('disabled'), `${id} is live when nothing is connected`)
+  }
+  assert.match(PAGES_SOURCE, /function syncModeControls\(connected\)\{phoneConnected=connected;const disabled=connected\|\|modeSwitching/,
+    'a live phone disables the keys, as does an in-flight switch')
+  assert.match(PAGES_SOURCE, /async function switchMode\(enableTunnel\)\{if\(phoneConnected\|\|modeSwitching\)return/,
+    'and switchMode refuses to swap the tunnel out from under a connected phone')
 })
 
 test('E a live phone does not stop the desktop from saving the tunnel hostname', async () => {

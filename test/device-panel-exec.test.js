@@ -420,7 +420,7 @@ test('D the armed revoke state survives a poll() redraw cycle', async () => {
  * G  three mode keys, and none of them is gated on a live phone
  * ------------------------------------------------------------------ */
 
-test('G the mode switch ships exactly three keys and none is gated on a live phone', () => {
+test('G the mode switch ships exactly three keys and only the devices key stays live when connected', () => {
   const page = PAGES_SOURCE.slice(PAGES_SOURCE.lastIndexOf('<div class="mode-panel">'),
     PAGES_SOURCE.lastIndexOf('</style>'))
   // count the mode buttons in the rendered mode bar
@@ -428,14 +428,16 @@ test('G the mode switch ships exactly three keys and none is gated on a live pho
   assert.equal(buttons.length, 3, 'the mode switch must render exactly three keys')
   assert.match(page, /<button id="btnDevices"[^>]*data-action="mode-devices"/,
     'the third key is the device management key')
-  // connected=true used to disable the two connection keys. That lock was the bug
-  // (user report 2026-10-12): the bridge answers /desktop/tunnel/toggle for a live phone
-  // on purpose, and the hostname fields sit behind those keys.
+  // connected=true disables the two connection keys on purpose (user ruling 2026-10-12 09:3x):
+  // switching modes with a phone on the line really swaps the tunnel and drops that phone.
+  // The bridge still allows the call (M4: "A live phone is not a reason to refuse"); only the
+  // page refuses, so the user does not lose the phone by a stray tap.
   const lan = (page.match(/<button id="btnLan"[^>]*>/) || [''])[0]
   const tunnel = (page.match(/<button id="btnTunnel"[^>]*>/) || [''])[0]
   const devices = (page.match(/<button id="btnDevices"[^>]*>/) || [''])[0]
-  assert.ok(!lan.includes('disabled') && !tunnel.includes('disabled'),
-    'a live phone must not gate the two connection keys')
+  const connectedGate = /\$\{options\.connected \? ' disabled' : ''\}/
+  assert.match(lan, connectedGate, 'the LAN key is gated on the connection state')
+  assert.match(tunnel, connectedGate, 'and so is the tunnel key')
   assert.ok(!devices.includes('disabled'),
     'the devices key must NOT carry disabled even when connected')
   assert.ok(devices.includes('active'),
