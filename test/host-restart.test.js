@@ -27,6 +27,10 @@ test('the phone home document carries the header button and the confirm card say
     assert.match(html, /唯一回执是微信推送/)
     assert.match(html, /回任意一句话/)
     assert.match(html, /公网隧道是关着的/)
+    // 页面 JS 在外链 /app.js（壳资产）里：退出调用要在那里验，不在文档里。
+    const appJs = await httpFetch(t.base + '/app.js', { headers: { cookie } })
+    assert.equal(appJs.status, 200)
+    assert.match(await appJs.text(), /location\.replace\('\/bye'\)/, 'a confirmed restart exits the page to the goodbye')
   } finally { await t.stop() }
 })
 
@@ -38,6 +42,20 @@ test('the english document carries the same bones', async () => {
     const html = await res.text()
     assert.match(html, /aria-label="Restart host"/)
     assert.match(html, /the only receipt is the WeChat push/i)
+  } finally { await t.stop() }
+})
+
+test('the goodbye page answers on /bye and the service worker lets it through', async () => {
+  const t = await startBridge({ harness: 'fake' })
+  try {
+    const bye = await httpFetch(t.base + '/bye')
+    assert.equal(bye.status, 200)
+    const body = await bye.text()
+    assert.match(body, /已受理，再见/)
+    assert.match(body, /回任意一句话/)
+    assert.doesNotMatch(body, /<script/, 'a page shown while the host dies must carry no script')
+    const sw = await httpFetch(t.base + '/sw.js')
+    assert.match(await sw.text(), /consent\|bye\)/, 'the SW must not hijack /bye back into the cached shell')
   } finally { await t.stop() }
 })
 

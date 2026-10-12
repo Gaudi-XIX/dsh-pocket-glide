@@ -543,7 +543,7 @@ test('the offline page copy is bilingual-tight and the SW still satisfies the ol
   const sw = renderServiceWorker()
   const bypassLine = sw.split('\n').find((line) => line.includes('const BYPASS='))
   assert.match(bypassLine, /\(api\|/, 'api stays bypassed (no-store boundary)')
-  assert.match(bypassLine, /\|consent\)/, 'consent stays bypassed')
+  assert.match(bypassLine, /\|consent\)/, 'consent stays bypassed; the restart goodbye joins the list (0.4.34)')
   assert.match(sw, /const V='pocket-v3'/)
   assert.match(renderServiceWorker('9f2c1a4b7e01'), /const V='pocket-9f2c1a4b7e01'/)
   assert.doesNotMatch(sw, /nonce/)

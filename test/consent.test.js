@@ -213,7 +213,7 @@ test('consent gate reachability: the SW bypasses /consent and the app rpc walks 
   const sw = pocketPages.renderServiceWorker()
   const bypassLine = sw.split('\n').find((line) => line.includes('const BYPASS='))
   assert.ok(bypassLine, 'the SW ships a BYPASS list')
-  assert.match(bypassLine, /\|consent\)/, 'the BYPASS list must include consent (SW half of W1)')
+  assert.match(bypassLine, /\|consent\|bye\)/, 'the BYPASS list must include consent (SW half of W1); the restart goodbye joins the list (0.4.34)')
   const mark = 'const BYPASS=/^\\/('
   const start = bypassLine.indexOf(mark)
   const end = bypassLine.indexOf(')(\\/|$)/', start)
