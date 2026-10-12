@@ -820,7 +820,11 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   POST /api/opened-at、2s 防抖、60s 退避、pagehide 冲刷）＋注入常量，本线约 +1.6 KB。
 //   混合树实测 zh 287 864 / en 287 776（含并行草稿扇出线在途增量，非本笔全责）⇒ 取 290 000。
 //   余量 ~2.1 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
-const ASSET_BUDGET_BYTES = 290_000
+//   2026-10-12 宿主远程重启（0.4.34）再抬一次 290 000 → 293 000：主页头部电源钮＋
+//   确认浮层卡（四条丑话文案 zh/en 双份）＋开关卡/确认/武装的页面 JS，本线约 +1.3 KB
+//   （POST /api/host/restart 的桥侧代码不进壳）。痛点＝重启不再靠在会话里喊 AI 调脚本，
+//   用户 2026-10-12 明令要这个按钮。实测 zh 291 308 ⇒ 取 293 000，余量 ~1.7 KB——同一句老话。
+const ASSET_BUDGET_BYTES = 293_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

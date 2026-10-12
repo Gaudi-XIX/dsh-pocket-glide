@@ -1,44 +1,47 @@
-// 远程重启宿主（0.4.34）：按钮调脚本——桥只负责「武装」圈外的一次性计划任务
-// （scripts/dsh-restart-now.ps1 → DSH-ReviveOnce），杀/拉/推送全是 revive 脚本
-// 现成的活；宿主进程树在同一 Job Object 里，从圈内既杀不死也拉不起，这是按钮
-// 只能当「遥控器」的物理原因。契约四条：未鉴权 403；有会话推进 409 带名单且
-// 绝不武装；空闲 200 armed；武装失败 502 带原因。硬拒没有强制口子——卡死的
-// 会话由用户手动结束（用户 2026-10-12 裁）。
+// 远程重启宿主（0.4.34）：手机主页头部电源钮调脚本——桥只负责「武装」圈外的
+// 一次性计划任务（scripts/dsh-restart-now.ps1 → DSH-ReviveOnce），杀/拉/推送
+// 全是 revive 脚本现成的活；宿主进程树在同一 Job Object 里，从圈内既杀不死也
+// 拉不起，这是按钮只能当「遥控器」的物理原因。端点 POST /api/host/restart 的
+// 权限边界＝配对漏斗（同源＋在册手机会话，与 /api/opened-at 同门）。契约：
+// 未配对 401；跨站 403；有会话推进 409 带名单且绝不武装；空闲 200 armed；
+// 武装失败 502 带原因。硬拒没有强制口子——卡死的会话由用户手动结束
+// （用户 2026-10-12 裁）。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { renderDesktopPairingPage } from '../lib/pages.js'
 import { startBridge, httpFetch } from './helpers.js'
 
-const page = (overrides = {}) => renderDesktopPairingPage({
-  locale: 'zh',
-  pairingUrl: 'http://127.0.0.1/pair?token=x',
-  qrSvg: '<svg></svg>',
-  expiresAt: Date.now() + 60_000,
-  ...overrides,
+const JSON_HEADERS = { 'content-type': 'application/json' }
+
+test('the phone home document carries the header button and the confirm card says the ugly truths', async () => {
+  const t = await startBridge({ harness: 'fake' })
+  try {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(t.base + '/', { headers: { cookie } })
+    assert.equal(res.status, 200)
+    const html = await res.text()
+    assert.match(html, /id="hostRestart" class="head-icon"/, 'the power button sits in the home header')
+    assert.match(html, /id="hostCard" class="host-card"/)
+    assert.match(html, /id="hostGo" type="button" class="is-danger"/)
+    // 用户 2026-10-12 定的四条丑话，确认卡必须写全，让用户自适应：
+    assert.match(html, /所有会话中断/)
+    assert.match(html, /唯一回执是微信推送/)
+    assert.match(html, /回任意一句话/)
+    assert.match(html, /公网隧道是关着的/)
+  } finally { await t.stop() }
 })
 
-test('the pairing page carries the host panel and the confirm page says the ugly truths', () => {
-  const html = page()
-  assert.match(html, /id="hostPanel" class="pin-panel show"/)
-  assert.match(html, /id="hostConfirmPanel" class="pin-panel"/)
-  assert.match(html, /data-action="host-restart-ask"/)
-  assert.match(html, /data-action="host-restart-confirm" class="is-danger"/)
-  // 用户 2026-10-12 定的四条丑话，确认页必须写全，让用户自适应：
-  assert.match(html, /所有会话中断/)
-  assert.match(html, /唯一回执是微信推送/)
-  assert.match(html, /回任意一句话/)
-  assert.match(html, /公网隧道是关着的/)
-  assert.doesNotMatch(html, /id="hostConfirmPanel" class="pin-panel show"/,
-    'the confirm page stays hidden until the button opens it')
+test('the english document carries the same bones', async () => {
+  const t = await startBridge({ harness: 'fake', bridgeOptions: { locale: 'en' } })
+  try {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(t.base + '/', { headers: { cookie } })
+    const html = await res.text()
+    assert.match(html, /aria-label="Restart host"/)
+    assert.match(html, /the only receipt is the WeChat push/i)
+  } finally { await t.stop() }
 })
 
-test('the english page carries the same bones', () => {
-  const html = page({ locale: 'en' })
-  assert.match(html, /Restart host…/)
-  assert.match(html, /the only receipt is the WeChat push/)
-})
-
-test('unauthenticated restart is refused and nothing is armed', async () => {
+test('unpaired restart is refused and nothing is armed', async () => {
   const armed = []
   const t = await startBridge({
     harness: 'fake',
@@ -48,9 +51,23 @@ test('unauthenticated restart is refused and nothing is armed', async () => {
     bridgeOptions: { hostRestartInvoker: async () => { armed.push(1) } },
   })
   try {
-    const res = await httpFetch(t.base + '/desktop/host/restart', {
+    const res = await httpFetch(t.base + '/api/host/restart', { method: 'POST', headers: { ...JSON_HEADERS, origin: t.base }, body: '{}' })
+    assert.equal(res.status, 401)
+    assert.equal(armed.length, 0)
+  } finally { await t.stop() }
+})
+
+test('cross-site restart is refused at the same gate as every other POST', async () => {
+  const armed = []
+  const t = await startBridge({
+    harness: 'fake',
+    bridgeOptions: { hostRestartInvoker: async () => { armed.push(1) } },
+  })
+  try {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(t.base + '/api/host/restart', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { ...JSON_HEADERS, cookie, origin: 'https://evil.example' },
       body: '{}',
     })
     assert.equal(res.status, 403)
@@ -70,10 +87,10 @@ test('busy sessions refuse with the list and never arm', async () => {
     bridgeOptions: { hostRestartInvoker: async () => { armed.push(1) } },
   })
   try {
-    const desktop = await t.pairDesktop()
-    const res = await httpFetch(t.base + '/desktop/host/restart', {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(t.base + '/api/host/restart', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', Cookie: desktop, origin: t.base },
+      headers: { ...JSON_HEADERS, cookie, origin: t.base },
       body: '{}',
     })
     assert.equal(res.status, 409)
@@ -94,10 +111,10 @@ test('idle sessions arm the restart script and answer with the fire delay', asyn
     bridgeOptions: { hostRestartInvoker: async (script) => { scripts.push(script) } },
   })
   try {
-    const desktop = await t.pairDesktop()
-    const res = await httpFetch(t.base + '/desktop/host/restart', {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(t.base + '/api/host/restart', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', Cookie: desktop, origin: t.base },
+      headers: { ...JSON_HEADERS, cookie, origin: t.base },
       body: '{}',
     })
     assert.equal(res.status, 200)
@@ -120,10 +137,10 @@ test('a failed arming answers 502 and carries the reason', async () => {
     },
   })
   try {
-    const desktop = await t.pairDesktop()
-    const res = await httpFetch(t.base + '/desktop/host/restart', {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(t.base + '/api/host/restart', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', Cookie: desktop, origin: t.base },
+      headers: { ...JSON_HEADERS, cookie, origin: t.base },
       body: '{}',
     })
     assert.equal(res.status, 502)
