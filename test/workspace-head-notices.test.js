@@ -41,7 +41,7 @@ const label = (name) => {
   return table[name]
 }
 
-const LABELS = ['noWorkspaces', 'noTasksHint', 'newChat', 'untitled', 'clockMd', 'clockYmd', 'moreRows', 'wsNewDone', 'wsQuestion', 'wsError']
+const LABELS = ['noWorkspaces', 'noTasksHint', 'newChat', 'untitled', 'clockMd', 'clockYmd', 'moreRows', 'wsNewDone', 'wsQuestion', 'wsError', 'pinSession', 'unpinSession', 'pinnedNotice', 'unpinnedNotice', 'pinFailed']
 const L = Object.fromEntries(LABELS.map((name) => [name, label(name)]))
 
 const MINUTE = 60 * 1000
@@ -54,7 +54,7 @@ const ago = (minutes) => Date.now() - Math.round(minutes * MINUTE)
 // the real renderer plus every page global it reads, driven by synthetic rows.
 // `L` and UNREAD_OPEN_KEY are the page's OWN copies, so a renamed notice or a moved
 // ledger key shows up here as a text mismatch instead of a silent pass.
-const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMsg = {} } = {}) => {
+const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMsg = {}, pinned = [] } = {}) => {
   const host = { innerHTML: '' }
   const writes = []
   const storageReads = { n: 0 }
@@ -70,6 +70,8 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
     const LIST_ROWS_MAX=${25}
     const WS_FLAGS_MAX=${Number(js.match(/WS_FLAGS_MAX=(\d+)/)[1])}
     const RECENT_WINDOW_MS=${Number(js.match(/RECENT_WINDOW_MS=(\d+)/)[1])}
+    let pinnedSessionIds=${JSON.stringify(pinned)}
+    let pinBusy=new Set()
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${[
@@ -77,7 +79,7 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
       'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
       'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'sessionModelLabel',
       'readLastMessageMap', 'pruneLastMessageMap', 'noteSessionMessageAt',
-      'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf',
+      'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank',
       'normalizeSelection', 'fieldText',
     ].map((name) => extractFunction(js, name)).join('\n')}
     let lastMessageAt=${JSON.stringify(lastMsg)}
@@ -85,8 +87,7 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
     localStorage={}
     localStorage.getItem=(key)=>{storageReads.n+=1;return key===LAST_MESSAGE_KEY?JSON.stringify(lastMsg):openedLedgerRaw}
     localStorage.setItem=(key,value)=>{writes.push([key,value])}
-    return { renderWorkspaces, lastMessageTimeOf, sortAtOf, noteSessionMessageAt, lastMessageAtOf, writes, storageReads:()=>storageReads.n, clockWrites:()=>writes.filter(([k])=>k===LAST_MESSAGE_KEY).length, markup(){ renderWorkspaces(); return container.innerHTML } }
-  `)
+    return { renderWorkspaces, lastMessageTimeOf, sortAtOf, noteSessionMessageAt, lastMessageAtOf, writes, storageReads:()=>storageReads.n, clockWrites:()=>writes.filter(([k])=>k===LAST_MESSAGE_KEY).length, markup(){ renderWorkspaces(); return container.innerHTML } }  `)
   return make(
     [{ workspaceId: 'w1', title: 'DSH', sessionIds: summaries.map((row) => row.sessionId) }],
     summaries,
@@ -283,4 +284,51 @@ test('the ledger only moves forward, and one session cannot evict another', () =
   rt.noteSessionMessageAt(null, ago(1))
   rt.noteSessionMessageAt('a', 0)
   assert.equal(rt.clockWrites(), first + 1, 'no session id or no clock writes nothing at all')
+})
+
+// ------------------------------------------- 4. the pinned row rides to the top
+//
+// User intent (verbatim, 2026-10-13): 「我希望能够把'置顶不置顶'这个功能透传过来，别的绘画
+// 管理功能倒是可以暂时不要」 — pass the desktop pin through to the phone list, nothing else.
+// The host keeps pins as a per-workspace-registry id list (recent-first) and broadcasts it on
+// the follow stream; the phone only has to ORDER by it, never re-rank by pin time. So the
+// contract here is partition, not sort: a pinned row outranks an un-pinned one regardless of
+// which clock is newer, and among unpinned rows the usual last-message order still holds.
+
+test('a pinned row outranks a newer unpinned row — partition, not pin-time order', () => {
+  const summaries = [
+    row({ sessionId: 'loud', updatedAt: ago(1) }), // newest clock, not pinned
+    row({ sessionId: 'quiet', updatedAt: ago(40) }), // old, but pinned on the desktop
+  ]
+  assert.deepEqual(idsInOrder(listSandbox({ summaries })), ['loud', 'quiet'], 'without a pin the clock decides the order')
+  assert.deepEqual(idsInOrder(listSandbox({ summaries, pinned: ['quiet'] })), ['quiet', 'loud'], 'and the desktop pin wins over the clock')
+})
+
+test('several pins stay in their own last-message order — the pin only partitions', () => {
+  // Desktop semantics: pinnedSessionIds is recent-first, but the sidebar sorts pinned
+  // rows by their normal clock inside the pinned band. Ranking by pin time instead would
+  // make the phone disagree with what the desktop shows.
+  const markup = listSandbox({
+    summaries: [
+      row({ sessionId: 'p-old', updatedAt: ago(30) }),
+      row({ sessionId: 'p-new', updatedAt: ago(2) }),
+      row({ sessionId: 'free', updatedAt: ago(1) }),
+    ],
+    pinned: ['p-old', 'p-new'], // p-old was pinned most recently
+  })
+  assert.deepEqual(idsInOrder(markup), ['p-new', 'p-old', 'free'], 'the pinned band first, still clock-ordered inside it')
+})
+
+test('the pin control paints beside every row and reports its state', () => {
+  const markup = listSandbox({
+    summaries: [row({ sessionId: 'a', updatedAt: ago(1) }), row({ sessionId: 'b', updatedAt: ago(2) })],
+    pinned: ['a'],
+  })
+  const pins = [...markup.matchAll(/<button class="task-pin([^"]*)" data-action="pin" data-pin="([^"]+)" aria-label="([^"]+)" aria-pressed="([^"]+)"/g)]
+    .map((m) => ({ cls: m[1].trim(), id: m[2], label: m[3], pressed: m[4] }))
+  assert.equal(pins.length, 2, 'one pin button per row — and never inside the row button (a button cannot nest)')
+  assert.deepEqual(pins.map((p) => p.id), ['a', 'b'], 'the pin carries its own session id')
+  assert.deepEqual(pins.map((p) => p.pressed), ['true', 'false'], 'aria-pressed is the live pin state')
+  assert.deepEqual(pins.map((p) => p.label), [L.unpinSession, L.pinSession], 'and the label offers the way back')
+  assert.equal(pins[0].cls, 'is-pinned', 'the pinned row marks its button; the other carries no class')
 })

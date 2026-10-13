@@ -226,6 +226,11 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'lastMessageAtOf')}
     ${extractFunction(js, 'lastMessageTimeOf')}
     ${extractFunction(js, 'sortAtOf')}
+    ${extractFunction(js, 'pinRank')}
+    // 2026-10-13 置顶透传：渲染器按置顶分区，沙箱带同样的页面级数组（空＝无置顶）。
+    let pinnedSessionIds=[]
+    let pinBusy=new Set()
+    const PIN_SVG=''
     const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
     let lastMessageAt=readLastMessageMap()
     const $=(id)=>container
@@ -437,6 +442,17 @@ test('STATUS-4 priority: awaiting and error outrank the rest; no signal means do
   assert.equal(sandbox.taskState({ running: false, agentAvailable: undefined }), 'done', 'missing agentAvailable is done');
   assert.equal(sandbox.taskState({ running: false, agentAvailable: false }), 'done', 'false is not a state either (desktop parity)');
   assert.equal(sandbox.taskState({ blank: true }), 'blank');
+});
+
+test('STATUS-4b a failed turn is not disguised by a question still on screen (2026-10-13)', () => {
+  // User report: 「会话的错误信息没有传到工作区页面…显示的还是绿色的打勾已完成」. Once the bridge
+  // projects the error onto the row, an older unanswered prompt must not demote it: a question is
+  // something the phone can answer, an error is something it has to see. So error reads first.
+  const sandbox = buildRenderSandbox();
+  assert.equal(sandbox.taskState({ awaitingQuestion: true, lastError: '400 Range of max_tokens' }), 'error', 'error beats the question flag');
+  assert.equal(sandbox.taskState({ awaitingQuestion: true, error: 'boom' }), 'error');
+  assert.equal(sandbox.taskState({ awaitingQuestion: true, status: 'error' }), 'error');
+  assert.equal(sandbox.taskState({ awaitingQuestion: true, running: true }), 'awaiting', 'the question still outranks a running row');
 });
 
 test('STATUS-5 a held writer paints done end to end (the unknown pill is retired)', () => {

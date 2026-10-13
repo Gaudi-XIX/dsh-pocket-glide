@@ -106,7 +106,69 @@ test('the 0.4.4 guard survives the unification: at the foot of a long reply, not
   assert.equal(anchorVisibleState(121, true).prompt, true, 'leaving the band is the only thing it takes')
 })
 
-// --------------------------------------- 2. content-visibility tagging rules
+// --------------------------------------- 1b. the ↑ jump organs (target + settle)
+
+// answerAnchorEl / anchorTopOf / settlePromptJump in ONE sandbox: the target selector and
+// the settle chain are exactly the two things that made ↑ "飘/抖动" in the 2026-10-13
+// report. setTimeout is shadowed so the chain is observed, never slept on.
+// Geometry note: the fake box reports top=0, so anchorTopOf(box,row)=row.top+scrollTop and
+// the selection test row.top+scrollTop < scrollTop-JUMP_EDGE_PX reduces to row.top < -4 —
+// i.e. "its first line is above the visible area", which is the whole point.
+function jumpOrgans() {
+  const js = assets.zh.js
+  const names = ['answerAnchorEl', 'anchorTopOf', 'settlePromptJump']
+  const body = names.map((name) => extractFunction(js, name)).join('\n')
+  const timers = []
+  const sandbox = new Function('setTimeout', `
+    const JUMP_EDGE_PX=4,JUMP_PROMPT_PAD_PX=54;
+    function programmaticScroll(){}
+    function rowEl(top,fold){return {getBoundingClientRect:()=>({top}),querySelector(){return fold?{nodeType:1}:null},isConnected:true}}
+    function boxEl(scrollTop,rows){return {scrollTop,getBoundingClientRect:()=>({top:0}),querySelectorAll(){return rows}}}
+    ${body}
+    return { answerAnchorEl, anchorTopOf, settlePromptJump, rowEl, boxEl }
+  `)((fn) => timers.push(fn))
+  return { sandbox, timers }
+}
+
+test('↑ targets the nearest assistant ANSWER above the fold, skips fold cards, and never falls back', () => {
+  const { sandbox } = jumpOrgans()
+  const { answerAnchorEl, rowEl, boxEl } = sandbox
+  const answerA = rowEl(-2000, false)   // an answer, far above
+  const liveFold = rowEl(-800, true)    // a LIVE turn-process card: it IS wrapped in .message.assistant
+  const answerB = rowEl(-50, false)     // the answer whose first line just left the viewport
+  const inView = rowEl(200, false)      // still on screen: climbing to it would scroll DOWN
+  const box = boxEl(1200, [answerA, liveFold, answerB, inView])
+  assert.equal(answerAnchorEl(box), answerB, 'the nearest answer above the fold wins, not the newest row')
+  assert.equal(answerAnchorEl(boxEl(1200, [answerA, liveFold])), answerA, 'a fold card is skipped, the walk continues upward')
+  assert.equal(answerAnchorEl(boxEl(1200, [liveFold, rowEl(-900, true)])), null, 'only fold cards: no target — the press must do nothing, NOT fall back to the question row')
+  assert.equal(answerAnchorEl(boxEl(1200, [inView])), null, 'nothing above the fold: no target')
+})
+
+test('the settle chain re-arms on the FIRST pass — the dead-code fix for 飘/抖动', () => {
+  const { sandbox, timers } = jumpOrgans()
+  const { settlePromptJump, rowEl, boxEl } = sandbox
+  // The 2026-10-13 failure: the jump lands on a row whose height is still the 120px
+  // content-visibility ESTIMATE, so the very first delta reads 0. The old code kept its
+  // setTimeout INSIDE the |delta|>2 branch, so that first zero ended the chain — measured
+  // live on a real transcript: 0 queued callbacks across three presses, and the estimate
+  // (which was 1:3.07 off the real height) never got corrected.
+  const anchor = rowEl(54, false)   // delta = 54 - 0 - 54 = 0: looks perfectly settled
+  const box = boxEl(1000, [anchor])
+  settlePromptJump(box, anchor, 4)
+  assert.equal(timers.length, 1, 'a zero first delta still schedules the next re-measure')
+  assert.equal(box.scrollTop, 1000, 'no write when the geometry already agrees')
+  // Now let the materialised layout disagree by 2520px — the drift one repaint produced in
+  // the 2026-10-13 probe (a settled target row went from +54 to -2466 px after innerHTML).
+  anchor.getBoundingClientRect = () => ({ top: 54 - 2520 })
+  timers.shift()()
+  assert.equal(box.scrollTop, 0, 'a large delta is corrected (clamped at the top when it overshoots)')
+  assert.equal(timers.length, 1, 'and the chain keeps going')
+  // The chain is bounded: tries count down, and a detached anchor stops it.
+  settlePromptJump(box, anchor, 0)
+  assert.equal(timers.length, 1, 'tries=0 stops the chain (no unbounded timer)')
+  settlePromptJump(box, { getBoundingClientRect: () => ({ top: 0 }), isConnected: false }, 3)
+  assert.equal(timers.length, 1, 'a detached anchor stops the chain')
+})
 
 test('markHistoryTail tags everything but the last 8 messages; short transcripts stay untagged', () => {
   const { markHistoryTail } = scrollOrgans()
@@ -351,7 +413,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
   const body = [
     'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
     'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
-    'readLastMessageMap', 'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf',
+    'readLastMessageMap', 'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank',
     // The head notices (0.4.31): wsFlagsOf/wsFlagHtml are top-level on the page, so
     // the sandbox has to carry them exactly like the renderer it extracts.
     'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'sessionModelLabel',
@@ -371,6 +433,11 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     // 12h 窗与未读点无关：此档钉 ledger 语义，窗口豁免防 fixture 新旧把行藏进「更多」。窗口钉在 ROWS-RECENT。
     const RECENT_WINDOW_MS=Infinity
     let openedAtLedgerReady=true
+    // 2026-10-13 pin passthrough: the renderer sorts pinned rows to the front, so the
+    // sandbox owns the same page-level array (empty = no workspace is pinned).
+    let pinnedSessionIds=[]
+    let pinBusy=new Set()
+    const PIN_SVG=''
     const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -447,12 +514,14 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   // top-edge pull can never be spread across frames and fight each other.
   assert.match(js, /followStream=isNearBottom\(live\);if\(!followStream\)transcriptAnchor=readTranscriptAnchor\(live\);pendingFollowFrame=false\}else\{pendingFollowFrame=true\}syncScrollAnchors\(\);topEdgePull\(live\)/, 'the same rAF tick re-decides the anchors and the top edge（2026-10-12 P1 加入 programmaticScroll 静默窗：窗内的帧不许重上膛，改记 pendingFollowFrame）')
   // The deck's own geometry: the ↑ tile sits in the upper slot and ↓ in the lower one,
-  // and ↑ chases the nearest question ABOVE the fold rather than the last question
-  // (live report 2026-10-10: the tiles were stacked the wrong way round and ↑ died
-  // the moment the reader climbed past the question he had been aiming at).
+  // and ↑ chases the nearest ANSWER above the fold (user, 2026-10-13: 「我的意图应该是要回到
+  // AI 发的最后那段总结性的话之前…不想往上翻」 — it used to land on the reader's own question,
+  // which answered "who asked", not "what was said"). The tiles were once stacked the wrong
+  // way round (live report 2026-10-10) and ↑ died the moment the reader climbed past the row
+  // he had been aiming at; both halves of that are still the contract here.
   assert.match(assets.zh.document, /id="scrollAnchors"[^>]*><button id="jumpPrompt"[\s\S]{0,400}id="jumpLatest"/, 'the up-jump owns the upper slot')
-  assert.match(assets.zh.document, /id="jumpPrompt"[^>]*aria-label="上一条提问"/, 'and is named for the question above, not the last one')
-  assert.match(js, /function userAnchorEl\(box\)\{const rows=[\s\S]*?for\(let index=rows\.length-1;index>=0;index-=1\)/, 'the scan walks the questions backwards from the newest')
+  assert.match(assets.zh.document, /id="jumpPrompt"[^>]*aria-label="上一条回答"/, 'and is named for the answer above, not the question above')
+  assert.match(js, /function answerAnchorEl\(box\)\{const rows=[\s\S]*?for\(let index=rows\.length-1;index>=0;index-=1\)/, 'the scan walks the assistant text rows backwards from the newest')
   assert.match(js, /if\(anchorTopOf\(box,row\)<box\.scrollTop-JUMP_EDGE_PX\)return row/, 'and stops at the first one above the fold')
   assert.match(js, /function topEdgePull\(box\)\{probeMark\('sc'\);if\(box\.scrollTop>0\)\{topEdgeArmed=false;return\}if\(topEdgeArmed\)return;topEdgeArmed=true;/, 'the top-edge load is edge-triggered, one page per arrival（开头是滚动时序埋点的打点；边缘触发与一次到达只取一页两条语义不变）')
   assert.match(js, /if\(!activeSession\|\|!olderHasMore\|\|olderBusy\|\|olderRunBusy\)return;void loadOlder\(\)/, 'and it obeys every lock the deliberate pull obeys')

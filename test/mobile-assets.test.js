@@ -835,7 +835,13 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   ＋CSS/L 文案），本线约 +7.5 KB。痛点＝手机上看不到主会话派出的子代理（名字/任务/
 //   运行状态全盲，桌面 CatalogDropdown 有而手机无），数据全部走现成通道零新机制。
 //   混合树实测 zh 301 830 / en 301 740 ⇒ 取 303 000，余量 ~1.1 KB——下一次抬之前先问「这笔增长解决了什么痛点」。
-const ASSET_BUDGET_BYTES = 303_000
+// 2026-10-13 六项修复批再抬一次 303 000 → 308 000：modelCatalog 桥侧缓存（不进壳）之外，
+//   壳侧增长来自 ↑ 改跳最后一段回答（answerAnchorEl＋settle 链重武装）、子代理悬浮胶囊
+//   （.subagent-bar 改 fixed＋脉冲点＋倒序 rank）、置顶钮（.task-line/.task-pin＋PIN_SVG＋
+//   togglePin＋pinRank＋pinBusy）与错误/乐观显示配套文案，本线约 +2.4 KB。痛点＝用户 2026-10-13
+//   口述五项＋停止钮一项（↑ 飘走／子代理占整行／秒退显示已完成／置顶与错误不显示／设置卡顿）。
+//   混合树实测 zh 306 248 / en 306 155 ⇒ 取 308 000，余量 ~1.7 KB——下一次抬之前先问「这笔增长解决了什么痛点」。
+const ASSET_BUDGET_BYTES = 308_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

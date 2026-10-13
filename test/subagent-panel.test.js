@@ -175,6 +175,44 @@ test('renderSubagentBar paints one row per catalog entry with running count and 
   assert.match(String(idleClock), /^\d{2}:\d{2}$/, 'an idle row shows the absolute 24h wall clock of its createdAt — never "x ago" (2026-10-13 unification)')
 })
 
+test('the capsule header carries a state dot and keeps its label collapsed until expanded', () => {
+  const catalog = [CHILD('c1', { createdAt: 1 }), CHILD('c2', { createdAt: 2 })]
+  const rows = new Map([['parent1', [ROW('c1', { running: true })]]])
+  const sandbox = buildBarSandbox({ catalog, rows })
+  sandbox.renderSubagentBar()
+  const html = sandbox.bar.innerHTML
+  assert.ok(html.includes('class="subagent-pulse"'), 'the collapsed capsule still says a subagent is there')
+  assert.ok(html.includes('subagent-head has-running'), 'a running child turns the dot brand-coloured')
+  assert.ok(html.includes('aria-expanded="false"'), 'collapsed by default: the capsule stays a dot, not a row')
+})
+
+test('the popover ranks the busiest children first — running band, then error band, then idle', () => {
+  // The catalog arrives createdAt-ascending (the desktop dropdown appends downward,
+  // and the phone inherits that order). The phone needs the opposite: the child that
+  // just started has to sit at the top of the popover (2026-10-13).
+  const now = 1_000_000
+  const catalog = [
+    CHILD('idle-old', { createdAt: now - 500 }),
+    CHILD('run-old', { createdAt: now - 400 }),
+    CHILD('err-old', { createdAt: now - 300 }),
+    CHILD('idle-new', { createdAt: now - 200 }),
+    CHILD('run-new', { createdAt: now - 100 }),
+    CHILD('err-new', { createdAt: now }),
+  ]
+  const rows = new Map([['parent1', [
+    ROW('run-old', { running: true }), ROW('run-new', { running: true }),
+    ROW('err-old', { lastError: 'x' }), ROW('err-new', { lastError: 'y' }),
+  ]]])
+  const sandbox = buildBarSandbox({ catalog, rows, expanded: true })
+  sandbox.renderSubagentBar()
+  const order = [...sandbox.bar.innerHTML.matchAll(/data-subagent-open="([^"]+)"/g)].map((m) => m[1])
+  assert.deepEqual(
+    order,
+    ['run-new', 'run-old', 'err-new', 'err-old', 'idle-new', 'idle-old'],
+    'running band first (newest first), then error band, then idle band'
+  )
+})
+
 test('the rows container is collapsed until expanded, and the ticker only runs expanded+running', () => {
   const catalog = [CHILD('c1')]
   const rows = new Map([['parent1', [ROW('c1', { running: true })]]])
@@ -236,6 +274,12 @@ test('openSession normalizes the subagent opt and the page hides the write surfa
   // degrades to the ordinary session view rather than a broken address.
   assert.ok(js.includes("subagentView=opts&&opts.subagent&&typeof opts.subagent.parentSessionId==='string'&&opts.subagent.parentSessionId?"), 'openSession validates the opt shape')
   assert.ok(css.includes("body.subagent-open #composer,body.subagent-open #questionComposer{display:none}"), 'composer and question panel are the hidden pair (stop rides inside the composer)')
+  // 2026-10-13: the bar became a floating capsule. It must not consume a row of the
+  // transcript, and the two spacer rules that existed only to work around the row
+  // it used to take are gone with the row.
+  assert.ok(css.includes('.subagent-bar{position:fixed'), 'the capsule floats instead of owning a row')
+  assert.ok(!css.includes('.goal-bar[hidden]+.subagent-bar'), 'the goal-bar spacer for the old row is retired')
+  assert.ok(!css.includes('body.subagent-open .subagent-note{margin-top:44px}'), 'the note spacer for the old row is retired')
   assert.ok(js.includes('subagentNote.textContent=subagentView?L.subagentReadonly'), 'the read-only note names the mode')
   assert.ok(js.includes("openSession(entry.id,label,false,true,{subagent:{parentSessionId,mode}})"), 'the bar row opens through openSession with the subagent opt')
   // history round-trip: the entry carries the address so popstate restores it

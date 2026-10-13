@@ -469,18 +469,20 @@ function buildRunningSandbox() {
   assert(bound > 0, 'the page declares its fallback bound')
   const idle = Number((js.match(/TURN_RUNNING_IDLE_MAX_MS=(\d+)/) || [])[1])
   assert(idle > 0, 'the page declares the idle bound the run state retires on')
-  const names = ['eventSeq', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning', 'clearTurnRunningWatch', 'expireTurnRunning', 'watchTurnRunning']
+  const names = ['eventSeq', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning', 'clearTurnRunningWatch', 'expireTurnRunning', 'confirmTurnRunning', 'finishTurnConfirm', 'watchTurnRunning']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(`
     const AWAITING_TURN_MAX_MS=${bound}
     const TURN_RUNNING_IDLE_MAX_MS=${idle},idle=TURN_RUNNING_IDLE_MAX_MS
-    let awaitingTurnSeq=null,awaitingTurnTimer=null,agentRunning=false,lastHistoryKey='',activeSession='s1',turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1,turnRunningTimer=null,pendingQuestion=null
+    let awaitingTurnSeq=null,awaitingTurnTimer=null,agentRunning=false,lastHistoryKey='',activeSession='s1',turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1,turnRunningTimer=null,turnRunningConfirming=false,pendingQuestion=null
+    let hostRows=[],rpcRejects=false
     const calls=[]
     const setTimeout=(fn,ms)=>{calls.push(['timeout',ms]);return 1}
     const clearTimeout=handle=>{calls.push(['clear',handle])}
     function syncPromptUi(){calls.push(['prompt'])}
     function syncTurnStatus(){calls.push(['status'])}
     function schedulePoll(){calls.push(['poll'])}
+    function rpc(method){calls.push(['rpc',method]);return rpcRejects?Promise.reject(new Error('bridge down')):Promise.resolve({items:hostRows})}
     ${body}
     return {
       arm(value){armAwaitingTurn(value)},
@@ -488,8 +490,10 @@ function buildRunningSandbox() {
       expire(){expireAwaitingTurn()},
       expireTurn(){expireTurnRunning()},
       setQuestion(value){pendingQuestion=value},
+      setRows(sessionId,running,descendantRunning){hostRows=[{sessionId,running:running===true,descendantRunning:descendantRunning===true}]},
+      setHostError(value){rpcRejects=value},
       idle,
-      state:()=>({awaitingTurnSeq,awaitingTurnTimer,agentRunning,lastHistoryKey,turnRunningSeq,turnRunningOpen,turnRunningSeenSeq,turnRunningTimer,pendingQuestion}),
+      state:()=>({awaitingTurnSeq,awaitingTurnTimer,agentRunning,lastHistoryKey,turnRunningSeq,turnRunningOpen,turnRunningSeenSeq,turnRunningTimer,turnRunningConfirming,pendingQuestion}),
       calls,
     }
   `)()
@@ -589,28 +593,99 @@ test('BUG1 the run state reads a high-water mark, not the visible window', () =>
 
 // ------------------------------------------------------------- WD the run watchdog
 
-test('WD1 an idle log retires the run state and raises the mark to what it saw', () => {
+// The consult is a promise round trip, so a test that wants the verdict has to let it land.
+async function settleConsult() {
+  await new Promise((resolve) => setImmediate(resolve))
+}
+
+test('WD1 an idle log consults the host, and only a host that says "not running" retires it', async () => {
   const sandbox = buildRunningSandbox()
   sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
   sandbox.update([{ event: { seq: 35, type: 'assistant/chunk' } }])
   assert.equal(sandbox.state().turnRunningOpen, true, 'the log is still moving, so the turn is still open')
   sandbox.calls.length = 0
   sandbox.expireTurn()
+  const during = sandbox.state()
+  assert.equal(during.turnRunningOpen, true, 'silence alone does not close the turn — the stop button stays up while the host is asked')
+  assert.equal(during.agentRunning, true, 'and nothing flickers during the round trip')
+  sandbox.setRows('s1', false)
+  await settleConsult()
   const after = sandbox.state()
-  assert.equal(after.turnRunningOpen, false, 'an idle log closes the turn instead of pinning the thinking status')
+  assert.equal(after.turnRunningOpen, false, 'a host that says nothing is running closes the turn instead of pinning the thinking status')
   assert.equal(after.agentRunning, false, 'and the status itself leaves with it')
   assert.equal(after.turnRunningSeq, 35, 'the mark is raised to the newest seq the log ever showed')
   assert.equal(after.lastHistoryKey, '', 'so the next poll repaints instead of skipping it')
+  assert.ok(sandbox.calls.some((call) => call[0] === 'rpc' && call[1] === 'session.list'), 'the verdict comes from the host row, not the silent log')
   assert.ok(sandbox.calls.some((call) => call[0] === 'status'), 'the status node comes off screen')
   assert.ok(sandbox.calls.some((call) => call[0] === 'prompt'), 'and the send/cancel pair is put back')
   assert.ok(sandbox.calls.some((call) => call[0] === 'poll'), 'the poll is re-armed at the idle rate')
 })
 
-test('WD2 the raised mark is sticky: a replayed window cannot reopen the turn', () => {
+test('WD1b the host still running keeps the turn open — the stop button survives a quiet minute', async () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
+  sandbox.update([{ event: { seq: 35, type: 'assistant/chunk' } }])
+  sandbox.calls.length = 0
+  sandbox.setRows('s1', true)
+  sandbox.expireTurn()
+  await settleConsult()
+  const after = sandbox.state()
+  assert.equal(after.turnRunningOpen, true, 'a long tool call that goes quiet is not a finished turn')
+  assert.equal(after.agentRunning, true, 'so the phone can still stop it')
+  assert.equal(after.turnRunningConfirming, false, 'the consult is closed, so the next bound can ask again')
+  assert.ok(!sandbox.calls.some((call) => call[0] === 'prompt'), 'no repaint of the send/cancel pair')
+  assert.ok(sandbox.calls.some((call) => call[0] === 'poll'), 'and the log is polled again')
+})
+
+test('WD1c a busy subagent counts as the host still working', async () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
+  sandbox.calls.length = 0
+  // The child row itself is filtered out of the phone list; the bridge marks the parent
+  // with descendantRunning, which is the whole reason a parent turn can look idle.
+  sandbox.setRows('s1', false, true)
+  sandbox.expireTurn()
+  await settleConsult()
+  assert.equal(sandbox.state().turnRunningOpen, true, 'work running under this session is still this session working')
+})
+
+test('WD1d a consult the bridge cannot answer still retires — a dead link must not pin the status forever', async () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
+  sandbox.calls.length = 0
+  sandbox.setHostError(true)
+  sandbox.expireTurn()
+  await settleConsult()
+  const after = sandbox.state()
+  assert.equal(after.turnRunningOpen, false, 'the failure path falls back to the old retirement')
+  assert.equal(after.agentRunning, false, 'and the send box comes back')
+  assert.equal(after.turnRunningConfirming, false, 'the consult flag is cleared on the failure path too')
+})
+
+test('WD1e one consult at a time, and fresh progress outranks a stale answer', async () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
+  sandbox.calls.length = 0
+  sandbox.setRows('s1', false)
+  sandbox.expireTurn()
+  sandbox.expireTurn()
+  assert.equal(sandbox.calls.filter((call) => call[0] === 'rpc').length, 1, 'a second bound while the first is in flight asks nobody twice')
+  // The log wakes up with a newer event before the host answers. The answer describes the
+  // old silence, so it must not retire the turn the log has already re-opened evidence for.
+  sandbox.update([{ event: { seq: 40, type: 'assistant/chunk' } }])
+  await settleConsult()
+  const after = sandbox.state()
+  assert.equal(after.turnRunningOpen, true, 'progress seen during the consult voids the verdict')
+  assert.equal(after.agentRunning, true, 'and the stop button stays')
+  assert.ok(after.turnRunningTimer !== null, 'the watch is re-armed for the next bound')
+})
+
+test('WD2 the raised mark is sticky: a replayed window cannot reopen the turn', async () => {
   const sandbox = buildRunningSandbox()
   sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
   sandbox.update([{ event: { seq: 35, type: 'assistant/chunk' } }])
   sandbox.expireTurn()
+  await settleConsult()
   // The same window as before, replayed by the history poll. Its turn/start now sits
   // below the mark the expiry left behind, so it is not a new turn and must not count.
   sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
@@ -669,7 +744,7 @@ test('WD4 the watch stays off while a wait or a question owns the turn', () => {
   )
 })
 
-test('WD5 a question that owns the turn keeps the status up, and the bound keeps watching', () => {
+test('WD5 a question that owns the turn keeps the status up, and the bound keeps watching', async () => {
   const sandbox = buildRunningSandbox()
   sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
   sandbox.calls.length = 0
@@ -679,12 +754,14 @@ test('WD5 a question that owns the turn keeps the status up, and the bound keeps
   assert.equal(held.turnRunningOpen, true, 'a question that owns the turn is not an idle turn, so the thinking status stays up')
   assert.equal(held.agentRunning, true, 'and the run status stays with it')
   assert.ok(held.turnRunningTimer !== null, 'the watch is re-armed rather than dropped, so the mark stays bounded')
+  assert.ok(!sandbox.calls.some((call) => call[0] === 'rpc'), 'a question owns the turn, so there is nothing to ask the host about')
   // The other half of the same promise: holding the mark must not mean holding it
   // forever. Once the question is answered and no fresh event re-arms the watch,
-  // the very next expiry still retires the idle turn.
+  // the very next bound still retires the idle turn — through the host consult.
   sandbox.calls.length = 0
   sandbox.setQuestion(null)
   sandbox.expireTurn()
+  await settleConsult()
   const closed = sandbox.state()
   assert.equal(closed.turnRunningOpen, false, 'an answered question hands the turn back to the bound')
   assert.equal(closed.agentRunning, false, 'so nothing is left pinned')
