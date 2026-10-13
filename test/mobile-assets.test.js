@@ -830,7 +830,12 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   （用户实测「太多了，这咋点呢」），修法是开机从桥上领回自己那份而不是加「全部已读」按钮。
 //   混合树实测 zh 293 594 / en 293 514（含重启线在途增量，非本笔全责）⇒ 取 295 000，
 //   余量 ~1.4 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
-const ASSET_BUDGET_BYTES = 295_000
+// 0.4.41 子代理线抬额：会话页新增子代理折叠条（updateSubagents/renderSubagentBar
+//   ＋splitSubagentRows 子行收集＋openSubagentSession 只读视图＋subagentQuery 流参
+//   ＋CSS/L 文案），本线约 +7.5 KB。痛点＝手机上看不到主会话派出的子代理（名字/任务/
+//   运行状态全盲，桌面 CatalogDropdown 有而手机无），数据全部走现成通道零新机制。
+//   混合树实测 zh 301 830 / en 301 740 ⇒ 取 303 000，余量 ~1.1 KB——下一次抬之前先问「这笔增长解决了什么痛点」。
+const ASSET_BUDGET_BYTES = 303_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

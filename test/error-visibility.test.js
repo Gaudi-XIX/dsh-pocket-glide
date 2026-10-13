@@ -788,6 +788,7 @@ function buildStreamSandbox() {
     const STREAM_EVENTS_CAP=400
     function armStreamSnapshot(){}
     function streamWatermark(){return -1}
+    function subagentQuery(){return ''}
     function noteStreamRecovery(){}
     function applyLiveStatus(){}
     function mergeEntries(list){return list.slice()}

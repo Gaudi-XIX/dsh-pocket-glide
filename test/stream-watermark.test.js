@@ -129,7 +129,7 @@ test('AC-A6 an empty buffer pulls the head page without beforeSeq', () => {
   const older = between('async function fetchOlderPage()', 'async function loadOlder()')
   assert.ok(older.includes('anchorSeq<0'), 'the anchor-less case is handled, not abandoned')
   assert.ok(!older.includes('if(anchorSeq<0)return false'), 'no anchor must not mean nothing to do')
-  assert.ok(older.includes("rpc('session.history',{sessionId,maxMessages:30})"), 'the head page carries no beforeSeq')
+  assert.ok(older.includes("rpc('session.history',{sessionId,maxMessages:30,...(subagentView?{subagent:subagentView}:{})})"), 'the head page carries no beforeSeq (the subagent spread collapses when no subagent view is open)')
   assert.ok(older.includes('beforeSeq:anchorSeq'), 'and paging from a real anchor still works')
 })
 
@@ -140,7 +140,7 @@ test('AC-A6 the head pull really goes out with no beforeSeq', async () => {
   const source = 'async ' + extractFunction(js, 'fetchOlderPage')
   const make = new Function('box', `
     let olderBusy=false,olderRunBusy=false,olderHasMore=true,olderExhausted=false
-    let activeSession='s1',olderEvents=[],streamEvents=[]
+    let activeSession='s1',olderEvents=[],streamEvents=[],subagentView=null
     const calls=[]
     const $=()=>box
     function oldestEventSeq(){return -1}

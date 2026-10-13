@@ -118,7 +118,7 @@ function buildHistorySandbox({ rpcThrows = null, streamConnected = false } = {})
     let activeSession='s1',historyBusy=false,streamRevision=0,streamConnected=${streamConnected}
     let agentRunning=false,pendingQuestion=null,idlePollMs=750
     let streamEvents=[],olderEvents=[],olderHasMore=false
-    let importantErrorActive=false,openPrefetch=null
+    let importantErrorActive=false,openPrefetch=null,subagentView=null
     const HISTORY_POLL_IDLE_CAP_MS=${HISTORY_IDLE_CAP}
     const L=${JSON.stringify(L)}
     const $=(id)=>containers[id]

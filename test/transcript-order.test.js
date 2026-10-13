@@ -350,7 +350,7 @@ test('the pull hint names the end state instead of arming a dead release', () =>
 
 test('one back action always leaves the chat view', () => {
   const { js } = mobilePageAssets({ locale: 'zh' })
-  assert.ok(js.includes('async function openSession(id,title,fromHistory=false,pushHistory=true)'), 'the opener knows who pushed the entry')
+  assert.ok(js.includes('async function openSession(id,title,fromHistory=false,pushHistory=true,opts=null)'), 'the opener knows who pushed the entry (opts carries the subagent address)')
   assert.ok(
     js.includes("if(pushHistory)history.pushState(entry,'');else history.replaceState(entry,'')"),
     'an automatic jump rewrites the current entry instead of stacking a second chat entry',
@@ -766,7 +766,7 @@ function buildPullSandbox(opts) {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const source = 'async ' + extractFunction(js, 'loadOlder')
   return new Function('opts', `
-    let olderRunBusy=false,olderHasMore=${String(opts.olderHasMore ?? false)},activeSession='s1'
+    let olderRunBusy=false,olderHasMore=${String(opts.olderHasMore ?? false)},activeSession='s1',subagentView=null
     let streamEvents=[],olderEvents=[]
     const calls=[]
     function transcriptHasContent(){return Boolean(streamEvents.length||olderEvents.length)}
@@ -788,7 +788,7 @@ function buildPageFetchSandbox(opts) {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const source = 'async ' + extractFunction(js, 'fetchOlderPage')
   return new Function('opts', `
-    let olderBusy=false,olderHasMore=${String(opts.olderHasMore ?? false)},olderExhausted=false,activeSession='s1'
+    let olderBusy=false,olderHasMore=${String(opts.olderHasMore ?? false)},olderExhausted=false,activeSession='s1',subagentView=null
     let streamEvents=[],olderEvents=[]
     const calls=[],rpcCalls=[]
     const box={scrollHeight:120,clientHeight:80,scrollTop:0,insertAdjacentHTML(){},querySelector(){return null}}

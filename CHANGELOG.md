@@ -4,6 +4,33 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.4.41 — 2026-10-13
+
+**会话页新增「子智能体」折叠条——主会话派出的子代理在手机上第一次可见、可查状态、可点开看会话（此前手机端对子代理全盲）。**
+
+数据与形态全部对齐桌面官方：条目来自父会话的 `subagentCatalog` 投影（`label`＝创建时冻结的
+名字/任务一句话、`createdAt`、`mode`），与桌面 `CatalogDropdown` 同源；运行状态来自
+`session.list` 的子行（`running`／`lastError`），与父行绿勾聚合（0.4.8 的
+`descendantRunning`）同一数据面。折叠条只在该会话真有子代理时出现，头部显示
+「子智能体 N · M 运行中（· K 出错）」，展开后每行＝名字＋状态点（运行中蓝／出错红／
+结束灰）＋时间（运行中的显示「已运行 X」，30s 一跳；结束的显示创建相对时间）。
+
+- **点子代理行＝只读打开它的会话**：走宿主的 durable subagent 地址
+  （`kind:'subagent'`＋`childSessionId`＋`parentSessionId`＋`mode`，`session.history`
+  与 `session/follow` 两条通道全部参数化；tunnel 模式的轮询 collector 同样支持）。
+  子代理视图顶部有「子代理会话 · 只读」提示，输入框／提问面板／停止键整体隐藏——
+  子代理不吃普通 prompt（宿主把它们的读写都归 subagent routing），手机端不做
+  `subagent.deliver` 写通道，这是明确的本期边界。
+- 宿主拒绝的子代理（descriptor 缺失的老会话、已被清理的 catalog 残条：`subagent/*`
+  错误族）与 `session/agent-busy` 同规：静默弹回会话列表，不上错误横幅。
+- 历史导航闭环：进子代理会话的 history entry 自带地址参数，系统返回键回到父会话不丢
+  只读态；屏幕返回键照旧回会话列表。
+- 子代理行照旧**不出现在主页列表**（「子代理是会话的工具，不是行」的既有契约不动，
+  `subagent-session-hiding` 断言原样保留）；它们的新出口只有父会话内的这条折叠条。
+- 已知边界：子代理行的运行状态随列表数据刷新（60s 停留轮询／进页必刷），折叠条内
+  不为状态单独开通道；精确工作时长（`subagentTiming` 投影）未接，时长按创建时刻起算
+  的墙钟值显示。
+
 ## 0.4.40 — 2026-10-13
 
 **工具过程的直播态与完成态统一成同一张折叠卡——「先平铺一列、跑完突然收拢」的跳变不再有（用户：「出现的时候，就跟电脑端的折叠一样」）。**

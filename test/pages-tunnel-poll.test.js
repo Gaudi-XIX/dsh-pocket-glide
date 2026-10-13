@@ -128,6 +128,7 @@ function buildPollSandbox(state = {}) {
     function reopenSessionStream(){world.reruns.push('reopenSessionStream')}
     function armStreamSnapshot(){}
     function settleStreamSnapshot(ok){world.settled=ok}
+    function subagentQuery(){return ''}
     ${organs}
     return {
       openRealtime, openEventPolling, pollSessionEvents, setConnectionMode, reopenRealtime, pauseEventPolling, stopEventPolling,
