@@ -120,6 +120,30 @@ test('INTERLEAVE-3 a reasoning-only turn renders one process group and no reply'
   assert.equal(out[1].usage, undefined, 'no reply, no pill')
 })
 
+test('INTERLEAVE-3b a pure-thinking phase is a process group, never standalone think rows', () => {
+  // 0.4.40 追加：纯思考阶段（还没有工具调用）曾经渲染成独立「思考」行，第一个
+  // 工具一动整行被收进过程折叠——「冒出来又收进去」。思考从一开始就得在折叠里。
+  const sandbox = buildSandbox()
+  const events = [
+    userEvent(1, '问'),
+    { event: { seq: 2, type: 'assistant/chunk', data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: '先想想' } } } },
+    toolCall(3, 1, 1, 'c1', 'read_file'),
+  ]
+  const out = sandbox.visibleMessages(events)
+  assert.deepEqual(shape(out), ['user', 'process#0'], 'thinking streams inside the fold; no standalone reasoning message to pop and retract')
+})
+
+test('INTERLEAVE-3c a thinking-only segment settles as a process fold, not think rows', () => {
+  const sandbox = buildSandbox()
+  const events = [
+    userEvent(1, '问'),
+    { event: { seq: 2, type: 'assistant/chunk', data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: '先想想' } } } },
+    turnEnd(3, 1),
+  ]
+  const out = sandbox.visibleMessages(events)
+  assert.deepEqual(shape(out), ['user', 'process#0'], 'the whole turn is one fold, titled by the thinking phrase')
+})
+
 test('INTERLEAVE-4 the pill and the clock still ride only the final reply of the turn', () => {
   const sandbox = buildSandbox()
   const usage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 }
@@ -222,14 +246,15 @@ test('MERGE-2 thought with no reply of its own still rides the process card', ()
 test('MERGE-3 reasoning that FOLLOWS its own reply is not dragged above it', () => {
   // Arrival order is honoured: only reasoning that LEADS the step attaches. A model
   // that keeps thinking after answering really did think later, so it stays below —
-  // this is the one shape the merge deliberately leaves alone.
+  // this is the one shape the merge deliberately leaves alone. 0.4.40 追加：留在下方的
+  // 形状从独立「思考」行改为过程折叠卡（已完成分析），与一切思考内容同一形状。
   const sandbox = buildSandbox()
   const out = sandbox.visibleMessages([
     userEvent(1, '问'),
     stepMessage(2, 1, 1, [say('答复在此'), think('答完还在想')]),
     turnEnd(3, 1),
   ])
-  assert.deepEqual(shape(out), ['user', 'reply:答复在此', 'reply:答完还在想'], 'the reply first, the later thought after it')
+  assert.deepEqual(shape(out), ['user', 'reply:答复在此', 'process#0'], 'the reply first, the later thought folded after it')
   assert.deepEqual(out[1].blocks.map((b) => b.kind), ['text'], 'the reply did not swallow the later thought')
 })
 

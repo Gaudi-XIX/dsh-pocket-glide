@@ -58,7 +58,7 @@ function renderSandbox(locale) {
   const names = [
     'toolActivityCategory', 'diffLineSplit', 'toolSummaryLine', 'clusterToolBlocks', 'stepTitleFor',
     'renderBlock', 'toolClusterState', 'toolArgsOf', 'diffRowsHtml', 'renderToolDiff',
-    'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'stableLiveTitle', 'pretty',
+    'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'stableLiveTitle', 'liveThinkingLine', 'pretty',
   ]
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
@@ -75,7 +75,7 @@ function renderSandbox(locale) {
      const liveTitle={session:null,text:'',desired:'',shownAt:0,timer:null}
      const transcriptView='verbose'
      const pendingQuestion=null
-     return { renderBlock, renderToolCard, renderTurnProcess, clusterToolBlocks, toolActivityCategory, diffLineSplit, toolSummaryLine, stableLiveTitle, liveTitle }`,
+     return { renderBlock, renderToolCard, renderTurnProcess, clusterToolBlocks, toolActivityCategory, diffLineSplit, toolSummaryLine, stableLiveTitle, liveThinkingLine, liveTitle }`,
   )(labels(locale), STEP_TABLE(locale), 's1')
 }
 
@@ -491,6 +491,36 @@ test('entering another session adopts its live title without holding', () => {
   assert.equal(stableLiveTitle('正在搜索代码', 60000), '正在搜索代码', 'a session switch adopts immediately, never the stale verb')
 })
 
+test('each fold holds its own title beat — a new fold adopts immediately', () => {
+  const { stableLiveTitle } = renderSandbox('zh')
+  assert.equal(stableLiveTitle('正在读取文件', 60000, 'turn:1'), '正在读取文件')
+  assert.equal(stableLiveTitle('正在分析请求 · 行', 60000, 'turn:2'), '正在分析请求 · 行', 'another fold never inherits the hold')
+  assert.equal(stableLiveTitle('正在分析请求 · 新行', 60000, 'turn:2'), '正在分析请求 · 行', 'the same fold still holds within the beat')
+})
+
+test('a pure-thinking phase folds too, narrating the thinking verb and the newest thought line', () => {
+  const sandbox = renderSandbox('zh')
+  const html = sandbox.renderTurnProcess({ turnKey: '9e', streaming: true, blocks: [think('先看目录结构\n再定改法')] })
+  assert.ok(html.startsWith('<div class="message assistant"><details class="turn-process" data-live="1" data-state="running"'), 'thinking alone is the same live fold, not a standalone row')
+  const headerAt = html.indexOf('<span class="activity-title">正在分析请求 · 再定改法</span>')
+  assert.ok(headerAt >= 0 && headerAt < html.indexOf('<div class="turn-process-body">'), 'the header narrates the thinking verb plus the newest thought line')
+})
+
+test('a tool running keeps the thought line out of the header', () => {
+  const sandbox = renderSandbox('zh')
+  const html = sandbox.renderTurnProcess({ turnKey: '9f', streaming: true, blocks: [think('想一句'), tool('bash', 'running', { command: 'npm test' })] })
+  const headerAt = html.indexOf('<span class="activity-title">正在运行命令</span>')
+  assert.ok(headerAt >= 0 && headerAt < html.indexOf('<div class="turn-process-body">'), 'the header is the verb alone')
+  assert.ok(!html.includes('activity-title">正在运行命令 ·'), 'thought lines never ride a tool title')
+})
+
+test('a settled thinking-only group lands as the done fold, titled by the host thinking phrase', () => {
+  const sandbox = renderSandbox('zh')
+  const html = sandbox.renderTurnProcess({ turnKey: '9g', streaming: false, blocks: [think('想了一句')] })
+  assert.ok(html.startsWith('<details class="turn-process"'), 'one fold shape when settled, no standalone think row')
+  assert.ok(html.includes('<span class="activity-title">已完成分析</span>'), 'the done tally falls back to the host thinking phrase')
+})
+
 test('a pending question still hides while its composer owns the floor', () => {
   const js = assets.zh.js
   const names = ['toolActivityCategory', 'clusterToolBlocks', 'renderBlock', 'toolClusterState', 'toolArgsOf', 'diffRowsHtml', 'renderToolDiff', 'renderToolRaw', 'renderToolCard']
@@ -522,7 +552,7 @@ function briefSandbox(locale, view) {
   const names = [
     'toolActivityCategory', 'diffLineSplit', 'toolSummaryLine', 'clusterToolBlocks', 'stepTitleFor',
     'renderBlock', 'toolClusterState', 'toolArgsOf', 'diffRowsHtml', 'renderToolDiff',
-    'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'stableLiveTitle', 'pretty',
+    'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'stableLiveTitle', 'liveThinkingLine', 'pretty',
   ]
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
