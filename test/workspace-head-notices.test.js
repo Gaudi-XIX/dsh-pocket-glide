@@ -331,4 +331,8 @@ test('the pin control paints beside every row and reports its state', () => {
   assert.deepEqual(pins.map((p) => p.pressed), ['true', 'false'], 'aria-pressed is the live pin state')
   assert.deepEqual(pins.map((p) => p.label), [L.unpinSession, L.pinSession], 'and the label offers the way back')
   assert.equal(pins[0].cls, 'is-pinned', 'the pinned row marks its button; the other carries no class')
+  // The is-pinned class alone was not enough: the same outline glyph in the brand colour
+  // still read as unpinned at 13 px on a phone (user, 2026-10-14: 「这个置顶的图标，点击与否没有差异」).
+  assert.match(css, /\.task-pin\{[^}]*color:var\(--muted\)/, 'the resting pin is the muted outline glyph')
+  assert.match(css, /\.task-pin\.is-pinned svg path\{fill:currentColor\}/, 'and a pinned row fills the head of the same glyph')
 })

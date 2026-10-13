@@ -841,7 +841,12 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   togglePin＋pinRank＋pinBusy）与错误/乐观显示配套文案，本线约 +2.4 KB。痛点＝用户 2026-10-13
 //   口述五项＋停止钮一项（↑ 飘走／子代理占整行／秒退显示已完成／置顶与错误不显示／设置卡顿）。
 //   混合树实测 zh 306 248 / en 306 155 ⇒ 取 308 000，余量 ~1.7 KB——下一次抬之前先问「这笔增长解决了什么痛点」。
-const ASSET_BUDGET_BYTES = 308_000
+// 2026-10-14 置顶态可辨再抬一次 308 000 → 312 000：置顶态把同一枚 stroke 图钉的针头
+//   填实（.task-pin.is-pinned svg path{fill:currentColor}，本线 +47 B），痛点＝用户 2026-10-13
+//   口述「置顶的图标，点击与否没有差异」。另：ff905d4（置顶批入库）在 308 000 之下已经越线
+//   ——隔离 worktree 复测该干净树 zh 309 844 / en 309 751，加本线 47 B ⇒ zh 309 891 / en 309 798。
+//   取 312 000，余量 ~2.1 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
+const ASSET_BUDGET_BYTES = 312_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {
