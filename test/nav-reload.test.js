@@ -56,7 +56,7 @@ test('A an unchanged catalogue repaints nothing, so the mandatory re-fetch keeps
   // innerHTML always rebuilds nodes, even for an identical string — the 0.4.17
   // scroll complaint lived exactly there. The repaint now happens only when the
   // markup actually differs.
-  const render = sliceTo('function renderWorkspaces(){', 'function relativeTime')
+  const render = sliceTo('function renderWorkspaces(){', 'function timeFor')
   assert.match(render, /const html=workspaces\.map\(/, 'the markup is built into a local first')
   assert.match(render, /if\(host\.innerHTML!==html\)host\.innerHTML=html/, 'and assigned only when it differs')
 })

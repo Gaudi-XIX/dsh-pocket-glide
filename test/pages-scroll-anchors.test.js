@@ -349,8 +349,8 @@ test('isSessionUnread: the never-opened inference is suspended until the ledger 
 const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } = {}) => {
   const js = assets.zh.js
   const body = [
-    'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'relativeTime',
-    'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
+    'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
+    'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
     'readLastMessageMap', 'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf',
     // The head notices (0.4.31): wsFlagsOf/wsFlagHtml are top-level on the page, so
     // the sandbox has to carry them exactly like the renderer it extracts.
@@ -362,7 +362,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
   const host = { innerHTML: '' }
   const make = new Function(
     'workspaces', 'sessionSummaries', 'expandedWsIds', 'revealedLists', 'activeSession', 'container', 'localStorage', `
-    const L=${JSON.stringify({ noWorkspaces: 'none', noTasksHint: 'hint', newChat: 'new', untitled: 'untitled', justNow: 'now', minute: 'm', hour: 'h', day: 'd', moreRows: '{n} more', wsNewDone: 'New', wsQuestion: 'Question', wsError: 'Error' })}
+    const L=${JSON.stringify({ noWorkspaces: 'none', noTasksHint: 'hint', newChat: 'new', untitled: 'untitled', clockMd: '{m}/{d}', clockYmd: '{y}-{m}-{d}', moreRows: '{n} more', wsNewDone: 'New', wsQuestion: 'Question', wsError: 'Error' })}
     const BLANK_ROW_VISIBLE_MS=${24 * 60 * 60 * 1000}
     const LIST_ROWS_MAX=${25}
     const WS_FLAGS_MAX=${2}

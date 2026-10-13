@@ -71,7 +71,8 @@ function buildBarSandbox({ catalog = null, rows = new Map(), view = null, active
     const subagentRowsByParent=initialRows
     const $=(id)=>id==='subagentBar'?bar:null
     const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
-    function relativeTime(value){const parsed=typeof value==='number'?value:Date.parse(value),elapsed=Math.max(0,Date.now()-(Number.isFinite(parsed)?parsed:Date.now())),minutes=Math.floor(elapsed/60000);if(minutes<1)return L.justNow;if(minutes<60)return minutes+L.minute;const hours=Math.floor(minutes/60);if(hours<24)return hours+L.hour;return Math.floor(hours/24)+L.day}
+    ${extractFunction(js, 'pad2')}
+    ${extractFunction(js, 'formatMessageClock')}
     ${extractFunction(js, 'updateSubagents')}
     ${extractFunction(js, 'subagentRowOf')}
     ${extractFunction(js, 'subagentStateOf')}
@@ -170,6 +171,8 @@ test('renderSubagentBar paints one row per catalog entry with running count and 
   assert.ok(html.includes(L.subagentErrorCount.replace('{n}', '1')), 'the error count is on the header too')
   assert.ok(html.includes('data-subagent-elapsed'), 'the running row carries its createdAt for the ticker')
   assert.ok(html.includes('5 分钟'), 'the running row shows elapsed time from createdAt')
+  const idleClock = (html.match(/data-subagent-open="c2"[\s\S]*?<time>([^<]*)<\/time>/) || [])[1]
+  assert.match(String(idleClock), /^\d{2}:\d{2}$/, 'an idle row shows the absolute 24h wall clock of its createdAt — never "x ago" (2026-10-13 unification)')
 })
 
 test('the rows container is collapsed until expanded, and the ticker only runs expanded+running', () => {

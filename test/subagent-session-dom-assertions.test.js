@@ -234,7 +234,8 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'blankRowVisible')}
     ${extractFunction(js, 'taskState')}
     ${extractFunction(js, 'taskGlyph')}
-    ${extractFunction(js, 'relativeTime')}
+    ${extractFunction(js, 'pad2')}
+    ${extractFunction(js, 'formatMessageClock')}
     ${extractFunction(js, 'timeFor')}
     ${extractFunction(js, 'titleFor')}
     ${extractFunction(js, 'wsFlagOf')}

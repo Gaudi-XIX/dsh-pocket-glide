@@ -41,7 +41,7 @@ const label = (name) => {
   return table[name]
 }
 
-const LABELS = ['noWorkspaces', 'noTasksHint', 'newChat', 'untitled', 'justNow', 'minute', 'hour', 'day', 'moreRows', 'wsNewDone', 'wsQuestion', 'wsError']
+const LABELS = ['noWorkspaces', 'noTasksHint', 'newChat', 'untitled', 'clockMd', 'clockYmd', 'moreRows', 'wsNewDone', 'wsQuestion', 'wsError']
 const L = Object.fromEntries(LABELS.map((name) => [name, label(name)]))
 
 const MINUTE = 60 * 1000
@@ -73,8 +73,8 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${[
-      'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'relativeTime',
-      'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
+      'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
+      'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
       'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'sessionModelLabel',
       'readLastMessageMap', 'pruneLastMessageMap', 'noteSessionMessageAt',
       'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf',
@@ -161,7 +161,7 @@ test('a quiet workspace keeps exactly the head it had before', () => {
   const markup = listSandbox({ summaries: [row({ sessionId: 'q', updatedAt: ago(0.2) })], ledger: { q: ago(0.1) } })
   assert.deepEqual(headFlags(markup), [], 'nothing to interrupt for')
   assert.ok(markup.includes('ws-last is-done'), 'the newest-row glyph stays')
-  assert.equal(wsTime(markup), L.justNow, 'and so does its clock')
+  assert.match(wsTime(markup), /^\d{2}:\d{2}$/, 'and so does its clock — absolute 24h wall clock (2026-10-13 unification)')
 })
 
 test('a notice comes with the newest row clock, and the notice rows keep their own glyphs', () => {
@@ -170,7 +170,7 @@ test('a notice comes with the newest row clock, and the notice rows keep their o
     ledger: readLongAgo,
   })
   assert.deepEqual(headFlags(markup), [L.wsQuestion, L.wsNewDone], 'both notices are named')
-  assert.equal(wsTime(markup), '2' + L.minute, 'the clock is NOT hidden by the notice (newest row, not oldest)')
+  assert.match(wsTime(markup), /^\d{2}:\d{2}$/, 'the clock is NOT hidden by the notice (newest row, not oldest) — absolute 24h wall clock')
   assert.match(markup, /class="task-row is-awaiting( is-unread)?"[^>]*data-id="ask"/, 'the row still carries its own state glyph')
   assert.match(markup, /class="task-row is-done is-unread"[^>]*data-id="done"/, 'and so does the unread dot')
 })
@@ -192,11 +192,11 @@ test('each row names the model its session runs on, provider first (desktop pari
 
 test('no selection projection means the clock stands alone (nothing invented)', () => {
   const markup = listSandbox({ summaries: [row({ sessionId: 'a', updatedAt: ago(0.2) })] })
-  assert.equal((markup.match(/<time>([^<]*)<\/time>/) || [])[1], L.justNow, 'no separator, no id')
+  assert.match(String((markup.match(/<time>([^<]*)<\/time>/) || [])[1]), /^\d{2}:\d{2}$/, 'no separator, no id — absolute 24h wall clock')
   const partial = listSandbox({
     summaries: [row({ sessionId: 'a', updatedAt: ago(0.2), projections: { values: { modelSelection: { next: { model: '' } } } } })],
   })
-  assert.equal((partial.match(/<time>([^<]*)<\/time>/) || [])[1], L.justNow, 'a model id that is not a string renders nothing')
+  assert.match(String((partial.match(/<time>([^<]*)<\/time>/) || [])[1]), /^\d{2}:\d{2}$/, 'a model id that is not a string renders nothing — absolute 24h wall clock')
 })
 
 test('the model name rides the clock styling — same font, same size, one line', () => {
@@ -240,12 +240,12 @@ test('a row whose last message is newer outranks one whose host clock is newer',
     lastMsg: { churn: ago(30), said: ago(2) },
   })
   assert.deepEqual(idsInOrder(markup), ['said', 'churn'], 'the row that spoke last leads')
-  assert.equal(wsTime(markup), '2' + L.minute, 'and the head clock is that message, not the row that churned')
+  assert.match(wsTime(markup), /^\d{2}:\d{2}$/, 'and the head clock is that message, not the row that churned — absolute 24h wall clock')
 })
 
 test('a session this phone never opened still shows its host clock', () => {
   const markup = listSandbox({ summaries: [row({ sessionId: 'unopened', updatedAt: ago(4) })] })
-  assert.equal(wsTime(markup), '4' + L.minute, 'no ledger entry means updatedAt, never a blank')
+  assert.match(wsTime(markup), /^\d{2}:\d{2}$/, 'no ledger entry means updatedAt, never a blank — absolute 24h wall clock')
 })
 
 test('which bubble the row inherits: the last one that finished', () => {
