@@ -243,6 +243,11 @@ function buildSendSandbox() {
     function durableUserPromptText(message){return String(message.text||'')}
     function armAwaitingTurn(){}
     function clearAwaitingTurn(){}
+    // 2026-10-13: send() now stamps an optimistic running mark on the list row
+    // for the session it sends into. The row projection is its own sandbox
+    // (test/optimistic-running.test.js) — here the send machine only needs to
+    // know the call exists, so the stub keeps this file about composer state.
+    function markRowRunning(){}
     function syncSettingsControls(){}
     function syncPromptUi(){}
     function paintMessages(list){painted.push(list.length)}

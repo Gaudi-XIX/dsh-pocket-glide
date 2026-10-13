@@ -51,9 +51,11 @@ test('a missing or malformed answer is an empty list, never a crash', () => {
 });
 
 test('every session.list load goes through the one projection', () => {
+  // projectSessionRows is visibleSessions plus the optimistic send marks (2026-10-13):
+  // a session this phone just wrote to still paints "running" until the host agrees.
   const sites = [
-    ['refreshActiveSessionSummary', 'sessionSummaries=visibleSessions(value.items)'],
-    ['applyBootData', 'sessionSummaries=visibleSessions(sessInput.items)'],
+    ['refreshActiveSessionSummary', 'sessionSummaries=projectSessionRows(value.items)'],
+    ['applyBootData', 'sessionSummaries=projectSessionRows(sessInput.items)'],
   ];
   // openSessionSettings dropped its session.list load (2026-10-10): the settings panel took
   // 1-2 seconds because it fetched the whole 469-row catalogue for one agentPreset value.

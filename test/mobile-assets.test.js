@@ -846,7 +846,13 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   口述「置顶的图标，点击与否没有差异」。另：ff905d4（置顶批入库）在 308 000 之下已经越线
 //   ——隔离 worktree 复测该干净树 zh 309 844 / en 309 751，加本线 47 B ⇒ zh 309 891 / en 309 798。
 //   取 312 000，余量 ~2.1 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
-const ASSET_BUDGET_BYTES = 312_000
+// 2026-10-13 乐观发送标记再抬一次 312 000 → 316 000：秒退回工作区页时那一行要立刻显示
+//   「正在进行」（markRowRunning/applyRunningMarks/projectSessionRows＋SEND_TRUST_MS 信任窗
+//   ＋两处消费点改走 projectSessionRows），本线约 +1.7 KB（zh 309 692 / en 309 599 实测，
+//   含乐观标记两处消费点接线）。痛点＝用户 2026-10-13 口述「我发了消息以后秒退回会话页面，
+//   按照你讲它应该显示正在进行」——桥侧 session.list 有 10s TTL，回主页读到的还是发送前那批行。
+//   取 316 000，余量 ~6.3 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
+const ASSET_BUDGET_BYTES = 316_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

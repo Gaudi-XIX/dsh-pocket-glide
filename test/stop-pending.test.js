@@ -192,19 +192,31 @@ test('stopPending reconciles where the turn actually ends', () => {
 
 function buildBoundarySandbox() {
   const noop = () => {};
+  // 2026-10-13: expireTurnRunning no longer retires synchronously — it consults
+  // the host (session.list) first, so a long silent tool run cannot fake a
+  // finished turn. The sandbox models that rpc with a controllable host row.
+  const hostState = { running: false };
+  const rpc = (method) => method === 'session.list'
+    ? Promise.resolve({ items: [{ sessionId: 's1', running: hostState.running }] })
+    : Promise.resolve({});
   const make = new Function(
     'eventSeq',
     'clearTurnRunningWatch',
     'syncPromptUi',
     'syncTurnStatus',
     'schedulePoll',
+    'rpc',
     `
     let awaitingTurnTimer=null,awaitingTurnSeq=null,turnRunningTimer=null
     let turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1
+    let turnRunningConfirming=false
     let agentRunning=true,stopPending=true,lastHistoryKey='',pendingQuestion=null,activeSession='s1'
     const AWAITING_TURN_MAX_MS=1000,TURN_RUNNING_IDLE_MAX_MS=1000
     ${extractFunction(js, 'expireAwaitingTurn')}
     ${extractFunction(js, 'expireTurnRunning')}
+    ${extractFunction(js, 'confirmTurnRunning')}
+    ${extractFunction(js, 'finishTurnConfirm')}
+    ${extractFunction(js, 'watchTurnRunning')}
     ${extractFunction(js, 'noteTurnBoundary')}
     return {
       setStop(v){stopPending=v},
@@ -213,20 +225,24 @@ function buildBoundarySandbox() {
       note(entry){noteTurnBoundary(entry)},
       get stop(){return stopPending},
       get running(){return turnRunningOpen},
+      get confirming(){return turnRunningConfirming},
     }
   `,
   );
-  return make(
+  const box = make(
     (entry) => {
       const e = entry && (entry.event || entry);
       const s = e && e.seq;
       return typeof s === 'number' ? s : -1;
     },
-    noop, noop, noop, noop,
+    noop, noop, noop, noop, rpc,
   );
+  box.setHost = (running) => { hostState.running = running === true };
+  box.settle = async () => { await new Promise((r) => setImmediate(r)); };
+  return box;
 }
 
-test('the watchdogs that retire a dead turn also retire its stop request', () => {
+test('the watchdogs that retire a dead turn also retire its stop request', async () => {
   const box = buildBoundarySandbox();
 
   box.setStop(true);
@@ -237,9 +253,27 @@ test('the watchdogs that retire a dead turn also retire its stop request', () =>
   box.note({ seq: 5, event: { type: 'turn/start' } });
   assert.equal(box.running, true, 'a fresh turn opens the running state');
   box.setStop(true);
+  box.setHost(false);
   box.expireRunning();
-  assert.equal(box.stop, false, 'expireTurnRunning clears a stale stop');
+  assert.equal(box.stop, true, 'the stop stays while the host is being asked');
+  assert.equal(box.confirming, true, 'a consult is in flight');
+  assert.equal(box.running, true, 'the turn is still open while consulting');
+  await box.settle();
+  assert.equal(box.stop, false, 'expireTurnRunning clears a stale stop once the host agrees it is idle');
   assert.equal(box.running, false, 'and closes the running state as before');
+  assert.equal(box.confirming, false, 'the consult flag clears after the verdict');
+});
+
+test('a host that says still-running keeps the turn open and the stop alive', async () => {
+  const box = buildBoundarySandbox();
+  box.note({ seq: 5, event: { type: 'turn/start' } });
+  box.setStop(true);
+  box.setHost(true);
+  box.expireRunning();
+  await box.settle();
+  assert.equal(box.running, true, 'the turn stays open when the host says still running');
+  assert.equal(box.stop, true, 'the stop request survives because the turn did not retire');
+  assert.equal(box.confirming, false, 'the consult flag still clears');
 });
 
 test('a new turn/start retires the previous stop; a bare turn/end does not', () => {
@@ -259,8 +293,14 @@ test('a new turn/start retires the previous stop; a bare turn/end does not', () 
 test('the boundary clear points ship in the page source', () => {
   assert.match(js, /turnRunningOpen=false;agentRunning=false;stopPending=false;/,
     'expireAwaitingTurn retires the stale stop');
-  assert.match(js, /if\(!turnRunningOpen\)return;turnRunningOpen=false;stopPending=false;/,
-    'expireTurnRunning retires the stale stop');
+  // 2026-10-13: the retirement lines moved out of expireTurnRunning into
+  // finishTurnConfirm — expireTurnRunning now consults the host first (a long
+  // silent tool run must not fake a finished turn), and only the host saying
+  // "not running" reaches the retirement. Pin both halves.
+  assert.match(js, /if\(!turnRunningOpen\|\|turnRunningConfirming\)return;[\s\S]*?confirmTurnRunning\(turnRunningSeenSeq\)/,
+    'expireTurnRunning hands the verdict to the host consult');
+  assert.match(js, /if\(!turnRunningOpen\)return;if\(turnRunningSeenSeq>seenAtStart\)\{watchTurnRunning\(turnRunningSeenSeq\);return\}if\(busy\)\{[\s\S]*?\}turnRunningOpen=false;stopPending=false;/,
+    'finishTurnConfirm retires the stale stop only on a host that says idle');
   assert.match(js, /if\(turnRunningOpen\)\{clearTurnRunningWatch\(\);turnRunningSeenSeq=turnRunningSeq;stopPending=false\}/,
     'noteTurnBoundary retires the stop when a new turn starts');
 });
