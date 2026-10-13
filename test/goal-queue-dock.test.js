@@ -225,7 +225,7 @@ function buildQueueActionSandbox(rpc) {
     'toasts',
     `
     const L={queueEditFailed:'编辑失败',queueRemoveFailed:'撤回失败',queueSteerFailed:'发送失败',queueCount:'排队消息 {n} 条',queueImage:'图片',queueFile:'文件',queueUnrenderable:'[图片/文件]',queueEdit:'编辑',queueSave:'保存',queueCancel:'取消',queueRemove:'撤回',queueSteer:'立刻发送'}
-    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',activeSession='s1'
+    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',activeSession='s1',streamProjections=null
     const $=(id)=>containers[id]
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'goalOf')}

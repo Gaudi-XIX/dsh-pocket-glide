@@ -491,44 +491,71 @@ test('M7 leaving the chat closes the plus sheet', () => {
   assert.ok(listing.indexOf('closePlus()') < listing.indexOf('closeSessionStream()'), 'and before the session itself is released')
 })
 
-test('M7 a plus row does nothing without a session', () => {
-  const rows = betweenA3('function dispatchPlusRow(id)', 'async function send()')
-  assert.ok(rows.includes('if(!activeSession)return'), 'the guard is the first statement')
-  assert.ok(rows.indexOf('if(!activeSession)return') < rows.indexOf("if(id==='file')"), 'before any row is interpreted')
+test('M7 a plus row that needs a session materializes the draft instead of dying', () => {
+  // 2026-10-14: the old first statement was a flat `if(!activeSession)return`, so in a
+  // brand-new draft EVERY row except the attachment pickers was a dead tap — reported as
+  // "the permission switch does nothing, the whole + sheet may be dead". The gate now
+  // materializes the session first, and only the three rows that feed the composer's
+  // local draft strip skip it (send() creates the session itself, so a draft image or
+  // file never costs a round-trip).
+  const rows = betweenA3('async function dispatchPlusRow(id)', 'async function send()')
+  const gate = "if(!PLUS_SESSIONLESS_ROWS.has(id)&&!activeSession&&!(await ensureSession()))return"
+  assert.ok(rows.includes(gate), 'the materialize-or-refuse guard is the first statement')
+  assert.ok(rows.indexOf(gate) < rows.indexOf("if(id==='file')"), 'before any row is interpreted')
+  assert.ok(!rows.includes('if(!activeSession)return'), 'no dead early return may come back')
+  assert.match(a3js, /const PLUS_SESSIONLESS_ROWS=new Set\(\['file','pick-image','pick-any'\]\)/,
+    'the sessionless rows are exactly the two image pickers and the file picker')
 })
 
-test('M7 the row handler is inert with no session and live with one', () => {
-  const source = betweenA3('function dispatchPlusRow(id)', 'async function send()')
-  const build = (activeSession) => {
+test('M7 the row handler acts on attachments in a draft and materializes for the rest', async () => {
+  const source = betweenA3('async function dispatchPlusRow(id)', 'async function send()')
+  const build = (activeSession, createOk) => {
     const calls = []
     const stub = (name) => (...args) => calls.push(name + (args.length ? ':' + args.join('|') : ''))
     const ids = { filePickerImage: 'filePickerImage', filePickerAny: 'filePickerAny' }
     const fn = new Function(
-      'activeSession', 'plusSuppressFocusReturn', '$',
+      'PLUS_SESSIONLESS_ROWS', 'activeSession', 'plusSuppressFocusReturn', '$',
       'renderPlusFile', 'closePlus', 'fillSlashCommand', 'runCommandLine', 'renderPlusPermission',
-      'openSessionSettings', 'exportSession',
+      'openSessionSettings', 'exportSession', 'ensureSession',
       `${source};return dispatchPlusRow`,
     )(
+      new Set(['file', 'pick-image', 'pick-any']),
       activeSession,
       false,
       (id) => ({ click: () => calls.push('click:' + (ids[id] || id)) }),
       stub('file'), stub('close'), stub('slash'), stub('run'), stub('permission'),
       stub('settings'), stub('export'),
+      () => { calls.push('ensure'); return Promise.resolve(createOk ? 's-new' : null) },
     )
-    return { fn, calls }
+    return { fn: (id) => fn(id), calls }
   }
 
-  const gone = build(null)
-  for (const id of ['file', 'pick-image', 'pick-any', 'goal', 'compact', 'permission', 'permission-current', 'model', 'export', 'preset:read-only']) {
-    gone.fn(id)
+  // A draft with no session: attachments paint locally, everything else mints the
+  // session once and stops there while the create is in flight / failed.
+  const draft = build(null, false)
+  draft.fn('file')
+  draft.fn('pick-image')
+  draft.fn('pick-any')
+  assert.deepEqual(draft.calls, ['file', 'close', 'click:filePickerImage', 'close', 'click:filePickerAny'],
+    'the attachment rows never reach the Host')
+  const stalled = build(null, false)
+  for (const id of ['goal', 'compact', 'permission', 'permission-current', 'model', 'export', 'preset:read-only']) {
+    stalled.fn(id)
   }
-  assert.deepEqual(gone.calls, [], 'no row may act once the chat is gone')
+  assert.deepEqual(stalled.calls, new Array(7).fill('ensure'),
+    'every other row asks for a session first and does nothing when the Host refuses')
 
-  const live = build('s1')
+  // A failed create must not fall through: with the session minted, the rows work.
+  const live = build('s1', true)
   live.fn('file')
   live.fn('pick-image')
   live.fn('model')
-  assert.deepEqual(live.calls, ['file', 'close', 'click:filePickerImage', 'close', 'settings'], 'the same rows still work inside a chat')
+  assert.deepEqual(live.calls, ['file', 'close', 'click:filePickerImage', 'close', 'settings'],
+    'inside a chat the same rows act without materializing anything')
+  const minted = build(null, true)
+  await minted.fn('permission')
+  assert.deepEqual(minted.calls, ['ensure', 'permission'],
+    'a draft that mints successfully opens the sheet it was tapping')
 })
 
 test('M7 openPlus stays off the history stack (design D-A5)', () => {

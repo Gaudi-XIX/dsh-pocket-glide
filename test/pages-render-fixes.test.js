@@ -131,7 +131,7 @@ test('T1 showError/clearTransientError chatError call sites unchanged (zero JS d
   // 12 baseline + ensureSession()'s create-failure report (2026-10-12 draft new-chat):
   // a "+" draft whose session cannot be minted must say so on the chat error line —
   // the list banner it used to hit is no longer where the tap happens. Not drift.
-  assert.equal(shown, 13, 'showError chatError call count: 12 baseline + draft materialize failure')
+  assert.equal(shown, 17, 'showError chatError call count: 13 baseline + draft materialize failure (0.4.31) + the run-command verdict echo and the three image-read failure reports (2026-10-14)')
   // 3 baseline sites + the banner dismiss (2026-10-07-fix-pocket-banner-dismiss-and-ttl):
   // the tap-the-right-end exit must leave through the same guard as the frame exit, so it
   // is a fourth call site by construction, not a drift.
@@ -226,11 +226,13 @@ test('NF-1 (r2) the fallback permission presets still describe themselves when r
   // NF-1 was the fallback array speaking `desc:` while the rowHtml contract reads
   // `o.description` — every description came out empty on the failure path.
   const rowHtml = extractFunction(js, 'rowHtml')
+  const currentRead = extractFunction(js, 'permissionCurrent')
   const render = extractFunction(js, 'renderPlusPermission')
   const host = { innerHTML: '' }
   const src = `
     let plusView = 'permission'
-    const L = ${JSON.stringify({ plusBack: '返回', plusPermission: '权限', plusPermissionLoading: '正在读取权限预设…' })}
+    let streamProjections = null, sessionSummaries = [], activeSession = 's1'
+    const L = ${JSON.stringify({ plusBack: '返回', plusPermission: '权限', plusPermissionLoading: '正在读取权限预设…', plusRowCurrent: '使用中', plusCurrentPermission: '查看当前权限' })}
     const PLUS_ICONS = { permission: '<svg></svg>' }
     const PLUS_BACK_SVG = '<svg></svg>'
     const esc = (v) => String(v == null ? '' : v)
@@ -238,6 +240,7 @@ test('NF-1 (r2) the fallback permission presets still describe themselves when r
     const plusSetSearch = () => {}
     const rpc = async () => { throw new Error('rpc down') }
     ${rowHtml}
+    ${currentRead}
     ${render}
     return renderPlusPermission().then(() => host.innerHTML)
   `
@@ -247,10 +250,13 @@ test('NF-1 (r2) the fallback permission presets still describe themselves when r
     }
     assert.equal((html.match(/class="plus-row-desc"/g) || []).length, 4,
       'three fallback rows + the current-permission row render a desc slot')
-    // negative guard: exactly one empty desc slot is legal (permission-current's
-    // desc:'' contract); the three fallback rows must never be empty again.
-    assert.equal((html.match(/<span class="plus-row-desc"><\/span>/g) || []).length, 1,
-      'only the current-permission row ships an empty description')
+    // negative guard: no desc slot is empty any more — the current-permission row
+    // used to ship `desc:''` and now reports the active preset (or '—' when the
+    // host has not answered), so an unreadable sheet cannot look blank (2026-10-14).
+    assert.equal((html.match(/<span class="plus-row-desc"><\/span>/g) || []).length, 0,
+      'no row ships an empty description — the current-permission slot falls back to the dash')
+    assert.ok(html.includes('<span class="plus-row-desc">—</span>'),
+      'with nothing to read, the current-permission row renders the dash')
   })
 })
 
