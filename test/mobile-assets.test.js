@@ -882,7 +882,12 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   两次整份 innerHTML 重建，而每次重建都在同步拼全部模型按钮串。桥侧配套（agentPreset.list
 //   30s TTL 缓存 + agentPreset.select 失效、settings.describe 接 cachedSettings）不进壳。
 //   余量约 ~1.3 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
-const ASSET_BUDGET_BYTES = 322_000
+// 2026-10-14 滚动乱跳返工（③）：三条延时链（贴底/补页对位/锚点复原）共用单调令牌 __settleTurn，
+//   后上膛者赢、另一条链下一轮自动终止——遥测实证 ts→ol 同毫秒交替写 ±3071px/±468px 横跳。
+//   同时给 settleTailStick 补 scrollHeight<=clientHeight+8 范围门（塌盒 sh=0/ch=0 时仍重试的证据）。
+//   实测 zh 322 308 B / en 322 132 B（css 49 452 + js 272 856/265 680）⇒ 322 000→324 000，余量 ~1.7 KB。
+//   ——注意「混合工作树实测值含他线改动」：本线只加令牌与门（约 +2 KB），其余 +8 KB 属他线。
+const ASSET_BUDGET_BYTES = 324_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

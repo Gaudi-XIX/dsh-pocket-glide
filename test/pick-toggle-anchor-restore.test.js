@@ -76,12 +76,13 @@ test('pick toggle: 点开另一个字段时原来的收回去', () => {
 
 // ─── 2) restoreTranscriptAnchor ────────────────────────────────────────
 
-const RESTORE = slice(js, 'function restoreTranscriptAnchor(box,anchor,tries){', '// 键盘收/放')
+const RESTORE = slice(js, 'function restoreTranscriptAnchor(box,anchor,tries,turn){', '// 键盘收/放')
 
 function buildRestore(rows, boxTop = 0) {
   const marks = []
   const box = {
     scrollTop: 100,
+    __settleTurn: 0,
     querySelectorAll() { return rows },
     getBoundingClientRect() { return { top: boxTop } },
   }
@@ -125,7 +126,7 @@ test('anchor restore: 锚点行已对齐时不写', () => {
 // 与上面那条（restoreTranscriptAnchor）的分工：那条守的是「重渲中间态行数不足，别照错行写」，
 // 这条守的是「行数齐了但高度还是估的，按当下真实布局重瞄」。两者共用 transcriptAnchor。
 
-const SETTLE = slice(js, 'function settleOlderShift(box,anchor,tries){', '// 键盘收/放')
+const SETTLE = slice(js, 'function settleOlderShift(box,anchor,tries,turn){', '// 键盘收/放')
 
 // rows 可以是数组，也可以是函数（每次查询返回不同行高，模拟「估高→真高」）。
 // $('messages') 默认返回 box 本身：settleOlderShift 第一道守卫就是 live!==box（会话已切走就不写）。
@@ -135,6 +136,7 @@ function buildSettle(rowsOrFn, boxTop = 0, opts = {}) {
   const box = {
     scrollTop: 100,
     isConnected: true,
+    __settleTurn: 0,
     querySelectorAll() { return typeof rowsOrFn === 'function' ? rowsOrFn() : rowsOrFn },
     getBoundingClientRect() { return { top: boxTop } },
   }
