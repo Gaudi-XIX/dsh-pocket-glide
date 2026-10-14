@@ -234,6 +234,12 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
     let lastMessageAt=readLastMessageMap()
     const $=(id)=>container
+    // T5 tails: the renderer paints a tail line from the prefetch cache and hands
+    // the visible rows to requestVisibleTails. This sandbox never fetches — an
+    // empty cache and a no-op pull match a landing with nothing prefetched yet.
+    const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
+    function requestVisibleTails(){}
+    ${extractFunction(js, 'tailTextOf')}
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'visibleSessions')}
     ${extractFunction(js, 'blankRowVisible')}
@@ -613,44 +619,52 @@ test('ROWS-1 a collapsed workspace builds no rows at all', () => {
   assert.doesNotMatch(sandbox.markup, /ws-empty/, 'and a workspace WITH chats is never labelled empty');
 });
 
-test('ROWS-2 an expanded workspace caps its rows and names what it left out', () => {
-  const hidden = 7;
-  const rows = manyRows(LIST_ROWS_MAX + hidden, 'b');
+test('ROWS-2 an expanded workspace shows EVERY in-window row — the 25-row ceiling is retired', () => {
+  // 2026-10-14 (card 2026-10-14-feature-pocket-手机八问收敛, user m00001③/m00073):
+  // every non-collapsed conversation inside the 24h window must be visible — the
+  // old LIST_ROWS_MAX=25 cap hid live rows behind「更多」and is gone. The old
+  // rule this test pinned ("exactly the ceiling is built, the remainder counts")
+  // must NOT be restored: the window, not a row count, is the only limit.
+  const rows = manyRows(LIST_ROWS_MAX + 7, 'b');
   const sandbox = buildRenderSandbox({
     workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: rows.map((r) => r.sessionId) }],
     summaries: rows,
   });
   sandbox.renderWorkspaces();
 
-  assert.equal(sandbox.rowIds().length, LIST_ROWS_MAX, 'exactly the ceiling is built');
-  const markup = sandbox.markup;
-  assert.ok(markup.includes('>' + L.moreRows.replace('{n}', String(hidden)) + '<'), 'the remainder is counted, never silently dropped');
-  assert.match(markup, /data-action="more"/, 'and offered as a tap, not as text');
+  assert.equal(sandbox.rowIds().length, rows.length, 'every in-window row is built, 25 is no longer a ceiling');
+  assert.doesNotMatch(sandbox.markup, /data-action="more"/, 'nothing waits behind a more row when all of it is fresh');
 });
 
-test('ROWS-3 revealing one workspace lifts its cap without touching another', () => {
-  const big = manyRows(LIST_ROWS_MAX + 3, 'b');
-  const small = manyRows(LIST_ROWS_MAX + 2, 'c');
+test('ROWS-3 stale rows wait behind the more row; revealing shows the full table', () => {
+  // The「更多」affordance survives (user m00057: it is the way back through the
+  // window edge). Its meaning changed with ROWS-2: it reveals the OUT-OF-WINDOW
+  // tail, not a fixed 25-row slice.
+  const fresh = manyRows(3, 'b');
+  const stale = manyRows(2, 'old').map((r) => ({ ...r, updatedAt: Date.now() - RECENT_WINDOW_MS * 2 }));
   const sandbox = buildRenderSandbox({
     workspaces: [
-      { workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: big.map((r) => r.sessionId) },
-      { workspaceId: 'w2', title: 'other', path: 'F:/x', sessionIds: small.map((r) => r.sessionId) },
+      { workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: [...fresh, ...stale].map((r) => r.sessionId) },
     ],
-    summaries: [...big, ...small],
-    revealed: ['w1'],
+    summaries: [...fresh, ...stale],
+    recentWindowMs: RECENT_WINDOW_MS,
   });
   sandbox.renderWorkspaces();
+  assert.equal(sandbox.rowIds().length, fresh.length, 'by default only the in-window rows paint');
+  assert.ok(sandbox.markup.includes('>' + L.moreRows.replace('{n}', String(stale.length)) + '<'), 'the stale tail is counted, never silently dropped');
 
-  const markup = sandbox.markup;
-  const w1 = markup.slice(markup.indexOf('data-ws="w1"'), markup.indexOf('data-ws="w2"'));
-  const w2 = markup.slice(markup.indexOf('data-ws="w2"'));
-  assert.equal((w1.match(/data-id="/g) ?? []).length, LIST_ROWS_MAX + 3, 'the revealed card shows everything');
-  assert.doesNotMatch(w1, /data-action="more"/, 'and stops offering more');
-  assert.equal((w2.match(/data-id="/g) ?? []).length, LIST_ROWS_MAX, 'the other card keeps its own cap');
-  assert.match(w2, /data-action="more"/, 'and still offers its rest');
+  const revealed = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: [...fresh, ...stale].map((r) => r.sessionId) }],
+    summaries: [...fresh, ...stale],
+    revealed: ['w1'],
+    recentWindowMs: RECENT_WINDOW_MS,
+  });
+  revealed.renderWorkspaces();
+  assert.equal(revealed.rowIds().length, fresh.length + stale.length, 'the revealed card shows everything');
+  assert.doesNotMatch(revealed.markup, /data-action="more"/, 'and stops offering more');
 });
 
-test('ROWS-RECENT the default cap follows the 12h window, floored at one row', () => {
+test('ROWS-RECENT the default view follows the 24h window, floored at one row', () => {
   const stale = manyRows(3, 'old').map((r) => ({ ...r, updatedAt: Date.now() - RECENT_WINDOW_MS * 2 }));
   const fresh = manyRows(2, 'new');
   const workspaces = [{ workspaceId: 'w1', title: 'DSH', path: 'F:/x', sessionIds: [...fresh, ...stale].map((r) => r.sessionId) }];

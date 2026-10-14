@@ -73,6 +73,8 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
     let pinnedSessionIds=${JSON.stringify(pinned)}
     let pinBusy=new Set()
     const $=(id)=>container
+    const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
+    function requestVisibleTails(){}
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${[
       'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
@@ -80,6 +82,10 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
       'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'sessionModelLabel',
       'readLastMessageMap', 'pruneLastMessageMap', 'noteSessionMessageAt',
       'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank',
+      // T5: the renderer paints a tail line from the prefetch cache and hands the
+      // visible rows to requestVisibleTails. The sandbox never fetches: an empty
+      // cache and a no-op pull match a landing with nothing prefetched yet.
+      'tailTextOf',
       'normalizeSelection', 'fieldText',
     ].map((name) => extractFunction(js, name)).join('\n')}
     let lastMessageAt=${JSON.stringify(lastMsg)}
@@ -143,6 +149,26 @@ test('rank: error beats question beats finished-unread', () => {
     row({ sessionId: 'b', awaitingQuestion: true, updatedAt: ago(9) }),
   ]
   assert.deepEqual(headFlags(listSandbox({ summaries: swapped, ledger: readLongAgo })), [L.wsQuestion, L.wsNewDone], 'rank wins over recency')
+})
+
+test('T2 an error the reader already saw stops nagging the head (2026-10-14 手机八问⑧)', () => {
+  // User ruling (m00001⑧ + m00047): the failed session must not broadcast its
+  // error forever — 「跟已完成一样」: unread error = red dot on the row (the
+  // generic is-unread path already covers error rows), read error = quiet. The
+  // glyph stays (taskGlyph is state truth, not a notice); only the HEAD pill is
+  // gated on unread, so opening the chat (showSessionList stamps the ledger)
+  // clears the nag without hiding that the last turn failed.
+  const failed = [row({ sessionId: 'a', error: true, updatedAt: ago(1) })]
+  assert.deepEqual(headFlags(listSandbox({ summaries: failed, ledger: {} })), [L.wsError], 'never opened + fresh failure → the head says so')
+  assert.deepEqual(headFlags(listSandbox({ summaries: failed, ledger: { a: ago(30) } })), [L.wsError], 'opened BEFORE the failure → still unread')
+  assert.deepEqual(headFlags(listSandbox({ summaries: failed, ledger: { a: ago(0.5) } })), [], 'opened AFTER the failure → read, quiet')
+  assert.deepEqual(
+    headFlags(listSandbox({ summaries: failed, ledger: { a: ago(0.5) }, activeSession: 'a' })),
+    [],
+    'and the focused row never badges itself',
+  )
+  const markup = listSandbox({ summaries: failed, ledger: { a: ago(0.5) } })
+  assert.ok(markup.includes('task-row is-error'), 'the row still shows its error glyph — the fact is visible, the nag is gone')
 })
 
 test('finished-but-unread counts fresh finishes, read ones quiet down', () => {

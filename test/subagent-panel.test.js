@@ -243,6 +243,51 @@ test('updateSubagents takes the catalog from the projection values and nothing e
   assert.equal(sandbox.catalog, null, 'a missing projection clears, never throws')
 })
 
+// ------------------------------------------------------- capsule outside close (m00001①)
+
+test('the capsule closes on a tap anywhere outside itself, and stays open on a tap inside', () => {
+  const source = extractFunction(js, 'renderSubagentBar')
+  const catalog = [CHILD('c1')]
+  const rows = new Map([['parent1', [ROW('c1', { running: true })]]])
+  // The listener itself is pinned at source level (it is a document-level
+  // addEventListener, not a page function); the behaviour it drives is the
+  // same expanded-state machinery renderSubagentBar owns.
+  assert.ok(
+    js.includes("document.addEventListener('pointerdown',e=>{if(!subagentExpanded)return;const bar=$('subagentBar');if(bar&&bar.contains(e.target))return;subagentExpanded=false;renderSubagentBar()},true)"),
+    'a document pointerdown collapses the capsule when the tap lands outside it (m00001①)',
+  )
+  assert.ok(
+    js.includes("if(!subagentExpanded)return"),
+    'collapsed means nothing to close: the outside tap is inert',
+  )
+  // The expanded flag is a single source of truth, and both the toggle and the
+  // outside tap write through renderSubagentBar, so the sandbox can exercise
+  // the visible half: flipping expanded false re-collapses the rows.
+  const sandbox = buildBarSandbox({ catalog, rows, expanded: true })
+  sandbox.renderSubagentBar()
+  assert.ok(!sandbox.bar.innerHTML.includes(' hidden>'), 'expanded: rows visible')
+  sandbox.expanded = false
+  sandbox.renderSubagentBar()
+  assert.ok(sandbox.bar.innerHTML.includes(' hidden>'), 'after the outside collapse: rows hidden again')
+  assert.ok(source.includes("subagentExpanded?"), 'the expanded flag is read from one place')
+})
+
+// ------------------------------------------------------- leaving a subagent (m00001②)
+
+test('showSessionList resets every subagent organ so the list is not left read-only', () => {
+  // Leaving the child through any non-back path (agent-busy bounce, a stale
+  // history entry, the X) used to keep subagentView set: the body kept the
+  // subagent-open class, the read-only note kept its text, and the bar kept
+  // its catalog — so the next open looked wrong even after openSession ran.
+  for (const needle of [
+    'activeSession=null;subagentView=null;subagentCatalog=null;subagentExpanded=false;stopSubagentTicker();renderSubagentBar();',
+    "document.body.classList.remove('subagent-open')",
+    "const sn=$('subagentNote');if(sn){sn.textContent='';sn.hidden=true}",
+  ]) {
+    assert.ok(js.includes(needle), `showSessionList clears: ${needle}`)
+  }
+})
+
 // ------------------------------------------------------- read-only open path
 
 test('openSubagentSession forwards the durable address and refuses to nest', () => {

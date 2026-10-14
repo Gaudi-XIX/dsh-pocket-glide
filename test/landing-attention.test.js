@@ -10,6 +10,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { UNREAD_RECENCY_MS, isRowUnread } from '../lib/projections.js'
+import { mobilePageAssets } from '../lib/pages.js'
 
 const MINUTE = 60 * 1000
 const ago = (minutes) => Date.now() - Math.round(minutes * MINUTE)
@@ -17,9 +18,9 @@ const now = () => Date.now()
 
 const quiet = (id, at) => ({ sessionId: id, updatedAt: at ?? ago(9) })
 const running = (id, at) => ({ sessionId: id, updatedAt: at ?? ago(1), running: true })
-// 72h old — outside the never-opened recency window, so an absent ledger entry
-// reads as 「old business」, not unread.
-const ancient = (id) => quiet(id, ago(72 * 60))
+// 30h old — outside the never-opened recency window (24h), so an absent ledger
+// entry reads as 「old business」, not unread.
+const ancient = (id) => quiet(id, ago(30 * 60))
 
 test('a running row is never unread — it is counted as running, not finished-quietly', () => {
   assert.equal(isRowUnread(running('a'), 0, now()), false, 'no ledger entry, but running is not the unread state')
@@ -42,6 +43,12 @@ test('an absent ledger entry falls back to recency, and only inside the window',
   const recency = 60 * MINUTE
   assert.equal(isRowUnread(quiet('a', ago(9)), 0, now(), recency), true, 'finished 9min ago, window 60min → unread')
   assert.equal(isRowUnread(quiet('b', ago(61)), 0, now(), recency), false, 'finished outside the window → old business')
-  assert.equal(isRowUnread(ancient('c'), 0, now()), false, 'default window is 48h (UNREAD_RECENCY_MS)')
-  assert.equal(UNREAD_RECENCY_MS, 48 * 60 * 60 * 1000, 'and the default stays pinned')
+  assert.equal(isRowUnread(ancient('c'), 0, now()), false, 'default window is 24h (UNREAD_RECENCY_MS)')
+  assert.equal(UNREAD_RECENCY_MS, 24 * 60 * 60 * 1000, 'and the default stays pinned')
+  // 2026-10-14 (user ruling m00073): the old 48h unread window and the 12h
+  // display window are ONE boundary — 24h is the single「still alive」limit that
+  // decides showing, red-dotting and preloading. lib/pages.js RECENT_WINDOW_MS
+  // carries the same value for the landing script; this pins them together so a
+  // future edit to one alone fails here.
+  assert.equal(Number(mobilePageAssets({ locale: 'zh' }).js.match(/RECENT_WINDOW_MS=(\d+)/)[1]), UNREAD_RECENCY_MS, 'the landing display window and the unread window are one value')
 })

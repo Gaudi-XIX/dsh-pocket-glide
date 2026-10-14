@@ -852,7 +852,37 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   含乐观标记两处消费点接线）。痛点＝用户 2026-10-13 口述「我发了消息以后秒退回会话页面，
 //   按照你讲它应该显示正在进行」——桥侧 session.list 有 10s TTL，回主页读到的还是发送前那批行。
 //   取 316 000，余量 ~6.3 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
-const ASSET_BUDGET_BYTES = 316_000
+// 2026-10-14 滚动三合一（卡 2026-10-14-feature-pocket-手机八问收敛 工序1）再抬一次 316 000 → 318 000：
+//   本线越线 223 B（zh 316 223 / en 316 127 实测；上一档 mobile-assets 在 316 000 内还是绿的），
+//   全部花在页内 JS 的注释与两条新门上——新增
+//   settleTailStick（贴底后 120ms×4 重钉到底）+ paintMessages 两分支的调用点 + topEdgePull 的
+//   三道门（followStream / 无可滚范围 / programmaticScroll 静默窗）。痛点＝用户 2026-10-14 口述
+//   「滑到底突然会跳到最上面，显示正在加载更早消息」与「发了消息/退出再进都不默认显示出来」——
+//   三个症状同一个根：content-visibility 估算行被真渲染后 scrollHeight 继续长，浏览器钳位派发
+//   真 scroll，旧代码把它当成读者甩到顶的手势。取 318 000，余量 ~1.8 KB。
+// 2026-10-14 主页尾消息行＋批量预载（卡 2026-10-14-feature-pocket-手机八问收敛 工序3/4）再抬一次
+//   318 000 → 322 000：本线越线 1 329 B（zh 319 329 / en 319 233 实测），页侧新增
+//   tailCache/tailArmedAt/requestVisibleTails/extractTail＋task-copy 内 .msg-tail 尾行＋renderWorkspaces
+//   挂接。痛点＝用户 2026-10-14 口述「每个非折叠的会话至少把最后几条消息显示出来，不要再加载了」——
+//   一次 session.tails 批量 RPC（桥侧 fan-out，公网隧道不再 N 次往返）＋updatedAt 判变化。
+//   取 322 000，余量 ~3.0 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
+// 2026-10-14 子代理胶囊点外关＋离开子代理态清账（卡 2026-10-14-feature-pocket-手机八问收敛 工序6）
+//   本线越线 661 B（zh 312 667 / en 315 735 实测，均在 322 000 内，预算不动）：页侧新增
+//   document pointerdown 监听（展开态下点 #subagentBar 之外即收起）＋showSessionList 的
+//   subagentView/subagentCatalog/subagentExpanded/stopSubagentTicker 清账与 subagent-open 摘除＋
+//   handleHistory 的同条目判据从「chat-open 恒真」收紧为「sessionId+subagent 地址双等」。
+//   痛点＝用户 2026-10-14 口述「点开子代理胶囊以后，应该判定点击除该框框之外的任何地方均为关闭」
+//   与「点击进入子代理会话后，返回应该是返回会话，而不是直接返回到主页」。
+//   余量约 ~9.3 KB（zh 侧）——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
+// 2026-10-14 会话设置面板三项去卡（卡 2026-10-14-feature-pocket-手机八问收敛 工序7）
+//   本线越线 629 B（zh 320 629 / en 320 533 实测，均在 322 000 内，预算不动）：页侧
+//   settingFieldHtml 的 setting-list 改空壳 + data-built 标记、togglePickField 首次展开才
+//   填 pickRows（不再在每次渲染时把全部 group×model 按钮拼进 DOM）。痛点＝用户 2026-10-14
+//   口述「现在点击 pocket 手机页面里的『会话设置』，仍然非常卡」——取证结论：打开一次要付
+//   两次整份 innerHTML 重建，而每次重建都在同步拼全部模型按钮串。桥侧配套（agentPreset.list
+//   30s TTL 缓存 + agentPreset.select 失效、settings.describe 接 cachedSettings）不进壳。
+//   余量约 ~1.3 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
+const ASSET_BUDGET_BYTES = 322_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

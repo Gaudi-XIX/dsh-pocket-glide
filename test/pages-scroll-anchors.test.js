@@ -414,6 +414,8 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
     'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
     'readLastMessageMap', 'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank',
+    // T5: renderWorkspaces reads the tail line through tailTextOf — extract the real one.
+    'tailTextOf',
     // The head notices (0.4.31): wsFlagsOf/wsFlagHtml are top-level on the page, so
     // the sandbox has to carry them exactly like the renderer it extracts.
     'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'sessionModelLabel',
@@ -439,6 +441,10 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     let pinBusy=new Set()
     const PIN_SVG=''
     const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
+    // T5 tails: the landing paints a tail line only from the prefetch cache, and
+    // the sandbox never fetches — an empty cache means no line, matching the page.
+    const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
+    function requestVisibleTails(){}
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${body}
@@ -523,8 +529,10 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   assert.match(assets.zh.document, /id="jumpPrompt"[^>]*aria-label="上一条回答"/, 'and is named for the answer above, not the question above')
   assert.match(js, /function answerAnchorEl\(box\)\{const rows=[\s\S]*?for\(let index=rows\.length-1;index>=0;index-=1\)/, 'the scan walks the assistant text rows backwards from the newest')
   assert.match(js, /if\(anchorTopOf\(box,row\)<box\.scrollTop-JUMP_EDGE_PX\)return row/, 'and stops at the first one above the fold')
-  assert.match(js, /function topEdgePull\(box\)\{probeMark\('sc'\);if\(box\.scrollTop>0\)\{topEdgeArmed=false;return\}if\(topEdgeArmed\)return;topEdgeArmed=true;/, 'the top-edge load is edge-triggered, one page per arrival（开头是滚动时序埋点的打点；边缘触发与一次到达只取一页两条语义不变）')
+  assert.match(js, /function topEdgePull\(box\)\{probeMark\('sc'\);if\(box\.scrollTop>0\)\{topEdgeArmed=false;return\}if\(topEdgeArmed\)return;if\(followStream\)return;/, 'the top-edge load is edge-triggered, one page per arrival（开头是滚动时序埋点的打点；边缘触发与一次到达只取一页两条语义不变）')
+  assert.match(js, /if\(box\.scrollHeight<=box\.clientHeight\+8\)return;if\(Date\.now\(\)<followReArmAllowedAt\)return;topEdgeArmed=true;/, '2026-10-14 工序1：无可滚范围与 programmaticScroll 静默窗内的钳位 scroll 不算读者甩到顶——被挡下时不消耗 latch（滑到底突然跳顶+显示「正在加载更早消息」的根）')
   assert.match(js, /if\(!activeSession\|\|!olderHasMore\|\|olderBusy\|\|olderRunBusy\)return;void loadOlder\(\)/, 'and it obeys every lock the deliberate pull obeys')
+  assert.match(js, /if\(typeof settleTailStick==='function'\)settleTailStick\(box,4\)/, '2026-10-14 工序1：贴底写入后按 120ms 重钉到底——content-visibility 估算行被真渲染时 scrollHeight 继续长，浏览器不会把人带到底（进入会话/发送后没滚到底的根）')
   assert.match(js, /const stick=typeof followStream==='undefined'\|\|followStream;if\(stick\)\{if\(typeof programmaticScroll==='function'\)programmaticScroll\(\);box\.scrollTop=box\.scrollHeight;if\(typeof probeMark==='function'\)probeMark\('bp'\)\}/, 'patchLastStreamMessage gates the stick on followStream（花括号里是可选打点 bp，门槛语义没变；守卫是为了测试沙箱按名抽取时不 ReferenceError）')
   assert.match(assets.zh.document, /id="scrollAnchors"/, 'the anchor deck ships in the document')
   assert.match(js, /anchor-fab/, 'the fab styling ships')

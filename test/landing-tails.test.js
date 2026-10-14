@@ -1,0 +1,198 @@
+// Page-side tail extraction (card 2026-10-14-feature-pocket-手机八问收敛 T5).
+//
+// session.tails ships raw compacted records; the landing shows one line per row.
+// What must stay true on this leg:
+//   1. only user/message and assistant/message count, and a user record needs
+//      source.kind === 'user' (the same test visibleMessages applies);
+//   2. the LAST text record wins, tool rows and empty blocks are skipped;
+//   3. over-long lines are clipped with an ellipsis, whitespace flattened;
+//   4. the time handed to the row clock is the last text record's own stamp,
+//      0 when absent — sortAtOf must not invent a timestamp;
+//   5. the fetch is judged on updatedAt: unchanged rows and running rows are
+//      never pulled, and one batch is in flight per id at most.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { mobilePageAssets } from '../lib/pages.js'
+
+const assets = { zh: mobilePageAssets({ locale: 'zh' }) }
+
+function extractFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`)
+  assert.notEqual(start, -1, `${name} must exist in the rendered asset`)
+  let depth = 0
+  for (let i = start; i < source.length; i++) {
+    const char = source[i]
+    if (char === '{') depth++
+    else if (char === '}') {
+      depth--
+      if (depth === 0) return source.slice(start, i + 1)
+    }
+  }
+  throw new Error(`unbalanced braces after ${name}`)
+}
+
+const limitOf = () => {
+  const m = assets.zh.js.match(/const TAIL_TEXT_LIMIT=(\d+);/)
+  assert.ok(m, 'TAIL_TEXT_LIMIT must be a plain number in the asset')
+  return Number(m[1])
+}
+
+const tailSandbox = () => {
+  const js = assets.zh.js
+  const body = [
+    extractFunction(js, 'contentBlocks'),
+    extractFunction(js, 'extractTail'),
+    extractFunction(js, 'tailTextOf'),
+  ].join('\n')
+  return new Function(`
+    const TAIL_TEXT_LIMIT=${limitOf()}
+    const tailCache=new Map()
+    ${body}
+    return { extractTail, tailTextOf, tailCache }
+  `)()
+}
+
+// Records arrive in the two shapes the transcript leg already accepts: wrapped
+// ({seq, event:{type,time,data}} — what session/page ships, see
+// test/pages-image-file.test.js:278) or flat ({type,time,data}).
+const userRec = (text, time) => ({
+  seq: 1,
+  event: { type: 'user/message', time, data: { message: { source: { kind: 'user' }, content: [{ type: 'text', text }] } } }
+})
+
+const assistantRec = (blocks, time) => ({
+  seq: 2,
+  event: { type: 'assistant/message', time, data: { message: { content: blocks } } }
+})
+
+test('the last text record is the tail, tool noise and empty blocks are skipped', () => {
+  const { extractTail } = tailSandbox()
+  const hit = extractTail([
+    userRec('first question', 1000),
+    { seq: 3, event: { type: 'tool/call', time: 1500, data: {} } },
+    assistantRec([{ type: 'reasoning', text: 'thinking' }], 2000),
+    assistantRec([{ type: 'tool-call', id: 'x', name: 'read' }], 2500),
+    assistantRec([{ type: 'text', text: '  answer   with   spaces  ' }], 3000)
+  ])
+  assert.equal(hit.text, 'answer with spaces', 'whitespace flattened')
+  assert.equal(hit.time, 3000, 'the clock is the tail record own stamp')
+})
+
+test('a user record only counts when the source says user', () => {
+  const { extractTail } = tailSandbox()
+  const fake = { seq: 1, event: { type: 'user/message', time: 9, data: { message: { source: { kind: 'assistant' }, content: [{ type: 'text', text: 'nope' }] } } } }
+  assert.deepEqual(extractTail([fake, userRec('real', 11)]), { text: 'real', time: 11 })
+  assert.deepEqual(extractTail([fake]), { text: '', time: 0 }, 'nothing left to show')
+})
+
+test('an over-long tail is clipped with an ellipsis at the shipped limit', () => {
+  const { extractTail } = tailSandbox()
+  const limit = limitOf()
+  const hit = extractTail([userRec('x'.repeat(limit + 50), 5)])
+  assert.equal(hit.text.length, limit + 1, 'the clip plus the ellipsis')
+  assert.ok(hit.text.endsWith('…'))
+})
+
+test('junk in, empty out — no throw on the landing', () => {
+  const { extractTail } = tailSandbox()
+  for (const junk of [null, undefined, {}, 'x', [null], [{}], [{ seq: 1, event: { type: 'assistant/message', data: null } }]]) {
+    assert.deepEqual(extractTail(junk), { text: '', time: 0 }, 'junk must degrade to no tail')
+  }
+  // a flat record whose stamp is junk still shows its text, only the clock drops
+  assert.deepEqual(extractTail([{ type: 'assistant/message', time: 'soon', data: { message: { content: [{ type: 'text', text: 'hi' }] } } }]), { text: 'hi', time: 0 })
+})
+
+test('tailTextOf only speaks for a cached row with actual text', () => {
+  const { tailTextOf, tailCache } = tailSandbox()
+  assert.equal(tailTextOf('missing'), '')
+  tailCache.set('a', { text: '', time: 5 })
+  assert.equal(tailTextOf('a'), '', 'an empty tail paints no line')
+  tailCache.set('b', { text: 'hello', time: 7 })
+  assert.equal(tailTextOf('b'), 'hello')
+})
+
+// ------------------------------------- the pull is judged on updatedAt
+
+const listSandbox = ({ state = {}, rpcImpl }) => {
+  const js = assets.zh.js
+  const body = [
+    extractFunction(js, 'contentBlocks'),
+    extractFunction(js, 'extractTail'),
+    extractFunction(js, 'requestVisibleTails'),
+  ].join('\n')
+  return new Function('rpc, taskState, noteSessionMessageAt, renderWorkspaces, fakeHost, state', `
+    const TAIL_TEXT_LIMIT=${limitOf()}
+    const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
+    let activeSession=${JSON.stringify(state.activeSession ?? null)}
+    const sessionSummaries=${JSON.stringify(state.rows ?? [])}
+    ${body}
+    return {
+      requestVisibleTails: () => requestVisibleTails(fakeHost()),
+      tailArmedAt, tailPending, tailCache, sessionSummaries
+    }
+  `)(rpcImpl, (s) => s.state || '', (...a) => { state.stamps = state.stamps || []; state.stamps.push(a) }, () => { state.paints = (state.paints || 0) + 1 }, () => ({
+    querySelectorAll: (sel) => sel === '.task-row[data-id]' ? (state.visible || []).map((id) => ({ getAttribute: () => id })) : []
+  }))
+}
+
+test('rows whose stamp did not move and rows still running are never pulled', async () => {
+  const asked = []
+  const state = { rows: [{ sessionId: 'a', updatedAt: 10 }, { sessionId: 'b', updatedAt: 20, state: 'running' }, { sessionId: 'c', updatedAt: 30 }], visible: ['a', 'b', 'c', 'ghost'] }
+  const box = listSandbox({ state, rpcImpl: async (method, payload) => { asked.push(payload.sessions.slice()); return { tails: {} } } })
+  box.tailArmedAt.a = 10 // already fetched at this exact stamp
+  await box.requestVisibleTails()
+  assert.deepEqual(asked[0], ['c'], 'unchanged row, running row and a row with no summary are all skipped')
+})
+
+test('an active transcript stops the prefetch, and a batch is in flight once per id', async () => {
+  const asked = []
+  const state = { activeSession: 's1', rows: [{ sessionId: 'a', updatedAt: 1 }], visible: ['a'] }
+  const box = listSandbox({ state, rpcImpl: async (method, payload) => { asked.push(payload.sessions.slice()); return { tails: {} } } })
+  await box.requestVisibleTails()
+  assert.equal(asked.length, 0, 'inside a session the landing is not on screen')
+
+  const state2 = { rows: [{ sessionId: 'a', updatedAt: 5 }], visible: ['a'] }
+  let release
+  const gate = new Promise((r) => { release = r })
+  const box2 = listSandbox({ state: state2, rpcImpl: async () => { await gate; return { tails: { a: { updatedAt: 5, events: [userRec('late', 9)] } } } } })
+  const first = box2.requestVisibleTails()
+  assert.ok(box2.tailPending.has('a'), 'the id is claimed before the response')
+  await box2.requestVisibleTails()
+  assert.equal(box2.tailPending.size, 1, 'a second render while in flight does not double-ask')
+  release()
+  await first
+  assert.equal(box2.tailCache.get('a').text, 'late', 'the answer landed in the cache')
+  assert.equal(box2.tailArmedAt.a, 5, 'armed at the stamp the batch was judged on')
+  assert.deepEqual(state2.stamps[0], ['a', 9], 'the row clock got the tail time')
+  assert.equal(box2.tailPending.size, 0, 'the claim is released either way')
+})
+
+test('a failed batch releases the claim so the next render can retry', async () => {
+  const state = { rows: [{ sessionId: 'a', updatedAt: 1 }], visible: ['a'] }
+  let calls = 0
+  const box = listSandbox({ state, rpcImpl: async () => { calls += 1; if (calls === 1) throw new Error('tunnel down'); return { tails: {} } } })
+  await box.requestVisibleTails()
+  assert.equal(box.tailPending.size, 0, 'nothing stays claimed after a failure')
+  assert.equal(box.tailArmedAt.a, undefined, 'a failure does not arm the stamp — it is not an answer')
+  await box.requestVisibleTails()
+  assert.equal(calls, 2, 'the next render asks again')
+})
+
+test('per-row markers do not poison the cache or the clock', async () => {
+  const state = { rows: [{ sessionId: 'a', updatedAt: 1 }, { sessionId: 'b', updatedAt: 2 }], visible: ['a', 'b'] }
+  const box = listSandbox({ state, rpcImpl: async () => ({ tails: { a: { error: 'page-failed' }, b: { updatedAt: 2, events: [] } } }) })
+  await box.requestVisibleTails()
+  assert.equal(box.tailCache.has('a'), false, 'a marker is not a tail')
+  assert.equal(box.tailCache.get('b').text, '', 'an empty page caches an empty tail')
+  assert.equal(state.stamps, undefined, 'no time means nothing fed the ledger')
+  assert.equal(box.tailArmedAt.a, 1, 'but the row is still armed, so the landing does not hammer it')
+})
+
+// ------------------------------------- the wiring stays visible in the asset
+
+test('the row markup shows the tail and the batch gets its own slow budget', () => {
+  const js = assets.zh.js
+  assert.match(js, /task-copy[^]*msg-tail[^]*tailTextOf/, 'the tail line lives inside the row copy')
+  assert.match(js, /rpc\('session\.tails',\{sessions:ids\},60000\)/, 'one screen of tails is judged against 60s, not the 12s default (the bridge fans out up to 30 Host pages)')
+  assert.match(js, /if\(host\.innerHTML!==html\)host\.innerHTML=html;requestVisibleTails\(host\)/, 'the prefetch rides every landing paint')
+})

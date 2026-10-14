@@ -32,13 +32,16 @@ const TOGGLE = slice(js, 'function togglePickField(field){', 'function applyPick
 
 function buildToggle() {
   const pickModel = { dataset: { pick: 'model' }, attrs: {}, setAttribute(k, v) { this.attrs[k] = v } }
-  const listModel = { dataset: { field: 'model' }, hidden: true }
+  const listModel = { dataset: { field: 'model' }, hidden: true, innerHTML: '' }
   const pickPreset = { dataset: { pick: 'preset' }, attrs: {}, setAttribute(k, v) { this.attrs[k] = v } }
-  const listPreset = { dataset: { field: 'preset' }, hidden: true }
+  const listPreset = { dataset: { field: 'preset' }, hidden: true, innerHTML: '' }
   const all = [pickModel, listModel, pickPreset, listPreset]
   const box = { querySelectorAll(sel) { return sel === '[data-pick],[data-field]' ? all : [] } }
-  const make = new Function('$', `let settingsPick='';${TOGGLE};return {togglePickField,peek:()=>settingsPick}`)
-  const api = make(() => box)
+  // T8: togglePickField now lazy-fills the list on first open instead of
+  // pre-building every model button at render time. Inject a stub so the
+  // sandbox can call pickRows without needing modelCatalog/presets.
+  const make = new Function('$', 'pickRows', `let settingsPick='';${TOGGLE};return {togglePickField,peek:()=>settingsPick}`)
+  const api = make(() => box, (field) => field + '-rows')
   return { ...api, pickModel, listModel, pickPreset, listPreset }
 }
 
@@ -48,6 +51,9 @@ test('pick toggle: 再点一次同一字段把面板收回去', () => {
   assert.equal(t.peek(), 'model')
   assert.equal(t.pickModel.attrs['aria-expanded'], true)
   assert.equal(t.listModel.hidden, false)
+  // T8: the list is filled lazily on first open, not pre-built at render.
+  assert.equal(t.listModel.dataset.built, '1')
+  assert.equal(t.listModel.innerHTML, 'model-rows')
   t.togglePickField('model')
   assert.equal(t.peek(), '')
   assert.equal(t.pickModel.attrs['aria-expanded'], false)
@@ -63,6 +69,9 @@ test('pick toggle: 点开另一个字段时原来的收回去', () => {
   assert.equal(t.listModel.hidden, true)
   assert.equal(t.pickPreset.attrs['aria-expanded'], true)
   assert.equal(t.listPreset.hidden, false)
+  // T8: preset list also filled lazily.
+  assert.equal(t.listPreset.dataset.built, '1')
+  assert.equal(t.listPreset.innerHTML, 'preset-rows')
 })
 
 // ─── 2) restoreTranscriptAnchor ────────────────────────────────────────

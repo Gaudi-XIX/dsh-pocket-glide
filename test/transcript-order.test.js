@@ -356,8 +356,8 @@ test('one back action always leaves the chat view', () => {
     'an automatic jump rewrites the current entry instead of stacking a second chat entry',
   )
   assert.ok(
-    js.includes("if(document.body.classList.contains('chat-open')){history.replaceState({view:'sessions'},'');showSessionList();return}"),
-    'a stale duplicate chat entry collapses to the session list instead of reopening the same chat',
+    js.includes("if(state.sessionId===activeSession&&entrySub===hereSub&&document.body.classList.contains('chat-open')){history.replaceState({view:'sessions'},'');showSessionList();return}"),
+    'a stale duplicate chat entry (same session, same subagent address) collapses to the session list instead of reopening the same chat',
   )
   assert.ok(js.includes("history.state?.view==='chat'&&history.length>1"), 'a single-entry stack does not press a dead back button')
   assert.ok(
@@ -372,44 +372,62 @@ test('one back action always leaves the chat view', () => {
   assert.ok(js.includes('void openSession(btn.dataset.id)'), 'opening a session row stays user-initiated, so it still pushes history')
 })
 
-test('handleHistory leaves the chat when a stale chat entry arrives while it is already open', () => {
+test('handleHistory collapses only the identical entry — a back into a DIFFERENT session reopens it', () => {
   const { js } = mobilePageAssets({ locale: 'zh' })
   const source = extractFunction(js, 'handleHistory')
 
-  const harness = chatOpen => {
+  const harness = ({ chatOpen, activeSession, view }) => {
     const calls = { opened: [], replaced: [], listed: 0 }
     const document = { body: { classList: { contains: name => chatOpen && name === 'chat-open' } } }
     const history = { replaceState: (state, url) => { calls.replaced.push([state, url]) } }
-    const openSession = (id, title, fromHistory) => { calls.opened.push([id, title, fromHistory]) }
+    const openSession = (id, title, fromHistory, pushHistory, opts) => { calls.opened.push([id, title, fromHistory, opts || null]) }
     const showSessionList = () => { calls.listed += 1 }
     const handleHistory = new Function(
       'document',
       'history',
       'openSession',
       'showSessionList',
+      'activeSession',
+      'subagentView',
       `${source}; return handleHistory;`,
-    )(document, history, openSession, showSessionList)
+    )(document, history, openSession, showSessionList, activeSession, view)
     return { calls, handleHistory }
   }
 
-  // The reported dead gesture: a stale {view:'chat'} entry pops while the chat is already on
-  // screen. Reopening the same session repainted an identical view, so back looked like a no-op.
-  const open = harness(true)
+  // The reported dead gesture: a stale {view:'chat'} entry pops while the same chat is
+  // already on screen. Reopening it repaints an identical view, so back looked dead.
+  const open = harness({ chatOpen: true, activeSession: 's1', view: null })
   open.handleHistory({ view: 'chat', sessionId: 's1', title: 'T' })
   assert.deepEqual(open.calls.opened, [], 'the same chat must not be reopened')
   assert.equal(open.calls.listed, 1, 'the session list is shown instead')
   assert.deepEqual(open.calls.replaced, [[{ view: 'sessions' }, '']], 'the stale entry is rewritten so the next back still works')
 
+  // 卡 2026-10-14-feature-pocket-手机八问收敛 工序6（m00001②）：返回该回到父会话而不是主页。
+  // 从子代理会话按返回，弹出的父会话条目与当前会话不同，是真实跳转——旧实现把它当陈旧副本
+  // 直接丢到主页，这就是「返回后落到主页」的根因。
+  const back = harness({ chatOpen: true, activeSession: 'child9', view: { parentSessionId: 'parent1', mode: 'one-shot' } })
+  back.handleHistory({ view: 'chat', sessionId: 'parent1', title: 'Parent' })
+  assert.deepEqual(back.calls.opened, [['parent1', 'Parent', true, null]], 'a back into the parent session reopens the parent')
+  assert.equal(back.calls.listed, 0, 'the list is NOT shown')
+  assert.deepEqual(back.calls.replaced, [], 'no entry is rewritten')
+
+  // Same session id but a different subagent address (child-of-a-different-parent
+  // is a different session in the Host's eyes): still a real navigation.
+  const otherChild = harness({ chatOpen: true, activeSession: 'c1', view: { parentSessionId: 'pA', mode: 'one-shot' } })
+  otherChild.handleHistory({ view: 'chat', sessionId: 'c1', title: 'C', subagent: { parentSessionId: 'pB', mode: 'one-shot' } })
+  assert.deepEqual(otherChild.calls.opened, [['c1', 'C', true, { subagent: { parentSessionId: 'pB', mode: 'one-shot' } }]], 'a different subagent address reopens with the new address')
+  assert.equal(otherChild.calls.listed, 0)
+
   // A genuine forward navigation into a chat, arriving while the list is on screen.
-  const listed = harness(false)
+  const listed = harness({ chatOpen: false, activeSession: null, view: null })
   listed.handleHistory({ view: 'chat', sessionId: 's1', title: 'T' })
-  assert.deepEqual(listed.calls.opened, [['s1', 'T', true]], 'a real back into a chat still opens it')
+  assert.deepEqual(listed.calls.opened, [['s1', 'T', true, null]], 'a real back into a chat still opens it')
   assert.equal(listed.calls.listed, 0)
   assert.deepEqual(listed.calls.replaced, [])
 
   // The sessions entry, and a missing state, both land on the list.
   for (const state of [{ view: 'sessions' }, null]) {
-    const plain = harness(true)
+    const plain = harness({ chatOpen: true, activeSession: 's1', view: null })
     plain.handleHistory(state)
     assert.equal(plain.calls.listed, 1, 'the sessions entry shows the list')
     assert.deepEqual(plain.calls.opened, [])
