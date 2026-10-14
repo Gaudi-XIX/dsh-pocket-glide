@@ -1,7 +1,6 @@
-// Page-side tail extraction (card 2026-10-14-feature-pocket-手机八问收敛 T5).
+// Page-side tail prefetch (card 2026-10-14-feature-pocket-手机八问收敛 T5).
 //
-// session.tails ships raw compacted records; the landing shows one line per row.
-// What must stay true on this leg:
+// session.tails ships raw compacted records. What must stay true on this leg:
 //   1. only user/message and assistant/message count, and a user record needs
 //      source.kind === 'user' (the same test visibleMessages applies);
 //   2. the LAST text record wins, tool rows and empty blocks are skipped;
@@ -10,6 +9,13 @@
 //      0 when absent — sortAtOf must not invent a timestamp;
 //   5. the fetch is judged on updatedAt: unchanged rows and running rows are
 //      never pulled, and one batch is in flight per id at most.
+//   6. 2026-10-14 (m02164①): this is a PREFETCH ONLY — the landing row paints
+//      title/clock/state and no message text. The first version rendered the
+//      tail into the row and the user rejected it outright:「我要你做的是，在
+//      登录的时候，把时间限制以内的会话，每个会话的对话消息提前加载几条，
+//      而不是让你显示到主页上」. So the batch must never re-render the landing
+//      (the rows would rebuild under the reader's thumb) and the row markup must
+//      stay free of the tail line.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mobilePageAssets } from '../lib/pages.js'
@@ -190,9 +196,14 @@ test('per-row markers do not poison the cache or the clock', async () => {
 
 // ------------------------------------- the wiring stays visible in the asset
 
-test('the row markup shows the tail and the batch gets its own slow budget', () => {
+test('the batch is prefetch only: no tail line in the row, no re-render after it', () => {
   const js = assets.zh.js
-  assert.match(js, /task-copy[^]*msg-tail[^]*tailTextOf/, 'the tail line lives inside the row copy')
+  assert.doesNotMatch(js, /task-copy[^]*msg-tail[^]*tailTextOf/, 'the landing row paints no message text — prefetch only (m02164①)')
   assert.match(js, /rpc\('session\.tails',\{sessions:ids\},60000\)/, 'one screen of tails is judged against 60s, not the 12s default (the bridge fans out up to 30 Host pages)')
   assert.match(js, /if\(host\.innerHTML!==html\)host\.innerHTML=html;requestVisibleTails\(host\)/, 'the prefetch rides every landing paint')
+  // A batch that lands must not rebuild the list: the reader is scrolling it.
+  // Cut the real function out of the asset — a whole-file regex would happily
+  // match renderWorkspaces() defined a thousand lines below the fetch.
+  const pull = extractFunction(js, 'requestVisibleTails')
+  assert.doesNotMatch(pull, /renderWorkspaces\(\)/, 'a prefetched tail never re-renders the landing')
 })

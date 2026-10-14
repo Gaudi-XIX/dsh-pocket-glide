@@ -137,7 +137,9 @@ test('E the poll lives exactly on the landing: armed on entry, disarmed into a c
   const leaving = sliceTo('async function showSessionList(){', 'function paintInstantHistory')
   assert.match(leaving, /await refreshList\(false\);startListPoll\(\)\}/, 'back to the list arms the clock as its last statement')
   const open = sliceTo('async function openSession(id,title', 'function handleHistory')
-  assert.match(open, /clearTimeout\(poll\);stopListPoll\(\);closeSessionStream\(\);/, 'entering a session disarms it beside the session poll')
+  // (2026-10-14 m02164②) entering a chat also hands the outgoing transcript to the
+  // cache first — same statement sequence, one more step in the middle.
+  assert.match(open, /clearTimeout\(poll\);stopListPoll\(\);[\s\S]*?evictSessionCache\(\)\}closeSessionStream\(\);/, 'entering a session disarms it beside the session poll')
   const draft = sliceTo('function startDraftChat(workspaceId){', 'async function ensureSession()')
   assert.match(draft, /stopListPoll\(\);draftWorkspaceId=workspaceId;/, 'a new-chat draft counts as a chat too')
 })
@@ -235,6 +237,39 @@ test('B a re-entry that painted from cache does not show the skeleton', () => {
     'instantPainted is the real question: did pixels land, not did a branch run',
   )
   assert.match(open, /if\(!instantPainted\)\$\('messages'\)\.innerHTML=loadingShell\(\)/, 'the skeleton only replaces nothing')
+})
+
+// ---------------------------------------------------------------------------
+// F — a session-to-session jump hands the transcript over instead of dropping it
+// (2026-10-14 m02164②: 「返回的时候为什么又要把这个会话加载了？这不是已经加载好了的吗」)
+// ---------------------------------------------------------------------------
+
+test('F leaving one chat for another stashes the outgoing transcript before the teardown', () => {
+  const open = sliceTo('async function openSession(id,title', 'function handleHistory')
+  assert.match(
+    open,
+    /if\(activeSession&&activeSession!==id&&streamEvents\.length\)\{sessionCache\.set\(activeSession,\{streamEvents,olderEvents,olderHasMore,olderExhausted,streamProjections,at:Date\.now\(\)\}\);evictSessionCache\(\)\}closeSessionStream\(\)/,
+    'the jump caches by the OUTGOING id and only then closes the stream — closing first would empty the arrays it is reading',
+  )
+  assert.ok(
+    open.indexOf('sessionCache.set(activeSession') < open.indexOf('evictSessionCache()}closeSessionStream()'),
+    'the stash strictly precedes the teardown (compared against the call, not the comment that names it)',
+  )
+})
+
+test('F a fresh handover paint skips the history refetch, a stale one does not', () => {
+  const open = sliceTo('async function openSession(id,title', 'function handleHistory')
+  assert.match(
+    open,
+    /const instantFresh=instantPainted&&Date\.now\(\)-\(\(sessionCache\.get\(id\)\|\|\{\}\)\.at\|\|0\)<SESSION_CACHE_FRESH_MS;/,
+    'freshness is measured against the stamp the same entry wrote — an unstamped or missing cache is never fresh',
+  )
+  assert.match(
+    open,
+    /if\(activeSession===id&&firstFrame!==true&&!instantFresh\)await loadHistory\(true\);/,
+    'the refetch still happens for a slow first frame or a cold paint — only the redundant one is dropped',
+  )
+  assert.match(js, /const SESSION_CACHE_FRESH_MS=\d+;/, 'the window is a named constant, not a literal')
 })
 
 test('B the transcript reset still happens before the instant paint', () => {
