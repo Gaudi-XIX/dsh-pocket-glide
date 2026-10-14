@@ -345,6 +345,32 @@ test('several pins stay in their own last-message order — the pin only partiti
   assert.deepEqual(idsInOrder(markup), ['p-new', 'p-old', 'free'], 'the pinned band first, still clock-ordered inside it')
 })
 
+// ② of the 2026-10-14 handover (m02164): a failed session must stop nagging
+// forever. 「有时候会话已经崩掉了，我无法解决，只能开新会话去解决。那那个错误
+// 会话不一直在这儿吗？」 The ruling is 跟已完成一样 — the red dot on the row is the
+// notice, and reading it clears it; after a day it stops interrupting at all.
+test('⑧ an error older than the 24h window rests, and reading it clears it before that', () => {
+  assert.deepEqual(
+    headFlags(listSandbox({ summaries: [row({ sessionId: 'dead', error: true, updatedAt: ago(30 * 60) })] })),
+    [],
+    'never opened, but the failure is a full day old → old business, quiet (the 24h whole-page window)',
+  )
+  assert.deepEqual(
+    headFlags(listSandbox({ summaries: [row({ sessionId: 'dead', error: true, updatedAt: ago(30 * 60) })] })),
+    [],
+    'and the row itself is outside the window too — nothing to dot',
+  )
+  assert.deepEqual(
+    headFlags(listSandbox({
+      summaries: [row({ sessionId: 'a', error: true, updatedAt: ago(1) })],
+      ledger: { a: ago(0.5) },
+      activeSession: 'a',
+    })),
+    [],
+    'opened and focused → quiet',
+  )
+})
+
 test('the pin control paints beside every row and reports its state', () => {
   const markup = listSandbox({
     summaries: [row({ sessionId: 'a', updatedAt: ago(1) }), row({ sessionId: 'b', updatedAt: ago(2) })],

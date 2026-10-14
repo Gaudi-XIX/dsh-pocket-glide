@@ -252,8 +252,10 @@ test('the capsule closes on a tap anywhere outside itself, and stays open on a t
   // The listener itself is pinned at source level (it is a document-level
   // addEventListener, not a page function); the behaviour it drives is the
   // same expanded-state machinery renderSubagentBar owns.
+  // (the instanceof Node guard is belt-and-braces for pointer events whose target
+  // is not an element — the JSON-pinned text carries it verbatim).
   assert.ok(
-    js.includes("document.addEventListener('pointerdown',e=>{if(!subagentExpanded)return;const bar=$('subagentBar');if(bar&&bar.contains(e.target))return;subagentExpanded=false;renderSubagentBar()},true)"),
+    js.includes("document.addEventListener('pointerdown',e=>{if(!subagentExpanded)return;const bar=$('subagentBar');if(bar&&e.target instanceof Node&&bar.contains(e.target))return;subagentExpanded=false;renderSubagentBar()},true)"),
     'a document pointerdown collapses the capsule when the tap lands outside it (m00001①)',
   )
   assert.ok(

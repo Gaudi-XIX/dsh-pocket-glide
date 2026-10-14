@@ -887,7 +887,18 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   同时给 settleTailStick 补 scrollHeight<=clientHeight+8 范围门（塌盒 sh=0/ch=0 时仍重试的证据）。
 //   实测 zh 322 308 B / en 322 132 B（css 49 452 + js 272 856/265 680）⇒ 322 000→324 000，余量 ~1.7 KB。
 //   ——注意「混合工作树实测值含他线改动」：本线只加令牌与门（约 +2 KB），其余 +8 KB 属他线。
-const ASSET_BUDGET_BYTES = 324_000
+// 2026-10-14 m02164 返工账（③ 滚动乱跳之外的三笔，同一轮真机反馈）
+//   ① 主页尾消息改纯预取不显示：requestVisibleTails 落地后不再 renderWorkspaces()、
+//      task-row 去掉 msg-tail 那一行（tailCache/extractTail/session.tails 全部保留）；
+//   ② 会话→会话（子代理）返回免重拉：openSession 先存离开的会话缓冲进 sessionCache
+//      （带 at 戳）＋新常量 SESSION_CACHE_FRESH_MS=60000，新鲜手递的画面不再 loadHistory(true)；
+//   ④ 刷新收敛：fillListFromServer 的 session.list 也带指纹（不变则桥回 notModified）。
+//   痛点＝用户 2026-10-14 口述「主页显示怎么突然就加载了会话消息呢？不需要这个……我要你
+//   做的是，在登录的时候……提前加载几条」「返回的时候为什么又要把这个会话加载了？」
+//   「加载和收敛刷新没有区别」。
+//   实测 zh 324 285 B / en 324 189 B（css 49 452 + js 274 833/274 737）⇒ 324 000→326 000，
+//   余量 ~1.7 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
+const ASSET_BUDGET_BYTES = 326_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {
