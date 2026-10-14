@@ -335,4 +335,12 @@ test('the pin control paints beside every row and reports its state', () => {
   // still read as unpinned at 13 px on a phone (user, 2026-10-14: 「这个置顶的图标，点击与否没有差异」).
   assert.match(css, /\.task-pin\{[^}]*color:var\(--muted\)/, 'the resting pin is the muted outline glyph')
   assert.match(css, /\.task-pin\.is-pinned svg path\{fill:currentColor\}/, 'and a pinned row fills the head of the same glyph')
+  // The row wrapper is a grid item of .task-list{display:grid}, so its default
+  // min-width:auto is its min-content — and the title inside is white-space:nowrap.
+  // One session title with a long unbreakable run (a path, 120 b's) therefore pushed
+  // the single column to 1095 px on a 390 px phone: every row stretched, the 「还有 N 条」
+  // pill followed it, and .ws-card{overflow:hidden} clipped the pin button off-screen
+  // (user, 2026-10-14: 「对话的显示宽度发生了一些变化…就怕后面的那个置顶按钮也看不到了」;
+  // only workspaces holding such a title showed it, which is why just defws looked broken).
+  assert.match(css, /\.task-line\{[^}]*min-width:0/, 'the grid item may shrink below its min-content')
 })
