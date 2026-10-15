@@ -580,6 +580,11 @@ function ensureSessionSandbox() {
     let sessionBlank=true, followStream=true
     const workspaces=[{workspaceId:'ws-1',sessionIds:[]}]
     const pendingCreatedSessions=[], sessionSummaries=[]
+    // 2026-10-15: ensureSession now flushes the draft settings buffer onto the new
+    // session before returning. This file pins the fan-out (one create, no dropped
+    // files) — the buffer stays empty here, so the flush is a no-op stub.
+    let draftPending=null
+    async function applyDraftPending(){}
     const history={replaceState(){}}
     const L={untitled:'untitled'}
     const openRealtime=()=>{}

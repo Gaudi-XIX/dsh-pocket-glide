@@ -924,7 +924,13 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   ③ settlePromptJump 纳入 __settleTurn 互斥（入口夺令牌、重试比令牌、写入与终止都打 'pj'）——
 //      它是第四条延时链，此前游离在令牌之外，点 ↑ 后点 ↓ 两股相反写入交替。
 //   ④ jumpLatest 夺令牌再写底：点 ↓ 时上一条 ↑ 的重瞄链必须立刻作废。
-const ASSET_BUDGET_BYTES = 330_000
+// 2026-10-15 草稿设置缓冲（幽灵会话线）抬额 330 000 → 334 000：draftPending 七器官
+//   （缓冲/读写/flush）＋ openSessionSettings 去 ensureSession ＋「+」草稿隐藏门。
+//   痛点＝用户报障「新建对话调了设置不发消息，主页留一个未命名对话占位」——宿主盘上
+//   真落了一个零消息空会话（session-10f1f2b6-… 822B 实证），且宿主没有删会话接口。
+//   注释先压到最短再量：本线实测 zh 331 768（css 49 707 + js 282 061）/ en 331 672
+//   ⇒ 取 334 000（余量 ~2.2 KB，与 HEAD 基线 327 845 时的余量同幅）。
+const ASSET_BUDGET_BYTES = 334_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

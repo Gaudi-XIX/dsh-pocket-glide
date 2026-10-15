@@ -183,11 +183,25 @@ test('draft creation: "+" mints nothing; ensureSession is the only session.creat
   assert.match(ensure, /rpc\('session\.create'/, 'the session is minted on first real use')
   assert.match(ensure, /if\(activeSession\)return activeSession/, 'a materialized draft never re-creates')
   assert.match(js, /startDraftChat\(wsId\)/, 'the + button is wired to the draft, not to a create')
-  // The four actions that mean "this draft is in use" must materialize first.
+  // The actions that mean "this draft is in use" must materialize first.
   assert.match(extractFunction(js, 'send'), /if\(!activeSession&&!\(await ensureSession\(\)\)\)return/)
   assert.match(extractFunction(js, 'uploadGenericFile'), /await ensureSession\(\)/)
   assert.match(extractFunction(js, 'retryDraft'), /await ensureSession\(\)/)
-  assert.match(extractFunction(js, 'openSessionSettings'), /const sessionId=await ensureSession\(\)/)
+  // 2026-10-15 反转：打开设置面板**不再**建会话。旧断言要求这里出现
+  // `const sessionId=await ensureSession()`，而那正是幽灵会话的入口——用户在草稿里
+  // 只改设置就返回，宿主盘上留下一个永远没有消息的空会话（实证 session-10f1f2b6-…d3d，
+  // 822B 只有 permission/preset 与 agent-preset/selected，零条消息），主页于是多一个
+  // 「未命名对话」占位。模型/预设目录本就是宿主全局的，草稿态问得到；选中项先进
+  // draftPending，由 ensureSession 成功返回前统一补发。
+  const settings = extractFunction(js, 'openSessionSettings')
+  assert.doesNotMatch(settings, /ensureSession/, 'opening the settings panel must not mint a session')
+  assert.match(settings, /const sessionId=activeSession\|\|null/, 'a draft settings open works without an id')
+  assert.match(extractFunction(js, 'ensureSession'), /await applyDraftPending\(created\.sessionId\)/,
+    'the buffered draft choices are flushed onto the session the instant it exists')
+  // send() 不再另发一次 flush：flush 已织进 ensureSession 的创建链里（同一条 promise），
+  // 而 send/upload/retry 全部先 await ensureSession()。再等一次会给同步段多拍一帧，
+  // B-5 的「发送一开始输入框即清空」正是靠这一帧时序钉住的（2026-10-15）。
+  assert.doesNotMatch(extractFunction(js, 'send'), /applyDraftPending/)
 })
 
 test('#4c renderWorkspaces paints a provisional row with the spin state and a title fallback', () => {

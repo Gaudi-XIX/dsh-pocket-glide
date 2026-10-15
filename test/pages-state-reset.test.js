@@ -226,6 +226,11 @@ function buildSendSandbox() {
   const make = new Function('box', `
     let activeSession='s1',agentRunning=false,busyEnter='queue',lastHistoryKey='chat:s1'
     let optimisticPrompts=[],sessionBlank=true
+    // 2026-10-15: send() flushes whatever the draft settings panel buffered, right
+    // after the session is guaranteed to exist. B-5 pins the flight guards, not the
+    // flush — the buffer stays empty and the flush is a no-op stub here.
+    let draftPending=null
+    async function applyDraftPending(){}
     const composerDrafts=[]
     let flight=null,sentCleared=0
     const rpcCalls=[]

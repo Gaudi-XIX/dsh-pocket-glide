@@ -131,7 +131,7 @@ test('T1 showError/clearTransientError chatError call sites unchanged (zero JS d
   // 12 baseline + ensureSession()'s create-failure report (2026-10-12 draft new-chat):
   // a "+" draft whose session cannot be minted must say so on the chat error line —
   // the list banner it used to hit is no longer where the tap happens. Not drift.
-  assert.equal(shown, 17, 'showError chatError call count: 13 baseline + draft materialize failure (0.4.31) + the run-command verdict echo and the three image-read failure reports (2026-10-14)')
+  assert.equal(shown, 21, 'showError chatError call count: 17 baseline + the four draft flush reports (2026-10-15: applyDraftPending pushes preset/model/permission onto the session the moment it exists — a refused setting must be visible, not silently dropped)')
   // 3 baseline sites + the banner dismiss (2026-10-07-fix-pocket-banner-dismiss-and-ttl):
   // the tap-the-right-end exit must leave through the same guard as the frame exit, so it
   // is a fourth call site by construction, not a drift.
@@ -232,6 +232,10 @@ test('NF-1 (r2) the fallback permission presets still describe themselves when r
   const src = `
     let plusView = 'permission'
     let streamProjections = null, sessionSummaries = [], activeSession = 's1'
+    // 2026-10-15: permissionCurrent() reads the draft buffer first, and the sheet now
+    // trims the dangerous preset out of a draft (no session). This splice is the
+    // in-chat path, so the buffer stays null and all four options render.
+    let draftPending = null
     const L = ${JSON.stringify({ plusBack: '返回', plusPermission: '权限', plusPermissionLoading: '正在读取权限预设…', plusRowCurrent: '使用中', plusCurrentPermission: '查看当前权限' })}
     const PLUS_ICONS = { permission: '<svg></svg>' }
     const PLUS_BACK_SVG = '<svg></svg>'
