@@ -547,6 +547,12 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   assert.match(js, /function settleOlderShift\(box,anchor,tries,turn\)\{if\(!anchor\|\|tries<=0\)return;if\(turn===undefined\)\{turn=\(box\.__settleTurn\|\|0\)\+1;box\.__settleTurn=turn\}const live=\$\('messages'\);if\(!live\|\|!live\.isConnected\|\|live!==box\|\|live\.__settleTurn!==turn\)return;if\(typeof followStream!=='undefined'&&followStream\)return;/, '2026-10-15 ③四轮：补页对位链在 followStream 时直接退出——读者跟在底部时锚点对位只会把人拽走（与 settleTailStick 的读者门对称）')
   assert.match(js, /function settlePromptJump\(box,anchor,tries\)\{if\(!anchor\.isConnected\|\|tries<=0\)return;box\.__settleTurn=\(box\.__settleTurn\|\|0\)\+1;const turn=box\.__settleTurn;const step=\(node,a,left\)=>\{if\(!a\.isConnected\|\|node\.__settleTurn!==turn\)/, '2026-10-15 ③三轮：第四条延时链 settlePromptJump 也纳入 __settleTurn 互斥（此前游离在令牌外，只跑 tries 次的假设同样被它自己的 setTimeout 打破）')
   assert.match(js, /const stick=typeof followStream==='undefined'\|\|followStream;if\(stick\)\{if\(typeof programmaticScroll==='function'\)programmaticScroll\(\);box\.scrollTop=box\.scrollHeight;if\(typeof probeMark==='function'\)probeMark\('bp'\)\}/, 'patchLastStreamMessage gates the stick on followStream（花括号里是可选打点 bp，门槛语义没变；守卫是为了测试沙箱按名抽取时不 ReferenceError）')
+  // 2026-10-15 ③五轮（m03791 遥测：ts 在底 → jk +1296 → bt 整段重建；latest 后 jk +7165）：
+  // 流式每帧贴底只看 followStream，而该布尔可能被 programmaticScroll 的续期冻在 true——
+  // 读者上滑后每吐一个 token 就被拽回底。两处画之前都先用原始几何量读者位置，离开底部
+  // 就当场关掉跟随（br 打点）并让 paintMessages 走 keepAnchor。
+  assert.match(js, /const near=typeof isNearBottom==='function'\?isNearBottom\(box\):true;if\(!near&&typeof followStream!=='undefined'&&followStream\)\{followStream=false;/, '2026-10-15 ③五轮：流式换帧前先量读者位置——已离开底部就关掉跟随，不再每 token 拽回底')
+  assert.match(js, /if\(typeof isNearBottom==='function'&&typeof followStream!=='undefined'&&followStream&&!isNearBottom\(box\)\)\{followStream=false;/, '2026-10-15 ③五轮：整段重建那条路同样先量——否则流式全量重绘一帧就把上滑的读者拽回底（bt 现场）')
   assert.match(assets.zh.document, /id="scrollAnchors"/, 'the anchor deck ships in the document')
   assert.match(js, /anchor-fab/, 'the fab styling ships')
   assert.doesNotMatch(assets.zh.css, /\.msg-hist\{content-visibility/, '2026-10-15 m02164③ 返工：CV 声明撤了（注释里提到该词不算）——遥测实证它让 scrollHeight 在 1828↔4711↔2090 间摆动、浏览器自动滚动锚定把 scrollTop 推到 3980 再掉回 1359，这就是滑动闪烁的根')
