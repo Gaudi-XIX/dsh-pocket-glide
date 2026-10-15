@@ -7,7 +7,8 @@
 // 候就马上一次刷新」), a landing left standing re-reads on the slow LIST_POLL_MS
 // clock, and the scroll problem is solved where it lives — a render whose
 // markup did not change leaves the DOM (and the scroll position) untouched.
-//   A. back to the list  → always `refreshList`; repaint only on real change;
+//   A. back to the list  → always a quiet resume (resumeOnReturn); repaint only
+//      on real change; the spinner belongs to the manual button alone;
 //   A2. the re-read glows while it travels (0.4.39): the header spinner plus a
 //       slight list dim — the poll (section E) stays silent by design;
 //   B. landing standing  → the quiet LIST_POLL_MS poll (see section E);
@@ -42,10 +43,14 @@ test('A going back re-fetches unconditionally — the 0.4.17 window is retired',
   // 用户 2026-10-13：「进入到主页面的时候就马上一次刷新」。A reader who taps a
   // row, reads the reply and comes back wants the CURRENT row, not the one they
   // left behind — no age window decides otherwise.
+  // 2026-10-15 改为静默后台读：返回主页不再 await 一次带 spinner 的 refreshList，
+  // 而是 void resumeOnReturn(true) 在后台补读，读完有变才重绘，期间可直接点
+  // （「刷新就在背后偷偷刷新呗，先让用户再点呗」）。无条件读的契约不变，只是不再
+  // 让读者等：spinner/400ms 底噪/错误横幅全部只属于手动刷新钮。
   const leaving = sliceTo('async function showSessionList(){', 'function paintInstantHistory')
   assert.match(
     leaving,
-    /\$\('sessionsView'\)\.classList\.add\('active'\);await refreshList\(false\);startListPoll\(\)\}/,
+    /\$\('sessionsView'\)\.classList\.add\('active'\);[\s\S]*?void resumeOnReturn\(true\);startListPoll\(\)\}/,
     'the fetch is unconditional and arming the clock is the last statement of the leave path',
   )
   assert.ok(!leaving.includes('LIST_FRESH_MS'), 'no freshness window survives')
@@ -135,7 +140,11 @@ test('E the landing poll re-arms itself and reads through resumeOnReturn, quietl
 
 test('E the poll lives exactly on the landing: armed on entry, disarmed into a chat', () => {
   const leaving = sliceTo('async function showSessionList(){', 'function paintInstantHistory')
-  assert.match(leaving, /await refreshList\(false\);startListPoll\(\)\}/, 'back to the list arms the clock as its last statement')
+  assert.match(leaving, /void resumeOnReturn\(true\);startListPoll\(\)\}/, 'back to the list refreshes quietly and arms the clock as its last statement')
+  // 用户 2026-10-15：「从对话里面返回到主页的时候，它是要刷新的，但现在一刷新整个
+  // 页面都变了……刷新就在背后偷偷刷新呗，先让用户再点呗」。返回主页不再 await 一次
+  // 带 spinner 的 refreshList：列表已经在屏幕上（上次访问留下的），quiet resume 在后台
+  // 补读，读完若内容有变才重绘，期间读者可以直接点。refreshList 只留给刷新钮。
   const open = sliceTo('async function openSession(id,title', 'function handleHistory')
   // (2026-10-14 m02164②) entering a chat also hands the outgoing transcript to the
   // cache first — same statement sequence, one more step in the middle.
@@ -190,11 +199,9 @@ test('C a boot payload that names the transport sets it before the first stream'
 
 test('REQ3 the handoff landing refills its short list like every other route', () => {
   // 用户 2026-10-15 REQ3：「进入对话以后的显示逻辑仍然有问题。24 小时之内的所有会话
-  // 都应该显示出来，至少刚刚我进来就没显示」。handoff 路（落地页交接 payload）只带
-  // LANDING_LIST_ROWS=12 行，而它同时被 `!handoff&&` 挡在 fillListFromServer 之外、
-  // 又被 `!handoffBoot` 挡在 reconcileBoot 之外——两条兜底都不跑，于是「刚进来」看到的
-  // 就是 12 行截断。这里钉住：补拉是无条件的（只看 bootListPartial），
-  // reconcile 的守卫不变（handoff 已经带着完整首屏，不需要再取一次 /api/boot）。
+  // 都应该显示出来，至少刚刚我进来就没显示」。boot 现在带全量会话行，首屏即完整、
+  // bootListPartial 不再触发；但补拉路径保留作安全网。这里钉住：补拉是无条件的
+  // （只看 bootListPartial），reconcile 的守卫不变（handoff 已带完整首屏，不需再取 /api/boot）。
   const startup = sliceTo('const boot=takeHandoffBoot()', 'async function reconcileBoot()')
   assert.match(startup, /if\(bootListPartial\)void fillListFromServer\(\)/, 'the refill is not gated on how the payload arrived')
   assert.doesNotMatch(startup, /if\(!handoff&&bootListPartial\)/, 'the old handoff guard is what hid the rest of the 24h window')

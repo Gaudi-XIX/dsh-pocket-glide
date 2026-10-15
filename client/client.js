@@ -93,15 +93,15 @@ window.__ModuleLoader__.load({
     /* 配对页所在路径：由插件 node 半区注册，转发到桥（dataelement 页面）。 */
     var PAIRING_PATH = '/desktop'
 
-    /* 按钮几何孪生宿主设置入口；模态外壳只做遮罩+居中，卡片内部整页由
-     * dataelement 页面自己负责。 */
+    /* 按钮几何对齐 footer 辅助区基线（参照 dsh-session-manager 的 sm-footerBtn）：
+     * 内容宽自适应、12/18 字号、tertiary 弱化色，hover 提到 secondary。 */
     var CSS = [
-      '.dsh-pocket-btn { box-sizing: border-box; width: 100%; height: 42px; min-width: 0;',
-      '  margin: 4px 0; padding: 0 10px 0 8px; gap: 8px; flex: none;',
+      '.dsh-pocket-btn { box-sizing: border-box; min-width: 0; min-height: 28px;',
+      '  margin: 4px 0; padding: 3px 8px; gap: 6px; flex: none;',
       '  display: inline-flex; align-items: center; justify-content: flex-start;',
-      '  font-family: inherit; font-size: 14px; line-height: 22px; white-space: nowrap;',
-      '  color: var(--dsw-alias-label-primary); background: transparent; border: none;',
-      '  border-radius: var(--dsw-radius-md); cursor: pointer; overflow: hidden; }',
+      '  font-family: inherit; font-size: 12px; line-height: 18px; white-space: nowrap;',
+      '  color: var(--dsw-alias-label-tertiary); background: transparent; border: none;',
+      '  border-radius: 6px; cursor: pointer; overflow: hidden; }',
       '.dsh-pocket-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }',
       '.dsh-pocket-btn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid',
       '  var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: -2px; }',
