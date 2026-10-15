@@ -898,6 +898,16 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   「加载和收敛刷新没有区别」。
 //   实测 zh 324 285 B / en 324 189 B（css 49 452 + js 274 833/274 737）⇒ 324 000→326 000，
 //   余量 ~1.7 KB——同一句老话：下一次抬之前先问「这笔增长解决了什么痛点」。
+// 2026-10-15 滑动闪烁返工（m02164③ 二轮，用户重启后「滑动的时候还在闪烁」）
+//   撤掉 .msg-hist 的 content-visibility:auto/contain-intrinsic-size（2026-10-07 引入的历史虚拟化）。
+//   遥测实证（pocket.log 00:20:54 段）：restoreTranscriptAnchor 刚把 scrollTop 钉到 1097，
+//   CV 估算让 scrollHeight 从 1828 气球涨到 4711、浏览器自动滚动锚定把 scrollTop 推到 3980，
+//   随后估算收敛回 2090、scrollTop 掉回 1359——90ms 内的上下摆就是闪烁。
+//   markHistoryTail/_history/msg-hist 标记与测试全部保留，只是不再挂 CV 声明。
+//   同批：restoreTranscriptAnchor/settleOlderShift 的 probeMark 补 typeof 守卫（沙箱无该函数时
+//   会 ReferenceError，正是 stream-watermark 沙箱此前靠「不触发写入」侥幸绕过的）；
+//   图片（.md-image/.attach-image img）补 aspect-ratio:auto，压住加载完成后的二次布局位移。
+//   实测 zh 324 674 B / en 324 578 B（css 49 212 + js 275 462/275 366）⇒ 326 000 不动，余量 ~1.3 KB。
 const ASSET_BUDGET_BYTES = 326_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {

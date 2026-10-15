@@ -536,7 +536,7 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   assert.match(js, /const stick=typeof followStream==='undefined'\|\|followStream;if\(stick\)\{if\(typeof programmaticScroll==='function'\)programmaticScroll\(\);box\.scrollTop=box\.scrollHeight;if\(typeof probeMark==='function'\)probeMark\('bp'\)\}/, 'patchLastStreamMessage gates the stick on followStream（花括号里是可选打点 bp，门槛语义没变；守卫是为了测试沙箱按名抽取时不 ReferenceError）')
   assert.match(assets.zh.document, /id="scrollAnchors"/, 'the anchor deck ships in the document')
   assert.match(js, /anchor-fab/, 'the fab styling ships')
-  assert.match(assets.zh.css, /\.msg-hist\{content-visibility:auto;contain-intrinsic-size:auto 120px\}/)
+  assert.doesNotMatch(assets.zh.css, /\.msg-hist\{content-visibility/, '2026-10-15 m02164③ 返工：CV 声明撤了（注释里提到该词不算）——遥测实证它让 scrollHeight 在 1828↔4711↔2090 间摆动、浏览器自动滚动锚定把 scrollTop 推到 3980 再掉回 1359，这就是滑动闪烁的根')
   assert.match(assets.zh.css, /@media\(prefers-reduced-motion:reduce\)\{\.anchor-fab\{transition:none\}\.workspaces\{transition:none\}\}/, 'the fade respects reduced motion (0.4.39 shares the block with the landing glow)')
   assert.match(assets.zh.css, /\.task-row\.is-unread \.task-status::after/)
   // the stream-watermark paint sandbox extracts paintMessages WITHOUT the new
