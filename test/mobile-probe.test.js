@@ -74,6 +74,7 @@ test('a probe line lands sanitised, and a burst inside a second is dropped', asy
 
 test('开关活过 SW 的 URL 改写，且 armed 可自证', () => {
   const js = mobilePageAssets({ locale: 'zh' }).js
+  const css = mobilePageAssets({ locale: 'zh' }).css
   assert.match(js, /var PROBE_ON=false/, '不由 location.search 单独决定（默认关）')
   assert.match(js, /localStorage\.getItem\('pocketProbe'\)/, '读持久化凭据')
   assert.match(js, /localStorage\.setItem\('pocketProbe',String\(Date\.now\(\)\+216e5\)\)/,
@@ -81,4 +82,24 @@ test('开关活过 SW 的 URL 改写，且 armed 可自证', () => {
   assert.match(js, /localStorage\.removeItem\('pocketProbe'\)/, '过期自己删掉，不留残余')
   assert.match(js, /if\(PROBE_ON\)setTimeout\(\(\)=>probeMark\('on'\),300\)/,
     'armed 后立刻发一条 on：有没有在记必须可证，不能靠缺席推断')
+  // 0.4.45 返工③：上一版缓冲 30 条/1500ms 会把甩动最密的开头段挤掉——「遥测稳定」是假的。
+  // 三个新旋钮与两个新标记都必须活着（数字从资产里正则抓，不手抄常量副本）。
+  assert.match(js, /const PROBE_MAX=(\d+),PROBE_FLUSH_MS=(\d+),/, '保真度常量成对声明')
+  {
+    const m = js.match(/const PROBE_MAX=(\d+),PROBE_FLUSH_MS=(\d+),/)
+    assert.ok(Number(m[1]) >= 100, `缓冲上限要够长（现 ${m[1]}）：一次甩动几十条 sc 起步`)
+    assert.ok(Number(m[1]) <= 140, `上限不能顶爆桥侧 4096 字符截断（每条 ~28 字符，现 ${m[1]}）`)
+    assert.ok(Number(m[2]) > 800 && Number(m[2]) <= 1200,
+      `flush 必须严格大于桥侧 800ms 落盘节流又别退回粗粒度（现 ${m[2]}）`)
+  }
+  assert.match(js, /probeBuf\.push\('lost@'\+probeDropped\)/,
+    '丢样不再静默：每批末尾带一条累计 lost@ 计数')
+  assert.match(js, /probeBuf\.push\('jk@'\+perf\+'\|'\+\(top-probeLastTop\)\)/,
+    '整屏跳位有专用符号 jk：值就是位移（带符号），不必再去两行数字里做减法')
+  assert.match(js, /perf-probeLastAt<PROBE_JUMP_GAP_MS&&Math\.abs\(top-probeLastTop\)>=PROBE_JUMP_PX/,
+    'jk 的双判据（时间窗 + 位移阈值）成对出现：只卡位移会把读者自己的正常甩动报成跳')
+  // 整屏跳位的一个已知源：innerHTML 重建时浏览器自动滚动锚定自己挑一行当锚、把 scrollTop
+  // 重算一遍，而本壳的 restoreTranscriptAnchor／settleOlderShift 已经在手工对位——
+  // 两套锚同时补偿＝来回推。关掉浏览器那套，只留自己那套。
+  assert.match(css, /\.messages\{[^}]*overflow-anchor:none/, '滚动容器关掉浏览器 scroll anchoring')
 })
