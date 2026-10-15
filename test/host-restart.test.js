@@ -4,8 +4,9 @@
 // 拉不起，这是按钮只能当「遥控器」的物理原因。端点 POST /api/host/restart 的
 // 权限边界＝配对漏斗（同源＋在册手机会话，与 /api/opened-at 同门）。契约：
 // 未配对 401；跨站 403；有会话推进 409 带名单且绝不武装；空闲 200 armed；
-// 武装失败 502 带原因。硬拒没有强制口子——卡死的会话由用户手动结束
-// （用户 2026-10-12 裁）。
+// 武装失败 502 带原因。有会话推进时 force=true 走强制结束路径（用户
+// 2026-10-15 REQ5②③）：先 session.cancel 全部 busy 会话，全成功才武装；
+// 部分 cancel 失败 502 不武装。2026-10-12 的「无强制口子」裁定由本条覆盖。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { startBridge, httpFetch } from './helpers.js'
@@ -22,6 +23,11 @@ test('the phone home document carries the header button and the confirm card say
     assert.match(html, /id="hostRestart" class="head-icon"/, 'the power button sits in the home header')
     assert.match(html, /id="hostCard" class="host-card"/)
     assert.match(html, /id="hostGo" type="button" class="is-danger"/)
+    // REQ5②③: 页面结构带强制结束按钮（默认 hidden）、「正在重启…」文案、
+    // busy 名单改 <ul> 每名一行——这些都在壳 JS /app.js 里不在 HTML，但按钮和
+    // 文案地标在 HTML 中，它们缺席说明结构没补上。
+    assert.match(html, /id="hostForce" type="button" class="host-force"/, 'the force-stop button is in the confirm card')
+    assert.match(html, /强制结束这些会话并重启/, 'the force button carries its own label')
     // 用户 2026-10-12 定的丑话（原四条，额度与隧道两条同年精简合并为一条），
     // 确认卡必须写全，让用户自适应：
     assert.match(html, /所有会话中断/)
@@ -31,7 +37,13 @@ test('the phone home document carries the header button and the confirm card say
     // 页面 JS 在外链 /app.js（壳资产）里：退出调用要在那里验，不在文档里。
     const appJs = await httpFetch(t.base + '/app.js', { headers: { cookie } })
     assert.equal(appJs.status, 200)
-    assert.match(await appJs.text(), /location\.replace\('\/bye'\)/, 'a confirmed restart exits the page to the goodbye')
+    const app = await appJs.text()
+    assert.match(app, /location\.replace\('\/bye'\)/, 'a confirmed restart exits the page to the goodbye')
+    // REQ5①③: 名单每名一行（<ul><li>）而不是顿号拼一行；点下去先出「正在重启…」
+    // 中间态再把请求发出去（用户：「需要给一个对话中间态（比如转圈圈，提示正在重启）」）。
+    assert.match(app, /hostBusyRefuse\+'<ul>'/, 'the busy list is one line per session')
+    assert.match(app, /L\.hostRestarting/, 'the card shows a restarting state')
+    assert.match(app, /confirmHostRestart\(true\)/, 'the force button routes to the forced path')
   } finally { await t.stop() }
 })
 
@@ -165,5 +177,68 @@ test('a failed arming answers 502 and carries the reason', async () => {
     assert.equal(res.status, 502)
     const j = await res.json()
     assert.match(j.error, /schtasks refused/)
+  } finally { await t.stop() }
+})
+
+test('force=true cancels every busy session then arms the restart', async () => {
+  const armed = []
+  const cancelled = []
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname, args) => {
+        if (pathname === '/api/session/list')
+          return { ok: true, value: { items: [{ sessionId: 's-run', running: true }, { sessionId: 's-idle', running: false }] } }
+        if (pathname === '/api/session/cancel') {
+          cancelled.push(args?.request?.sessionId)
+          return { ok: true, value: { cancelled: true } }
+        }
+        return undefined
+      },
+    },
+    bridgeOptions: { hostRestartInvoker: async () => { armed.push(1) } },
+  })
+  try {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(t.base + '/api/host/restart', {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, cookie, origin: t.base },
+      body: JSON.stringify({ force: true }),
+    })
+    assert.equal(res.status, 200)
+    const j = await res.json()
+    assert.equal(j.ok, true)
+    assert.deepEqual(cancelled, ['s-run'], 'only the running session is cancelled')
+    assert.equal(armed.length, 1, 'restart is armed after all cancels succeed')
+  } finally { await t.stop() }
+})
+
+test('force=true with a cancel failure answers 502 and does not arm', async () => {
+  const armed = []
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname) => {
+        if (pathname === '/api/session/list')
+          return { ok: true, value: { items: [{ sessionId: 's-run', running: true }] } }
+        if (pathname === '/api/session/cancel')
+          return { ok: false, error: { message: 'session is wedged' } }
+        return undefined
+      },
+    },
+    bridgeOptions: { hostRestartInvoker: async () => { armed.push(1) } },
+  })
+  try {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(t.base + '/api/host/restart', {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, cookie, origin: t.base },
+      body: JSON.stringify({ force: true }),
+    })
+    assert.equal(res.status, 502)
+    const j = await res.json()
+    assert.equal(j.ok, false)
+    assert.deepEqual(j.failed, ['s-run'])
+    assert.equal(armed.length, 0, 'a partial cancel failure must not arm')
   } finally { await t.stop() }
 })

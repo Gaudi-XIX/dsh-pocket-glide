@@ -930,7 +930,16 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   真落了一个零消息空会话（session-10f1f2b6-… 822B 实证），且宿主没有删会话接口。
 //   注释先压到最短再量：本线实测 zh 331 768（css 49 707 + js 282 061）/ en 331 672
 //   ⇒ 取 334 000（余量 ~2.2 KB，与 HEAD 基线 327 845 时的余量同幅）。
-const ASSET_BUDGET_BYTES = 334_000
+// 2026-10-15 五问批（置顶差异 / 置顶免 24h / 落地补拉 / 重启中间态与强制结束）抬额
+//   334 000 → 338 000：本线实测 zh 334 401（css 50 588 + js 283 813）/ en 334 293。
+//   增量都花在用户点名要看的观感与文案上，不是顺手加的东西：
+//   ① 置顶按钮从「换描边色」改成实心品牌色块 + 整行 is-pinned-row 底色/左边框
+//      （REQ1「差异性有点小了」）——新增两条 CSS 变量（明暗各一套）与三条规则；
+//   ② 重启确认卡新增 #hostForce 强制结束按钮与其样式、busy 名单从顿号单行改 <ul>
+//      每名一行（REQ5①②）、新增「正在重启…」中间态文案（REQ5③）与两条新 L 词条；
+//   ③ 落地补拉与 pin 分区的注释（中文注释进壳，按字节计）。
+//   注释先压到最短再量；取 338 000（余量 ~3.6 KB，比上一版余量略宽，留给同批观感走查）。
+const ASSET_BUDGET_BYTES = 338_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

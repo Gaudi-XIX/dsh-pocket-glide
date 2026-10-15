@@ -371,7 +371,39 @@ test('⑧ an error older than the 24h window rests, and reading it clears it bef
   )
 })
 
-test('the pin control paints beside every row and reports its state', () => {
+test('REQ2: pinned rows are exempt from the 24h window and do not evict recent rows', () => {
+  // 用户 2026-10-15 REQ2：「置顶了以后就不再受 24 小时限制」。旧算法只数窗口内
+  // 的行当显示上限，而 tasks 已按 pinRank 先排——于是两条超窗口的置顶行占掉名额，
+  // 把窗口内的第三条普通会话挤进「还有 N 条」后面（置顶反而把该显示的藏了）。
+  const recent = [
+    row({ sessionId: 'r1', updatedAt: ago(10) }),
+    row({ sessionId: 'r2', updatedAt: ago(20) }),
+    row({ sessionId: 'r3', updatedAt: ago(30) }),
+  ]
+  const stalePins = [
+    row({ sessionId: 'p1', updatedAt: ago(60 * 26) }),
+    row({ sessionId: 'p2', updatedAt: ago(60 * 30) }),
+  ]
+  const markup = listSandbox({ summaries: [...recent, ...stalePins], pinned: ['p1', 'p2'] })
+  const ids = [...markup.matchAll(/data-action="open" data-id="([^"]+)"/g)].map((m) => m[1])
+  assert.deepEqual(ids.slice(0, 2), ['p1', 'p2'], 'pins still sort first')
+  assert.equal(ids.length, 5, 'every pin plus every in-window row is painted')
+  assert.ok(!/data-action="more"/.test(markup), 'and nothing is hidden behind「还有 N 条」')
+})
+
+test('REQ2: an unpinned row outside the window still falls behind「还有 N 条」', () => {
+  // 免限额只给置顶，普通旧会话照旧收口——否则「24 小时」这条用户要留的界限就没了
+  // （m00057：用户留下了「更多」这条回到全表的路）。
+  const markup = listSandbox({
+    summaries: [row({ sessionId: 'fresh', updatedAt: ago(1) }), row({ sessionId: 'old', updatedAt: ago(60 * 26) })],
+    pinned: [],
+  })
+  assert.match(markup, /data-action="more"/, 'the old unpinned row is collapsed')
+  assert.match(markup, /data-id="fresh"/)
+  assert.ok(!/data-id="old"/.test(markup), 'and it is not painted')
+})
+
+test('a pinned row paints beside every row and reports its state', () => {
   const markup = listSandbox({
     summaries: [row({ sessionId: 'a', updatedAt: ago(1) }), row({ sessionId: 'b', updatedAt: ago(2) })],
     pinned: ['a'],
@@ -385,8 +417,13 @@ test('the pin control paints beside every row and reports its state', () => {
   assert.equal(pins[0].cls, 'is-pinned', 'the pinned row marks its button; the other carries no class')
   // The is-pinned class alone was not enough: the same outline glyph in the brand colour
   // still read as unpinned at 13 px on a phone (user, 2026-10-14: 「这个置顶的图标，点击与否没有差异」).
+  // 2026-10-15 REQ1: 用户复报「差异性有点小了」——换成实心填充 + 品牌底色块（不是只换
+  // 描边色），并给整行加 is-pinned-row 底色与左边框，让「置顶」在一屏里一眼可见。
   assert.match(css, /\.task-pin\{[^}]*color:var\(--muted\)/, 'the resting pin is the muted outline glyph')
-  assert.match(css, /\.task-pin\.is-pinned svg path\{fill:currentColor\}/, 'and a pinned row fills the head of the same glyph')
+  assert.match(css, /\.task-pin\.is-pinned\{[^}]*background:var\(--brand\)/, 'a pinned pin is a filled brand chip, not a recoloured outline')
+  assert.match(css, /\.task-pin\.is-pinned svg path\{fill:currentColor/, 'and the glyph fills from the same currentColor')
+  assert.match(css, /\.task-row\.is-pinned-row\{[^}]*background:var\(--pinRowBg\)/, 'the whole pinned row carries a tint, so the pin reads from the row too')
+  assert.match(markup, /class="task-row is-[a-z]+(?: is-unread)? is-pinned-row"/, 'the pinned row is marked in the markup')
   // The row wrapper is a grid item of .task-list{display:grid}, so its default
   // min-width:auto is its min-content — and the title inside is white-space:nowrap.
   // One session title with a long unbreakable run (a path, 120 b's) therefore pushed

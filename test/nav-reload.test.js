@@ -188,6 +188,24 @@ test('C a boot payload that names the transport sets it before the first stream'
   )
 })
 
+test('REQ3 the handoff landing refills its short list like every other route', () => {
+  // 用户 2026-10-15 REQ3：「进入对话以后的显示逻辑仍然有问题。24 小时之内的所有会话
+  // 都应该显示出来，至少刚刚我进来就没显示」。handoff 路（落地页交接 payload）只带
+  // LANDING_LIST_ROWS=12 行，而它同时被 `!handoff&&` 挡在 fillListFromServer 之外、
+  // 又被 `!handoffBoot` 挡在 reconcileBoot 之外——两条兜底都不跑，于是「刚进来」看到的
+  // 就是 12 行截断。这里钉住：补拉是无条件的（只看 bootListPartial），
+  // reconcile 的守卫不变（handoff 已经带着完整首屏，不需要再取一次 /api/boot）。
+  const startup = sliceTo('const boot=takeHandoffBoot()', 'async function reconcileBoot()')
+  assert.match(startup, /if\(bootListPartial\)void fillListFromServer\(\)/, 'the refill is not gated on how the payload arrived')
+  assert.doesNotMatch(startup, /if\(!handoff&&bootListPartial\)/, 'the old handoff guard is what hid the rest of the 24h window')
+  assert.match(startup, /if\(!handoffBoot\)reconcileBoot\(\)/, 'reconcile keeps its own guard — the handoff payload is already fresh')
+})
+
+test('REQ3 a completed refill clears the partial flag so the notice stops', () => {
+  const fill = js.slice(js.indexOf('async function fillListFromServer()'), js.indexOf('async function fillListFromServer()') + 700)
+  assert.match(fill, /bootListPartial=false;renderWorkspaces\(\)/, 'the full table replaces the short one, so the「正在重试」notice must go with it')
+})
+
 // ---------------------------------------------------------------------------
 // D — the tunnel round trip starts under the finger
 // ---------------------------------------------------------------------------
