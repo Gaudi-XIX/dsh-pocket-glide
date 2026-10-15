@@ -194,3 +194,132 @@ test('older settle: 会话已切走（box 不是当前 #messages）时一个字�
   assert.equal(box.scrollTop, 100)
   assert.deepEqual(marks, [])
 })
+
+// ─── 4) settleTailStick 的读者出口（m02164③ 三轮返工）───────────────────
+//
+// 贴底链每 120ms 写一次底，每轮都给 programmaticScroll 的 250ms 静默窗续期，
+// 于是滚动监听里 followStream 永不重判：读者往上滑的动作被吞掉，下一 tick 又被
+// 钉回底＝橡皮筋（用户 2026-10-15 口述「滑动的时候有跳动」）。本壳写的是底
+// （scrollTop = scrollHeight），所以「内容长高」只增 scrollHeight 不动 scrollTop，
+// scrollTop 变小只可能是读者动过手——这就是出口的判据。
+// 判据不能只看「变小」：视口变高时浏览器会把 scrollTop 往新的最大值钳一次（实测
+// 450→735 时 1541→1256），那不是读者的意图，所以再加「离底已超 SCROLL_FOLLOW_PX」。
+const TAILSTICK = slice(js, 'function settleTailStick(box,tries,turn,pinned){', '// 返工③补')
+const SCROLL_FOLLOW_PX = Number(js.match(/const SCROLL_FOLLOW_PX=(\d+),/)[1])
+
+function buildTailStick(start) {
+  const marks = []
+  const timers = []
+  const box = { scrollTop: start, scrollHeight: 2000, clientHeight: 700, isConnected: true, __settleTurn: 0 }
+  const make = new Function(
+    '$', 'probeMark', 'setTimeout', 'readTranscriptAnchor', 'programmaticScroll', 'SCROLL_FOLLOW_PX',
+    `let followStream=true,transcriptAnchor=null;` +
+    `${TAILSTICK};return {settleTailStick,follow:()=>followStream,anchor:()=>transcriptAnchor}`
+  )
+  const api = make(
+    () => box,
+    (tag) => marks.push(tag),
+    (fn) => { timers.push(fn) },
+    (b) => ({ index: 0, offset: b.scrollTop }),
+    () => {},
+    SCROLL_FOLLOW_PX
+  )
+  return { ...api, box, marks, timers, tick: () => timers.shift()() }
+}
+
+test('tail stick: 首趟没有 pinned，照旧钉到底并带着写下的值继续', () => {
+  const s = buildTailStick(1000)
+  s.settleTailStick(s.box, 4)
+  assert.equal(s.timers.length, 1, 'the entry pass only schedules — the paint wrote the bottom before it')
+  s.tick()
+  assert.equal(s.box.scrollTop, 2000, 're-stuck to the bottom')
+  assert.deepEqual(s.marks, ['ts'])
+  s.tick()
+  assert.deepEqual(s.marks, ['ts', 'ts'], 'and each pass stamps, carrying the value it wrote')
+})
+
+test('tail stick: 读者把页面拽离底部时链条自己解除跟随并终止', () => {
+  const s = buildTailStick(1000)
+  s.settleTailStick(s.box, 4)
+  s.tick() // 写入 pinned = 2000
+  s.marks.length = 0
+  const queuedBefore = s.timers.length
+  // 读者上滑：scrollTop 比上次写入值小，且离底远超 SCROLL_FOLLOW_PX。
+  s.box.scrollTop = 500
+  s.tick()
+  assert.equal(s.follow(), false, 'the follow is dropped, not re-armed behind his back')
+  assert.notEqual(s.anchor(), null, 'the row he is reading becomes the anchor for a later repaint')
+  assert.deepEqual(s.marks, ['rl'], 'and the escape is stamped')
+  assert.equal(s.timers.length, queuedBefore - 1, 'the chain terminates — it does not schedule another pull')
+  assert.equal(s.box.scrollTop, 500, 'the reader keeps his position — no write happened on the escape pass')
+})
+
+test('tail stick: 视口变高把 scrollTop 钳小时不解除跟随', () => {
+  const s = buildTailStick(1000)
+  s.settleTailStick(s.box, 4)
+  s.tick() // 写入 pinned = 2000（超界的值，浏览器随即钳回最大可滚位）
+  // 浏览器钳位＝scrollHeight-clientHeight，仍在跟随带内（实测 450→735 时 1541→1256）：
+  // 那不是读者的意图。
+  s.box.scrollTop = 2000 - 700
+  s.tick()
+  assert.equal(s.follow(), true, 'a clamp is not a reader gesture')
+  assert.equal(s.box.scrollTop, 2000, 'the stick keeps him at the bottom it promised')
+  assert.deepEqual(s.marks, ['ts', 'ts'])
+})
+
+test('tail stick: 塌盒（无可滚范围）时一个字都不写', () => {
+  const s = buildTailStick(1000)
+  s.box.scrollHeight = 700
+  s.box.clientHeight = 700
+  s.settleTailStick(s.box, 4)
+  s.tick()
+  assert.equal(s.box.scrollTop, 1000)
+  assert.deepEqual(s.marks, [])
+})
+
+// ─── 5) settlePromptJump 进了互斥令牌（第四条链，此前游离在外）────────────
+// 点 ↑ 起一条 100ms×4 的重瞄链；它不认令牌，于是点 ↓ 之后两股相反的写入交替——
+// 用户 2026-10-15 口述「点那个上下按钮的时候也有跳动」。现在入口夺令牌（后上膛者赢），
+// 重试回来发现令牌已被夺走就终止自己。
+const PROMPTJUMP = slice(js, 'function settlePromptJump(box,anchor,tries){', "// ↑ 只跳转、不再顺手拉历史")
+
+function buildPromptJump() {
+  const marks = []
+  const timers = []
+  const box = { scrollTop: 0, isConnected: true, __settleTurn: 0, getBoundingClientRect: () => ({ top: 0 }) }
+  const anchor = { isConnected: true, getBoundingClientRect: () => ({ top: 300 }) }
+  const make = new Function(
+    'probeMark', 'setTimeout', 'programmaticScroll', 'JUMP_PROMPT_PAD_PX',
+    `${PROMPTJUMP};return settlePromptJump`
+  )
+  const settlePromptJump = make(
+    (tag) => marks.push(tag),
+    (fn) => { timers.push(fn) },
+    () => {},
+    Number(js.match(/JUMP_PROMPT_PAD_PX=(\d+);/)[1])
+  )
+  return { settlePromptJump, box, anchor, marks, timers, tick: () => timers.shift()() }
+}
+
+test('prompt jump: 首趟就写入，后续每趟带 pj 标记', () => {
+  const s = buildPromptJump()
+  s.settlePromptJump(s.box, s.anchor, 4)
+  assert.equal(s.box.scrollTop, 300 - 54, 'delta 300-0-54 = 246 written')
+  assert.deepEqual(s.marks, ['pj'])
+  assert.equal(s.timers.length, 1, 'and the re-measure is scheduled')
+})
+
+test('prompt jump: 别人夺走令牌后重瞄链立刻终止，不再改 scrollTop', () => {
+  const s = buildPromptJump()
+  s.settlePromptJump(s.box, s.anchor, 4)
+  const written = s.box.scrollTop
+  s.marks.length = 0
+  // 等价于读者随后按了 ↓：handler 里 box.__settleTurn 自增夺令牌（后上膛者赢）。
+  s.box.__settleTurn += 1
+  s.box.scrollTop = 5000
+  s.tick()
+  assert.equal(s.box.scrollTop, 5000, 'the stale chain must not drag him back')
+  assert.deepEqual(s.marks, ['pj'], 'only the termination is stamped')
+  assert.equal(s.timers.length, 0, 'and it does not schedule another pass')
+})
+

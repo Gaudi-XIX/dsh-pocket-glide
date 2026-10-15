@@ -908,7 +908,23 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   会 ReferenceError，正是 stream-watermark 沙箱此前靠「不触发写入」侥幸绕过的）；
 //   图片（.md-image/.attach-image img）补 aspect-ratio:auto，压住加载完成后的二次布局位移。
 //   实测 zh 324 674 B / en 324 578 B（css 49 212 + js 275 462/275 366）⇒ 326 000 不动，余量 ~1.3 KB。
-const ASSET_BUDGET_BYTES = 326_000
+// 2026-10-15 滚动乱跳返工（m02164③ 三轮，用户「滑动的时候有跳动，点那个上下按钮的时候也有跳动」）
+//   本线越线 1 695 B（zh 327 695 / en 330 763 实测）⇒ 326 000→330 000，余量 ~2.3 KB（en 侧最紧）。
+//   四处改动，都是「谁在写 scrollTop」这一个问题的收口：
+//   ① settleTailStick 补**读者出口**（签名加 pinned）：写底前若 live.scrollTop < 上次写入值-2
+//      且离底已超 SCROLL_FOLLOW_PX，说明读者自己动过手 ⇒ 立刻解除 followStream、记锚、打标 'rl'
+//      并终止本链。判据来自本壳写底的事实：内容长高只增 scrollHeight 不动 scrollTop，读者上滑
+//      才让 scrollTop 变小。实测 ts 链 679/1082 次是「三值完全相同的纯冗余写」——链条对
+//      「已经在底」毫无判断，也没有出口。
+//   ② programmaticScroll 的 250ms 静默窗**到点自醒**（followReArmTimer + probeMark('ra')）：
+//      该窗原先假定「一条链只跑 tries 次」，但流式 patch 每 token 帧都调它、settleTailStick 每
+//      120ms 调它，两条都在给自己无限续期 ⇒ 滚动监听里 Date.now()>=followReArmAllowedAt 永不
+//      成立 ⇒ followStream 冻在 true ⇒ 读者上滑被下一帧拽回底＝橡皮筋。pendingFollowFrame 那面
+//      旗只在 applyHistory 里消费，纯滑动不产生新数据，旗永远躺着。
+//   ③ settlePromptJump 纳入 __settleTurn 互斥（入口夺令牌、重试比令牌、写入与终止都打 'pj'）——
+//      它是第四条延时链，此前游离在令牌之外，点 ↑ 后点 ↓ 两股相反写入交替。
+//   ④ jumpLatest 夺令牌再写底：点 ↓ 时上一条 ↑ 的重瞄链必须立刻作废。
+const ASSET_BUDGET_BYTES = 330_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

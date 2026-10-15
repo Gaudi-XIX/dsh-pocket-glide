@@ -533,6 +533,13 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   assert.match(js, /if\(box\.scrollHeight<=box\.clientHeight\+8\)return;if\(Date\.now\(\)<followReArmAllowedAt\)return;topEdgeArmed=true;/, '2026-10-14 工序1：无可滚范围与 programmaticScroll 静默窗内的钳位 scroll 不算读者甩到顶——被挡下时不消耗 latch（滑到底突然跳顶+显示「正在加载更早消息」的根）')
   assert.match(js, /if\(!activeSession\|\|!olderHasMore\|\|olderBusy\|\|olderRunBusy\)return;void loadOlder\(\)/, 'and it obeys every lock the deliberate pull obeys')
   assert.match(js, /if\(typeof settleTailStick==='function'\)settleTailStick\(box,4\)/, '2026-10-14 工序1：贴底写入后按 120ms 重钉到底——content-visibility 估算行被真渲染时 scrollHeight 继续长，浏览器不会把人带到底（进入会话/发送后没滚到底的根）')
+  // 2026-10-15 m02164③ 三轮：贴底链每 120ms 给 250ms 静默窗续期，滚动监听的
+  // followStream 因此永不重判 ⇒ 读者上滑被吞、下一帧又被钉回底（橡皮筋）。
+  // 两处补口：链条自己有读者出口，窗口到点自己醒一次。
+  assert.match(js, /if\(pinned!==undefined&&live\.scrollTop<pinned-2&&live\.scrollHeight-live\.scrollTop-live\.clientHeight>SCROLL_FOLLOW_PX\)\{if\(typeof followStream!=='undefined'\)followStream=false;[\s\S]{0,160}probeMark\('rl'\);return\}/, '2026-10-15 ③三轮：scrollTop 比上次写入值小且离底超跟随带＝读者动过手——解除 follow、记锚、打标 rl 并终止本链（内容长高只增 scrollHeight 不动 scrollTop，故该判据不误伤钳位）')
+  assert.match(js, /function programmaticScroll\(\)\{followReArmAllowedAt=Date\.now\(\)\+250;if\(followReArmTimer!==null\)return;followReArmTimer=setTimeout\(\(\)=>\{followReArmTimer=null;[\s\S]{0,220}probeMark\('ra'\);followStream=isNearBottom\(live\)/, '2026-10-15 ③三轮：静默窗到点自醒并重判 follow——原注释「窗长 250ms > 最长 settle 链」只对「一条链只跑 tries 次」成立，流式 patch 每 token 帧与 settleTailStick 每 120ms 都在给自己续期；pendingFollowFrame 那面旗只在 applyHistory 里消费，纯滑动时永远躺着')
+  assert.match(js, /if\(btn\.id==='jumpLatest'\)\{box\.__settleTurn=\(box\.__settleTurn\|\|0\)\+1;followStream=true;/, '2026-10-15 ③三轮：点 ↓ 先夺令牌——上一条 ↑ 的 settlePromptJump 重瞄链必须立刻作废，否则两股相反写入交替（用户「点那个上下按钮的时候也有跳动」）')
+  assert.match(js, /function settlePromptJump\(box,anchor,tries\)\{if\(!anchor\.isConnected\|\|tries<=0\)return;box\.__settleTurn=\(box\.__settleTurn\|\|0\)\+1;const turn=box\.__settleTurn;const step=\(node,a,left\)=>\{if\(!a\.isConnected\|\|node\.__settleTurn!==turn\)/, '2026-10-15 ③三轮：第四条延时链 settlePromptJump 也纳入 __settleTurn 互斥（此前游离在令牌外，只跑 tries 次的假设同样被它自己的 setTimeout 打破）')
   assert.match(js, /const stick=typeof followStream==='undefined'\|\|followStream;if\(stick\)\{if\(typeof programmaticScroll==='function'\)programmaticScroll\(\);box\.scrollTop=box\.scrollHeight;if\(typeof probeMark==='function'\)probeMark\('bp'\)\}/, 'patchLastStreamMessage gates the stick on followStream（花括号里是可选打点 bp，门槛语义没变；守卫是为了测试沙箱按名抽取时不 ReferenceError）')
   assert.match(assets.zh.document, /id="scrollAnchors"/, 'the anchor deck ships in the document')
   assert.match(js, /anchor-fab/, 'the fab styling ships')
