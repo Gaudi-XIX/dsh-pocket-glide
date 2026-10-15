@@ -16,6 +16,13 @@
 //      而不是让你显示到主页上」. So the batch must never re-render the landing
 //      (the rows would rebuild under the reader's thumb) and the row markup must
 //      stay free of the tail line.
+//   7. 2026-10-15 (m01005①②): the batch is a PACK, not a one-liner. The bridge
+//      already returns up to TAIL_PAGE_MESSAGES full records per session; the old
+//      code threw them away at tailCache.set and kept {text,time}, so opening a
+//      session still paid a full round trip (「为什么点进会话不是秒开」). Now the
+//      records are kept, bounded to TAIL_PACK_MAX newest-by-seq, the pack cache is
+//      bounded to TAIL_CACHE_MAX sessions, and paintInstantSession paints from the
+//      pack when sessionCache missed — 「不能空白、不能等加载」.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mobilePageAssets } from '../lib/pages.js'
@@ -40,6 +47,18 @@ function extractFunction(source, name) {
 const limitOf = () => {
   const m = assets.zh.js.match(/const TAIL_TEXT_LIMIT=(\d+);/)
   assert.ok(m, 'TAIL_TEXT_LIMIT must be a plain number in the asset')
+  return Number(m[1])
+}
+
+const packMaxOf = () => {
+  const m = assets.zh.js.match(/const TAIL_PACK_MAX=(\d+);/)
+  assert.ok(m, 'TAIL_PACK_MAX must be a plain number in the asset')
+  return Number(m[1])
+}
+
+const cacheMaxOf = () => {
+  const m = assets.zh.js.match(/const TAIL_CACHE_MAX=(\d+);/)
+  assert.ok(m, 'the pack cache must be bounded — it holds full records now, not one-liners')
   return Number(m[1])
 }
 
@@ -123,11 +142,16 @@ const listSandbox = ({ state = {}, rpcImpl }) => {
   const js = assets.zh.js
   const body = [
     extractFunction(js, 'contentBlocks'),
+    extractFunction(js, 'eventSeq'),
     extractFunction(js, 'extractTail'),
+    extractFunction(js, 'tailPack'),
     extractFunction(js, 'requestVisibleTails'),
   ].join('\n')
+
   return new Function('rpc, taskState, noteSessionMessageAt, renderWorkspaces, fakeHost, state', `
     const TAIL_TEXT_LIMIT=${limitOf()}
+    const TAIL_PACK_MAX=${packMaxOf()}
+    const TAIL_CACHE_MAX=${cacheMaxOf()}
     const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
     let activeSession=${JSON.stringify(state.activeSession ?? null)}
     const sessionSummaries=${JSON.stringify(state.rows ?? [])}
@@ -194,6 +218,73 @@ test('per-row markers do not poison the cache or the clock', async () => {
   assert.equal(box.tailArmedAt.a, 1, 'but the row is still armed, so the landing does not hammer it')
 })
 
+// ------------------------------------- the pack itself (m01005①)
+
+const packSandbox = () => {
+  const js = assets.zh.js
+  const body = [extractFunction(js, 'eventSeq'), extractFunction(js, 'tailPack')].join('\n')
+  return new Function(`
+    const TAIL_PACK_MAX=${packMaxOf()}
+    ${body}
+    return { tailPack }
+  `)()
+}
+
+// eventSeq reads the seq off the inner event (pages.js eventSeq), which is the
+// shape session/page ships, so the pack fixtures use that shape, not the flat
+// one the extractTail fixtures above use.
+const rec = (seq) => ({ seq, event: { seq, type: 'assistant/message', time: seq, data: { message: { content: [{ type: 'text', text: 'm' + seq }] } } } })
+
+test('the pack is bounded and keeps the newest records, ordered old to new', () => {
+  const { tailPack } = packSandbox()
+  const max = packMaxOf()
+  const many = []
+  for (let i = 1; i <= max + 5; i++) many.push(rec(i))
+  const pack = tailPack(many)
+  assert.equal(pack.length, max, '排到上限就不排了 — older records are dropped')
+  assert.deepEqual(pack.map((entry) => entry.seq), Array.from({ length: max }, (_, k) => k + 6), 'the newest max, oldest first')
+})
+
+test('a shuffled page still yields a sorted pack, and junk never throws', () => {
+  const { tailPack } = packSandbox()
+  const pack = tailPack([rec(9), rec(3), rec(7)])
+  assert.deepEqual(pack.map((entry) => entry.seq), [3, 7, 9], 'the bridge page arrives by seq; the pack must not invert it')
+  for (const junk of [null, undefined, {}, 'x', [null]]) {
+    assert.ok(Array.isArray(tailPack(junk)), 'junk degrades to an empty pack')
+  }
+})
+
+test('the pack is what gets cached, so opening the session has content to paint', async () => {
+  const state = { rows: [{ sessionId: 'a', updatedAt: 5 }], visible: ['a'] }
+  // the user record needs source.kind==='user' for the one-liner, and a seq of
+  // its own for the pack — so it is spelled out instead of reusing userRec().
+  const tail = { seq: 3, event: { seq: 3, type: 'user/message', time: 9, data: { message: { source: { kind: 'user' }, content: [{ type: 'text', text: 'late' }] } } } }
+  const box = listSandbox({
+    state,
+    rpcImpl: async () => ({ tails: { a: { updatedAt: 5, events: [rec(1), rec(2), tail] } } })
+  })
+  await box.requestVisibleTails()
+  const cached = box.tailCache.get('a')
+  assert.equal(cached.text, 'late', 'the one-line tail still exists for tailTextOf')
+  assert.deepEqual(cached.pack.map((entry) => entry.seq), [1, 2, 3], 'and the full records stay in the pack (m01005①)')
+})
+
+test('the pack cache is bounded — full records must not pile up unbounded', async () => {
+  const max = cacheMaxOf()
+  const rows = []
+  const visible = []
+  const tails = {}
+  for (let i = 0; i <= max; i++) {
+    const id = 's' + i
+    rows.push({ sessionId: id, updatedAt: i + 1 })
+    visible.push(id)
+    tails[id] = { updatedAt: i + 1, events: [rec(i + 1)] }
+  }
+  const box = listSandbox({ state: { rows, visible }, rpcImpl: async () => ({ tails }) })
+  await box.requestVisibleTails()
+  assert.ok(box.tailCache.size <= max, `the cache holds at most ${max} packs, got ${box.tailCache.size}`)
+})
+
 // ------------------------------------- the wiring stays visible in the asset
 
 test('the batch is prefetch only: no tail line in the row, no re-render after it', () => {
@@ -201,6 +292,7 @@ test('the batch is prefetch only: no tail line in the row, no re-render after it
   assert.doesNotMatch(js, /task-copy[^]*msg-tail[^]*tailTextOf/, 'the landing row paints no message text — prefetch only (m02164①)')
   assert.match(js, /rpc\('session\.tails',\{sessions:ids\},60000\)/, 'one screen of tails is judged against 60s, not the 12s default (the bridge fans out up to 30 Host pages)')
   assert.match(js, /if\(host\.innerHTML!==html\)host\.innerHTML=html;requestVisibleTails\(host\)/, 'the prefetch rides every landing paint')
+  assert.match(js, /extracted\.pack=tailPack\(hit\.events\);tailCache\.set\(id,extracted\)/, 'the pack is cached whole, not clipped to one line (m01005①)')
   // A batch that lands must not rebuild the list: the reader is scrolling it.
   // Cut the real function out of the asset — a whole-file regex would happily
   // match renderWorkspaces() defined a thousand lines below the fetch.

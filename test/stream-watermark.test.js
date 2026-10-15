@@ -286,6 +286,7 @@ function buildInstantPaintSandbox() {
     let activeSession=null,olderHasMore=false,olderExhausted=false,streamProjections=null
     let streamEvents=[],olderEvents=[]
     const sessionCache=new Map()
+    const tailCache=new Map()
     const painted=[]
     function paintInstantHistory(events){painted.push(events.map(eventSeq))}
     function ensureTranscriptFilled(){}
@@ -296,6 +297,7 @@ function buildInstantPaintSandbox() {
       setStream(value){streamEvents=value},
       setOlder(value){olderEvents=value},
       setCached(session,value){sessionCache.set(session,value)},
+      setTail(session,value){tailCache.set(session,value)},
       read(){return {streamEvents,olderEvents}},
       paintInstantSession,
     }
@@ -321,6 +323,28 @@ test('AC-D1 a cached visit keeps both older windows as well', () => {
   assert.equal(sandbox.paintInstantSession(), true, 'the cache branch is the one taken')
   assert.deepEqual(sandbox.painted[0], [3, 4, 7, 8], 'cached and freshly pulled history both stay')
   assert.deepEqual(seqs(sandbox.read().olderEvents), [3, 4], 'neither older window is dropped')
+})
+
+// 预载包分支（用户 2026-10-15 m01005②）：sessionCache 没有这个会话（冷开或已被
+// 驱逐）时，主页登录时拉回的尾包先画上，屏幕不该是骨架。它只并进尾部缓冲，
+// 不动 olderEvents、不打 at 戳——全量读回来再按 seq 去重续上。
+test('AC-D1b a cold entry paints from the tail pack instead of a skeleton', () => {
+  const sandbox = buildInstantPaintSandbox()
+  sandbox.setActive('s9')
+  sandbox.setTail('s9', { text: 'late', time: 9, pack: [{ event: { seq: 12 } }, { event: { seq: 13 } }] })
+  sandbox.setStream([])
+  assert.equal(sandbox.paintInstantSession(), true, 'the pack counts as an instant paint')
+  assert.deepEqual(sandbox.painted[0], [12, 13], 'and what it holds is on screen')
+  assert.deepEqual(sandbox.read().olderEvents, [], 'the older window is not touched')
+  assert.equal(sandbox.paintInstantSession(), true, 'a re-entry merges by seq, no duplicates')
+  assert.deepEqual(sandbox.painted[1], [12, 13], 'still the same two messages')
+})
+
+test('AC-D1c an empty pack falls through to the loader', () => {
+  const sandbox = buildInstantPaintSandbox()
+  sandbox.setActive('s9')
+  sandbox.setTail('s9', { text: '', time: 0, pack: [] })
+  assert.equal(sandbox.paintInstantSession(), false, 'nothing to paint means the skeleton path stays')
 })
 
 function buildCloseSandbox() {
