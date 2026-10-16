@@ -6,6 +6,13 @@
 
 ## 未发布（工作树）
 
+**局域网 IP 解析彻底移除 PowerShell 进程调用，消除桌面黑色控制台闪窗**（与本节其余各笔同欠一次重启）。
+
+- **根因＝Windows 环境下拉起 CUI 控制台子系统导致瞬时闪窗**：`preferredLanAddress` 在刷新网卡时通过 `execFile` 调用 `powershell.exe -NoProfile -Command Get-NetIPAddress...`。在 Windows 10/11 GUI 宿主下，系统底层 `conhost.exe` 即使指定 `windowsHide: true` 也会在初始化瞬间闪现黑色终端窗口，且每次冷启 PowerShell 耗时达 2 秒。
+- **改法＝改用 Node.js 原生 `os.networkInterfaces()` 内存级解析**：实现 `findLanAddress(interfaces)`，直接过滤 `VIRTUAL_ADAPTER_PATTERN`（WSL/Hyper-V/VMware/Docker/Tailscale 等），首选真实物理网卡私网 IPv4，在全虚拟环境下兜底回退任意私网 IPv4。耗时从 2000ms 降至 0.05ms，彻底零子进程。保留 `parseLanAdapterLines` 保持历史单测兼容。
+- **回归锁**：`test/bridge-review.test.js` 新增 3 项单测（虚拟网卡过滤、全虚拟兜底回退、进程内执行契约），45/45 全绿；关联测试集 144 绿/0 红/2 跳过。
+- **欠重启宿主**；改动随下次 DSH 重启生效。
+
 **第一次打开手机页不再谎报「连接已断开」**（与本节其余各笔同欠一次重启）。
 
 - **根因＝「没连上」与「曾经连上又掉了」共用一套文案**：未授权落地页（`lib/bridge.js:4520-4538`）

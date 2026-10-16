@@ -12,7 +12,9 @@ import {
   LanMobileBridge,
   buildContentSecurityPolicy,
   desktopCookieAttributes,
+  findLanAddress,
   parseLanAdapterLines,
+  preferredLanAddress,
 } from '../lib/bridge.js'
 import { startBridge, httpFetch } from './helpers.js'
 
@@ -231,6 +233,40 @@ test('D: parseLanAdapterLines parses, trims and filters virtual adapters', () =>
     ['192.168.1.20', '10.1.1.5']
   )
   assert.equal(entries[0].description, 'Intel(R) Ethernet Connection I219-V')
+})
+
+test('D: findLanAddress skips virtual adapters and picks valid private IPv4', () => {
+  const fakeInterfaces = {
+    'vEthernet (WSL)': [
+      { address: '172.28.0.1', family: 'IPv4', internal: false },
+    ],
+    'tailscale0': [
+      { address: '100.64.0.1', family: 'IPv4', internal: false },
+    ],
+    'Loopback': [
+      { address: '127.0.0.1', family: 'IPv4', internal: true },
+    ],
+    'Ethernet': [
+      { address: '192.168.1.50', family: 'IPv4', internal: false },
+    ],
+  }
+  assert.equal(findLanAddress(fakeInterfaces), '192.168.1.50')
+})
+
+test('D: findLanAddress falls back to virtual adapter if only virtual private IPs exist', () => {
+  const fakeInterfaces = {
+    'vEthernet (Default)': [
+      { address: '172.29.192.1', family: 'IPv4', internal: false },
+    ],
+  }
+  assert.equal(findLanAddress(fakeInterfaces), '172.29.192.1')
+})
+
+test('D: preferredLanAddress returns an in-process LAN IP without error', () => {
+  const addr = preferredLanAddress()
+  if (addr !== undefined) {
+    assert.match(addr, /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/)
+  }
 })
 
 // ---------------------------------------------------------------------------
