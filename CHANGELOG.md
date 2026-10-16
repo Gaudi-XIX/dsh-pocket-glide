@@ -6,6 +6,23 @@
 
 ## 未发布（工作树）
 
+**第一次打开手机页不再谎报「连接已断开」**（与本节其余各笔同欠一次重启）。
+
+- **根因＝「没连上」与「曾经连上又掉了」共用一套文案**：未授权落地页（`lib/bridge.js:4520-4538`）
+  历来一律渲染 `renderMobileReconnectPage`，而那一页写死了 `title:'重新连接 DSH'` / `heading:'连接已断开'`。
+  **首次访问的手机什么都没丢**，却先看到一句「连接已断开」——这是观感误导，不是真实掉线。
+- **改法＝按「是否持有活会话」分流**：桥侧新增 `const fresh = !this.mobileSessionActive(request)`
+  并把 `fresh` 传进 `renderMobileReconnectPage`；页面据此选文案——`fresh` 时标题/大标题为
+  「连接 DSH」/「Connect to DSH」，否则维持「重新连接 DSH」/「连接已断开」。**真实掉线分支的文案
+  逐字节不变**（`test/pages-render-fixes.test.js` 的 `T5b` 两头都钉住：`fresh` 不含「连接已断开」，
+  返回的老设备仍必须含）。
+- **副作用审查**：`mobileSessionActive` 会 `touchDevice`（LRU 重插）＋`noteDeviceSeen`（刷 `lastSeenAt`），
+  但它在 `!token || !this.sessions.has(token)` 时**先返回 false**，故对真正的首次访问者零副作用；
+  仅当请求已持活会话却仍走到未授权分支时才会刷新时间戳，语义上无害（该设备确实刚活动过）。
+- **回归锁**：新增 `T5b a first-time phone is not told its connection was lost`。该文件 **24 项全绿**；
+  字符层全量 **1243 项／1241 绿／0 红／2 跳过**。
+- **欠重启宿主**；重启后手机页须完全关闭重开拿新壳。
+
 **工作区头不再把「还有人在跑」误报成「已完成」**（用户口述 m00001：「如果工作区里面正在进行的几个对话中
 有一个对话已经完成，就会把这个工作区的状态定为已完成」「只有当工作区里面任何一个对话都已经完成了，
 并且不在这 3 个状态里面时，才会显示"已完成"」）。
