@@ -131,7 +131,12 @@ test('T1 showError/clearTransientError chatError call sites unchanged (zero JS d
   // 12 baseline + ensureSession()'s create-failure report (2026-10-12 draft new-chat):
   // a "+" draft whose session cannot be minted must say so on the chat error line —
   // the list banner it used to hit is no longer where the tap happens. Not drift.
-  assert.equal(shown, 21, 'showError chatError call count: 17 baseline + the four draft flush reports (2026-10-15: applyDraftPending pushes preset/model/permission onto the session the moment it exists — a refused setting must be visible, not silently dropped)')
+  // 2026-10-16 (首次发送延迟): send() reports two more failures on the same line.
+  // The create window closed BEFORE the first await, so the pre-flight checks that
+  // used to return silently — an attachment still uploading, an image whose draft
+  // never finished — now have to speak, or the tap looks swallowed; and the create
+  // itself unwinds through send()'s own catch instead of ensureSession()'s.
+  assert.equal(shown, 23, 'showError chatError call count: 21 + the two new send() failure reports (2026-10-16: the pre-flight rejection and the materialize-and-send rollback)')
   // 3 baseline sites + the banner dismiss (2026-10-07-fix-pocket-banner-dismiss-and-ttl):
   // the tap-the-right-end exit must leave through the same guard as the frame exit, so it
   // is a fourth call site by construction, not a drift.

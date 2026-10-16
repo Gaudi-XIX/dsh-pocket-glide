@@ -4,6 +4,33 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 未发布（工作树）
+
+**首条消息不再「点了没反应」**（用户口述 m00003「Pocket 一个会话第一次发送消息的时候会连续发送两次」，
+随即更正 m00006「第一次会话发送消息以后会有很长的延迟，大概有 1 秒钟。这时候如果用户没反应，因为完全不知道
+消息发没发出去，多点一次就会重复发送。所以，关键是在这个延迟上面」）。
+
+- **反馈搬到了第一个 `await` 之前**：旧 `send()` 把清输入框、画乐观气泡、翻转发送钮全部押在
+  `await ensureSession()` 之后——草稿态那条链要走 `session.create` ＋ `applyDraftPending`（预设/模型/权限
+  最多 3 次额外往返）才轮到 UI，期间屏幕一动不动，用户只能靠再点一次确认，于是两次 `session.prompt`。
+  现在同步段先落 `agentRunning=true` ＋乐观气泡 ＋清空正文，再进 await。
+- **`sendBusy` 闩锁**：`send()` 入口 `if(sendBusy)return`，`finally` 解锁——跨 `await` 的连点不再能叠出第二次发送。
+- **`owner` 捕获移到 `ensureSession()` 之后**：旧写法在草稿态捕获到 `null`，两处 `activeSession!==owner`
+  守卫永远不成立（发送成功分支的 `clearSentDrafts()`／`loadHistory(false)` 会整段跳过）。现在守卫成对：
+  成功分支比 `!==`，回执分支比 `===` 才动气泡与运行态。
+- **失败路径拆成两层 catch**：`session.create` 失败（外层）撤气泡、解运行态、`stopPendingSend()` 撤乐观行标记、
+  把正文放回输入框；`session.prompt`／`command.execute` 失败（内层）只在「读者还在这条会话上」时回滚。
+  新增 `stopPendingSend(id)`——乐观 running 标记是有期限的谎，真失败时手撤。
+- 副作用：`optimisticPrompts` 的 echo 清扫在乐观上屏时也要跑（`messagesWithOptimistic(...,true)`），
+  否则稍后到达的持久副本会在乐观气泡旁边再画一个；预检拒绝（附件未传完/图片草稿未完成）从静默 return
+  改成 `showError('chatError')`——窗口关在 await 之前以后，静默返回就等于「点了没反应」。
+
+验证覆盖＝字符层全量 **1238 项／1236 绿／0 红**（新增 `test/pages-send-latency.test.js` 6 项钉顺序而非措辞；
+反向注入 HEAD 旧 `send()` 实测 6 项中 5 项转红，恢复即全绿）。**外壳预算抬额 338 000 → 342 000**
+（本线实测 zh 339 875＝css 50 598＋js 289 277，相对 HEAD 只 js +2 018 B、css 零增长）。
+渲染层与实机层未覆盖 ⇒ 「连点是否真被闩住、首条气泡是否即时出现」须真机走查。**欠重启宿主**，
+重启后手机页须完全关闭重开拿新壳。
+
 ## 0.4.47 — 2026-10-16
 
 **预取包不再压成一行——点进会话先有内容，不等全量**（用户口述「如果一开始已经把显示出来的对话最后几条消息加载了，

@@ -247,11 +247,18 @@ test('⑨ CHANGELOG.md 在场、最新一节跟着 version 走，且 README 不�
   const changelog = read('CHANGELOG.md')
   const headings = [...changelog.matchAll(/^##\s+(\S+)/gm)].map((m) => m[1])
   assert(headings.length >= 2, `CHANGELOG 至少要有「本版」与「上一版」两节，实际：${headings.join(', ')}`)
-  assert.equal(
-    headings[0],
-    pkg.version,
-    `CHANGELOG 最新一节必须就是当前 package.json version（${pkg.version}），实际最新是 ${headings[0]}`,
-  )
+  // 2026-10-16：未发布的工作树**不建版本节、也不提 version**（改 package.json 的 version
+  // 是发布决策，工作树单方面提位会让「最新一节＝当前 version」这条在发布前就撒谎）。
+  // 未发布改动写成 `## <version> — 未发布（工作树）`，发布时再把它改成真日期节。
+  // 于是这里只在没有未发布节时才要求首节等于 version。
+  const unreleased = /^##\s+未发布/m.test(changelog)
+  if (!unreleased) {
+    assert.equal(
+      headings[0],
+      pkg.version,
+      `CHANGELOG 最新一节必须就是当前 package.json version（${pkg.version}），实际最新是 ${headings[0]}`,
+    )
+  }
   const readme = read('README.md')
   assert.match(readme, /CHANGELOG\.md/, 'README 必须指向 CHANGELOG.md')
   assert.doesNotMatch(readme, /不维护\s*CHANGELOG/i, 'README 不得再声称本仓不维护 CHANGELOG —— 它现在维护')

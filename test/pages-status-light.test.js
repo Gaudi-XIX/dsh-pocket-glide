@@ -184,7 +184,14 @@ test('draft creation: "+" mints nothing; ensureSession is the only session.creat
   assert.match(ensure, /if\(activeSession\)return activeSession/, 'a materialized draft never re-creates')
   assert.match(js, /startDraftChat\(wsId\)/, 'the + button is wired to the draft, not to a create')
   // The actions that mean "this draft is in use" must materialize first.
-  assert.match(extractFunction(js, 'send'), /if\(!activeSession&&!\(await ensureSession\(\)\)\)return/)
+  // 2026-10-16（首次发送延迟）：send() 的材质化不再走早退分支，而是把它当作失败
+  // 的一条路径——`if(!activeSession&&!(await ensureSession()))throw new Error(...)`，
+  // 由外层 catch 统一回滚乐观气泡、解锁运行态并把正文放回输入框。断言按语义钉：
+  // send 里必须出现 ensureSession 的 await，且该调用仍受「没有活跃会话」守卫。
+  const sendBody = extractFunction(js, 'send')
+  assert.match(sendBody, /if\(!activeSession&&!\(await ensureSession\(\)\)\)throw/,
+    'a draft send materializes the session inside the rollback path')
+  assert.match(sendBody, /await ensureSession\(\)/)
   assert.match(extractFunction(js, 'uploadGenericFile'), /await ensureSession\(\)/)
   assert.match(extractFunction(js, 'retryDraft'), /await ensureSession\(\)/)
   // 2026-10-15 反转：打开设置面板**不再**建会话。旧断言要求这里出现
@@ -201,7 +208,10 @@ test('draft creation: "+" mints nothing; ensureSession is the only session.creat
   // send() 不再另发一次 flush：flush 已织进 ensureSession 的创建链里（同一条 promise），
   // 而 send/upload/retry 全部先 await ensureSession()。再等一次会给同步段多拍一帧，
   // B-5 的「发送一开始输入框即清空」正是靠这一帧时序钉住的（2026-10-15）。
-  assert.doesNotMatch(extractFunction(js, 'send'), /applyDraftPending/)
+  // 2026-10-15 的反面同样成立：send() 的同步段必须留在 await 之前——它现在是
+  // 「发送中」的全部可见证据（清空输入框、画乐观气泡、翻转发送钮/停止钮），
+  // 见 test/pages-send-latency.test.js。
+  assert.doesNotMatch(sendBody, /applyDraftPending/)
 })
 
 test('#4c renderWorkspaces paints a provisional row with the spin state and a title fallback', () => {

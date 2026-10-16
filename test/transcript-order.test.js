@@ -156,8 +156,13 @@ test('a send repaints from the live buffer, not from a stale snapshot', () => {
   // yanked a reader who was parked in the middle down to the bottom. It now repaints
   // with the reader's own intent (latched before the send), so assert the live buffer
   // AND that the latch is what is passed — not a bare `true`.
+  // 2026-10-16 首次发送延迟: the first argument grew a second parameter — the echo
+  // sweep now has to run for the optimistic paint too, otherwise the durable copy of
+  // the just-sent prompt arrives later and is drawn as a SECOND bubble beside the
+  // optimistic one. The latch itself is untouched: `readIntent` stays the scroll arg,
+  // and a bare `true` in that position is still the regression this test was written for.
   assert.ok(js.includes('const readIntent=typeof followStream===\'undefined\'?true:followStream'), 'the send must latch the reader intent before it mutates state')
-  assert.ok(js.includes('paintMessages(messagesWithOptimistic(currentTranscript()),readIntent)'))
+  assert.ok(js.includes('paintMessages(messagesWithOptimistic(currentTranscript(),true),readIntent)'))
   assert.ok(!js.includes('paintMessages(messagesWithOptimistic(currentTranscript()),true)'), 'a send must not force a scroll to the bottom')
   assert.ok(!js.includes('paintMessages([...lastDurableMessages,...optimisticPrompts.map('))
 })

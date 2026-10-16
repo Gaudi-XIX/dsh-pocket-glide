@@ -342,6 +342,12 @@ node tools/render-stub.mjs                       # 渲染桩：真实页面资�
   所以 `npm test` 不含它；入口是 `npm run test:real-webserver`。它要求官方 payload 的解包件在场，
   路径可用 `DSH_OFFICIAL_MODULES` 覆盖；不在场就 fail-loud 退出并告诉你缺哪个文件。
 - 实机 UI 审计（触摸目标/对比度/回流）不在本仓，走工作区 `tmp/phone-e2e/` 那套脚本。
+- **发送的可见反馈必须留在第一个 `await` 之前**（2026-10-16 首次发送延迟修复）：`send()` 的同步段先
+  清输入框、画乐观气泡、置 `agentRunning`／`sendBusy`，之后才 `await ensureSession()`（草稿态要走
+  `session.create` ＋ `applyDraftPending`，最多 3 次额外往返）。**别再把这些搬回 await 之后**——那段窗口
+  里屏幕一动不动，用户会以为没发出去再点一次，直接造成重复发送；连点由 `sendBusy` 闩锁挡在入口。
+  `const owner=activeSession` 必须捕获在 `ensureSession()` **之后**（草稿态在之前是 `null`，两处会话守卫
+  会永远不成立）。回归锁在 `test/pages-send-latency.test.js`（钉顺序，不钉措辞）。
 - **模板字符串注释地雷**：`lib/pages.js` 的页面脚本区是一个大模板字符串资产。区内（包括注释里）
   写反引号或 `${` 插值序列会提前终止字面量 → 整资产 SyntaxError、多个测试文件同瞬全红。撞上时
   红名就是方向：先查最近改过的**注释**，不是产品逻辑（R1 卡 apply 期真实踩中一次，现有测试即

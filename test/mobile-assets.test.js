@@ -939,7 +939,13 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //      每名一行（REQ5①②）、新增「正在重启…」中间态文案（REQ5③）与两条新 L 词条；
 //   ③ 落地补拉与 pin 分区的注释（中文注释进壳，按字节计）。
 //   注释先压到最短再量；取 338 000（余量 ~3.6 KB，比上一版余量略宽，留给同批观感走查）。
-const ASSET_BUDGET_BYTES = 338_000
+// 2026-10-16 首次发送延迟抬额 338 000 → 342 000：用户报障「新会话发第一条消息后约 1 秒
+//   毫无反馈，以为没发出去又点一次 ⇒ 重复发送」。增量全部花在「把反馈搬到第一个 await
+//   之前」：send() 乐观段前移、sendBusy 闩锁、stopPendingSend 撤乐观标记、回执路径嵌套
+//   catch，以及解释这三处为何存在的注释。本线实测 zh 339 875（css 50 598 + js 289 277）/
+//   en 339 767；相对 HEAD 只 js +2 018 B（287 259→289 277），css 零增长。
+//   取 342 000（余量 ~2.1 KB，与上一版余量同幅）。
+const ASSET_BUDGET_BYTES = 342_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

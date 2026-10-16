@@ -208,10 +208,29 @@ test('B-3 a second arm does not strand the first await on the fallback timer', a
 // ---------------------------------------------------------------------------- B-5
 
 test('B-5 send() re-checks the session it started for', () => {
-  const body = between(js, 'async function send(){', 'function formatBytes(')
-  assert.ok(body.includes('const owner=activeSession'), 'the send captures whose session it is')
-  const guards = (body.match(/if\(activeSession!==owner\)return/g) || []).length
-  assert.equal(guards, 2, 'both the success and the failure branch must re-check the session')
+  const body = between(js, 'async function send(', 'function formatBytes(')
+  // 2026-10-16: the owner capture moved BELOW the ensureSession await. Capturing
+  // it first meant a draft send (activeSession still null at capture time) pinned
+  // owner=null and both guards below could never match — the send-into-a-new-chat
+  // path would read as "the reader left". The capture has to sit after the await,
+  // next to the markRowRunning that now needs the real id.
+  const awaitedAt = body.indexOf('await ensureSession()')
+  const capturedAt = body.indexOf('const owner=activeSession')
+  assert.notEqual(awaitedAt, -1, 'send() still mints the draft session itself')
+  assert.notEqual(capturedAt, -1, 'the send still captures whose session it is')
+  assert.ok(
+    capturedAt > awaitedAt,
+    'owner is captured after the create, or a first-message send pins a null owner',
+  )
+  // Both guards still have to be there, but they no longer sit side by side: the
+  // success branch checks `activeSession!==owner`, and the reply branch checks
+  // `activeSession===owner` before it touches the bubble, the composer or the
+  // running lock. Pin the pair by role, not by raw text — a refactor that drops
+  // either one leaves a send touching a session the reader already left.
+  const leftGuards = (body.match(/activeSession!==owner/g) || []).length
+  const ownerGuards = (body.match(/activeSession===owner/g) || []).length
+  assert.equal(leftGuards, 1, 'the success branch must re-check the session')
+  assert.equal(ownerGuards, 1, 'and the reply branch must confirm it is still the same one')
   // A whole-file lookup would be false-green: loadHistory() opens with the same line.
   assert.equal(
     (js.match(/const owner=activeSession/g) || []).length,
@@ -226,10 +245,17 @@ function buildSendSandbox() {
   const make = new Function('box', `
     let activeSession='s1',agentRunning=false,busyEnter='queue',lastHistoryKey='chat:s1'
     let optimisticPrompts=[],sessionBlank=true
+    // 2026-10-16 (first-message latency): send() now raises the optimistic turn,
+    // empties the composer and closes the double-tap window BEFORE it awaits the
+    // session create. The sandbox runs the real body, so it has to carry that
+    // state too — otherwise sendBusy is an undeclared read and the first run() in
+    // every test throws instead of exercising the guards.
+    let sendBusy=false
     // 2026-10-15: send() flushes whatever the draft settings panel buffered, right
     // after the session is guaranteed to exist. B-5 pins the flight guards, not the
     // flush — the buffer stays empty and the flush is a no-op stub here.
     let draftPending=null
+    async function ensureSession(){return activeSession}
     async function applyDraftPending(){}
     const composerDrafts=[]
     let flight=null,sentCleared=0
@@ -253,16 +279,20 @@ function buildSendSandbox() {
     // (test/optimistic-running.test.js) — here the send machine only needs to
     // know the call exists, so the stub keeps this file about composer state.
     function markRowRunning(){}
+    function stopPendingSend(){}
     function syncSettingsControls(){}
     function syncPromptUi(){}
     function paintMessages(list){painted.push(list.length)}
     function messagesWithOptimistic(list){return list}
     function clearSentDrafts(){sentCleared+=1}
     function showError(id,error){errors.push({id,error})}
+    function showToast(message){errors.push({id:'toast',error:{message}})}
+    function encodedPromptBytes(){return 1}
+    function rpcBodyCeilingFor(){return 1024}
     async function loadHistory(){}
     async function refreshActiveSessionSummary(){}
     async function rpc(method,payload){rpcCalls.push({method,payload});await new Promise((resolve,reject)=>{flight={resolve,reject}})}
-    const L={draftUploading:'uploading',draftFailed:'failed',attachNotAccepted:'no {command}'}
+    const L={draftUploading:'uploading',draftFailed:'failed',attachNotAccepted:'no {command}',attachTooLarge:'too large'}
     // 2026-10-07-fix-pocket-r3-audit-batch: send()'s catch now maps too-large
     // failures through the page's single helper — splice the real one in so the
     // sandbox keeps running the page's own words (L.attachTooLarge/failed are not
