@@ -945,7 +945,12 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   catch，以及解释这三处为何存在的注释。本线实测 zh 339 875（css 50 598 + js 289 277）/
 //   en 339 767；相对 HEAD 只 js +2 018 B（287 259→289 277），css 零增长。
 //   取 342 000（余量 ~2.1 KB，与上一版余量同幅）。
-const ASSET_BUDGET_BYTES = 342_000
+// 2026-10-16 首次访问文案不再谎报断线 + 尾条失败重试封顶：前者只在服务端渲染
+//   （不进货），增长来自 renderMobileReconnectPage 的 fresh 分支与其中文注释，约
+//   +120 B；后者是 TAIL_RETRY_MAX 的自愈逻辑与解释它的注释，约 +900 B（注释按最短
+//   口径压过一轮）。两条合起来相对 HEAD 341 703 净 +975 B，css 零增长。实测
+//   zh 342 678（css 50 598 + js 292 080）/ en 342 570。取 344 000（余量 ~1.3 KB）。
+const ASSET_BUDGET_BYTES = 344_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

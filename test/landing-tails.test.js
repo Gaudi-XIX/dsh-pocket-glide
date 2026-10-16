@@ -62,6 +62,12 @@ const cacheMaxOf = () => {
   return Number(m[1])
 }
 
+const retryMaxOf = () => {
+  const m = assets.zh.js.match(/const TAIL_RETRY_MAX=(\d+);/)
+  assert.ok(m, 'TAIL_RETRY_MAX must be a plain number in the asset')
+  return Number(m[1])
+}
+
 const tailSandbox = () => {
   const js = assets.zh.js
   const body = [
@@ -152,13 +158,14 @@ const listSandbox = ({ state = {}, rpcImpl }) => {
     const TAIL_TEXT_LIMIT=${limitOf()}
     const TAIL_PACK_MAX=${packMaxOf()}
     const TAIL_CACHE_MAX=${cacheMaxOf()}
-    const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
+    const TAIL_RETRY_MAX=${retryMaxOf()}
+    const tailCache=new Map(),tailArmedAt={},tailPending=new Set(),tailFailed={}
     let activeSession=${JSON.stringify(state.activeSession ?? null)}
     const sessionSummaries=${JSON.stringify(state.rows ?? [])}
     ${body}
     return {
       requestVisibleTails: () => requestVisibleTails(fakeHost()),
-      tailArmedAt, tailPending, tailCache, sessionSummaries
+      tailArmedAt, tailPending, tailCache, tailFailed, sessionSummaries
     }
   `)(rpcImpl, (s) => s.state || '', (...a) => { state.stamps = state.stamps || []; state.stamps.push(a) }, () => { state.paints = (state.paints || 0) + 1 }, () => ({
     querySelectorAll: (sel) => sel === '.task-row[data-id]' ? (state.visible || []).map((id) => ({ getAttribute: () => id })) : []
@@ -215,7 +222,30 @@ test('per-row markers do not poison the cache or the clock', async () => {
   assert.equal(box.tailCache.has('a'), false, 'a marker is not a tail')
   assert.equal(box.tailCache.get('b').text, '', 'an empty page caches an empty tail')
   assert.equal(state.stamps, undefined, 'no time means nothing fed the ledger')
-  assert.equal(box.tailArmedAt.a, 1, 'but the row is still armed, so the landing does not hammer it')
+  // 2026-10-16 反向：旧锁写的是 tailArmedAt.a===1（「仍然盖戳，所以主页不会反复敲」），
+  // 那把「一次失败＝永久不再预载」钉成了契约——用户报的「有些对话点进去完全没有消息」
+  // 正是它。失败的会话必须还能再试，所以这里改成：不盖戳，且失败计入 tailFailed。
+  assert.equal(box.tailArmedAt.a, undefined, 'a marker is not an answer — it must not arm the row')
+  assert.equal(box.tailFailed.a.count, 1, 'the failure is counted so the retry can be bounded')
+})
+
+// The flip side of "retry after failure": a session whose tail can NEVER be
+// fetched (the bridge reports no-cursor/unknown for a row the Host cannot page)
+// must not be re-asked on every landing render — startListPoll repaints the
+// landing every 60s, so unbounded retry is a permanent host-page treadmill.
+test('a permanently failing row is retried, then left alone until its stamp moves', async () => {
+  const state = { rows: [{ sessionId: 'a', updatedAt: 7 }], visible: ['a'] }
+  let calls = 0
+  const box = listSandbox({ state, rpcImpl: async () => { calls += 1; return { tails: { a: { error: 'no-cursor' } } } } })
+  const cap = retryMaxOf()
+  for (let i = 0; i < cap; i++) await box.requestVisibleTails()
+  assert.equal(calls, cap, 'the row is retried up to the cap')
+  await box.requestVisibleTails()
+  assert.equal(calls, cap, 'past the cap the landing stops asking — no treadmill')
+  // A new turn on that session moves updatedAt, which is worth one more try.
+  box.sessionSummaries[0].updatedAt = 8
+  await box.requestVisibleTails()
+  assert.equal(calls, cap + 1, 'a moved stamp resets the budget and asks again')
 })
 
 // ------------------------------------- the pack itself (m01005①)
