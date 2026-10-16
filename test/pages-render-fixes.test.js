@@ -362,6 +362,14 @@ test('T5 a tunnel failure offers the way back, a lan failure keeps its retry but
   assert.match(lanHtml, /id="retryBtn"/, 'lan mode keeps its retry button')
 })
 
+test('T5b a first-time phone is not told its connection was lost', () => {
+  const fresh = renderMobileReconnectPage('zh', 'tunnel', { fresh: true })
+  const returning = renderMobileReconnectPage('zh', 'tunnel', {})
+  assert.match(fresh, /<h1 id="heading">连接 DSH<\/h1>/, 'the landing page of a never-paired phone names the action')
+  assert.doesNotMatch(fresh, /连接已断开/, 'no false alarm on the very first visit')
+  assert.match(returning, /<h1 id="heading">连接已断开<\/h1>/, 'a phone that did lose its session still gets the loss wording')
+})
+
 test('T5 fail() paints the /disconnected exit only in tunnel mode', () => {
   const tunnelHtml = renderMobileReconnectPage('zh', 'tunnel', {})
   const lanHtml = renderMobileReconnectPage('zh', 'lan', {})
