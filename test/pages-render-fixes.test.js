@@ -232,6 +232,7 @@ test('NF-1 (r2) the fallback permission presets still describe themselves when r
   // `o.description` — every description came out empty on the failure path.
   const rowHtml = extractFunction(js, 'rowHtml')
   const currentRead = extractFunction(js, 'permissionCurrent')
+  const sheet = extractFunction(js, 'renderPermissionSheet')
   const render = extractFunction(js, 'renderPlusPermission')
   const host = { innerHTML: '' }
   const src = `
@@ -241,6 +242,10 @@ test('NF-1 (r2) the fallback permission presets still describe themselves when r
     // trims the dangerous preset out of a draft (no session). This splice is the
     // in-chat path, so the buffer stays null and all four options render.
     let draftPending = null
+    // 2026-10-16: both stay empty while rpc is down — permissionCurrent() then falls
+    // through to the host default, which is exactly the unreadable case under test.
+    let permissionDefault = ''
+    let permissionOptions = []
     const L = ${JSON.stringify({ plusBack: '返回', plusPermission: '权限', plusPermissionLoading: '正在读取权限预设…', plusRowCurrent: '使用中', plusCurrentPermission: '查看当前权限' })}
     const PLUS_ICONS = { permission: '<svg></svg>' }
     const PLUS_BACK_SVG = '<svg></svg>'
@@ -250,6 +255,7 @@ test('NF-1 (r2) the fallback permission presets still describe themselves when r
     const rpc = async () => { throw new Error('rpc down') }
     ${rowHtml}
     ${currentRead}
+    ${sheet}
     ${render}
     return renderPlusPermission().then(() => host.innerHTML)
   `
@@ -260,13 +266,47 @@ test('NF-1 (r2) the fallback permission presets still describe themselves when r
     assert.equal((html.match(/class="plus-row-desc"/g) || []).length, 4,
       'three fallback rows + the current-permission row render a desc slot')
     // negative guard: no desc slot is empty any more — the current-permission row
-    // used to ship `desc:''` and now reports the active preset (or '—' when the
-    // host has not answered), so an unreadable sheet cannot look blank (2026-10-14).
+    // used to ship `desc:''` and now reports the active preset, so an unreadable
+    // sheet cannot look blank (2026-10-14).
     assert.equal((html.match(/<span class="plus-row-desc"><\/span>/g) || []).length, 0,
-      'no row ships an empty description — the current-permission slot falls back to the dash')
-    assert.ok(html.includes('<span class="plus-row-desc">—</span>'),
-      'with nothing to read, the current-permission row renders the dash')
+      'no row ships an empty description — the current-permission slot always speaks')
+    // 2026-10-16: the dash is gone from that slot. With rpc down there is no host
+    // default either, so the row says it is still loading — the honest state. A dash
+    // read as "you have no permission preset", which is what the live report saw.
+    assert.equal((html.match(/—/g) || []).length, 0,
+      'the current-permission row no longer renders a bare em dash')
+    assert.ok(html.includes('<span class="plus-row-desc">' + '正在读取权限预设…' + '</span>'),
+      'with nothing readable the current-permission row says it is still loading')
   })
+})
+
+test('NF-1b (2026-10-16) the permission sheet falls back to the HOST default, not a dash', () => {
+  // The live report: 「模式和权限…显示的都是个横杠…点开权限后，没有任何高亮」.
+  // Root cause: permissionPresets.catalog also answers defaultPreset, and the sheet
+  // dropped it — so a session whose permission projection had not landed yet had no
+  // current value at all, and no row could match. permissionCurrent() now ends at the
+  // host default, which is the truth for "nothing pinned yet".
+  const currentRead = extractFunction(js, 'permissionCurrent')
+  const src = `
+    let streamProjections = null, sessionSummaries = [], activeSession = 's1'
+    let draftPending = null
+    let permissionDefault = 'workspace-write'
+    ${currentRead}
+    return permissionCurrent()
+  `
+  assert.equal(new Function(src)(), 'workspace-write',
+    'with no projection anywhere the host defaultPreset is what the sheet reports')
+
+  // and the catalog call must actually keep it
+  const render = extractFunction(js, 'renderPlusPermission')
+  assert.match(render, /permissionDefault\s*=\s*typeof value\?\.defaultPreset==='string'\?value\.defaultPreset:''/,
+    'renderPlusPermission stores defaultPreset from the catalog answer')
+
+  // the loading/dash contract is shared with NF-1 above: renderPermissionSheet must
+  // speak when current is empty rather than paint '—'
+  const sheet = extractFunction(js, 'renderPermissionSheet')
+  assert.doesNotMatch(sheet, /current\|\|'—'/,
+    'renderPermissionSheet never ships the bare dash for the current row')
 })
 
 test('C5 (r2) the L table carries no dead unit/effort keys', () => {

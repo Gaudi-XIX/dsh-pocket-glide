@@ -31,6 +31,32 @@
 渲染层与实机层未覆盖 ⇒ 「连点是否真被闩住、首条气泡是否即时出现」须真机走查。**欠重启宿主**，
 重启后手机页须完全关闭重开拿新壳。
 
+**权限栏不再显示横杠、也不再整栏无高亮**（用户真机口述 m00691/m01512「模式和权限…显示的都是个横杠。
+点开模式后 standard 是高亮的，而点开权限后，没有任何高亮」；与上面那笔同属本节，一起欠同一次重启）。
+
+- **根因不是「你没有权限值」，是页面把宿主已经给出的答案扔了**：`permissionPresets.catalog`
+  除了选项表还答 `defaultPreset`（宿主 `dsh-permission-presets` 的 `catalog()` 同时返回
+  `{options, defaultOptions, defaultPreset}`），页侧只取 `options`，丢掉 `defaultPreset`。
+  新建会话的权限投影还没落回来时，`permissionCurrent()` 三级回落全空 ⇒ 返回 `''` ⇒
+  「查看当前权限」行渲染成裸破折号，且**没有一行能匹配上高亮**。
+- **`permissionCurrent()` 末级回落改用宿主默认**：`…流投影 → 会话行 → permissionDefault`。
+  「还没钉」时宿主默认就是真相，不再谎报「没有默认值」。
+- **破折号这个文案本身删掉**：无值时改说「正在读取权限预设…」（`L.plusPermissionLoading`）——
+  横杠读起来像「你没配过权限」，这正是真机看到的那一幕。
+- **抽出 `renderPermissionSheet(options)` ＋ `refreshPlusPermission()`**：抽屉开着时权限投影/事件
+  落地会即时重画，不再保留打开瞬间那个空值（原来「整栏无高亮」能在每个新会话的头几秒里活下来）。
+- **设置面板「模式」字段同款兜底**：`renderSessionSettings` 的 preset 取值在无 `currentPreset`
+  时改回落 `presets.find(item=>item.isDefault)`（与 `pickRows` 的三级兜底对齐），
+  免得两处对「当前是哪个」给出不同答案。
+- 副作用：`fetchProjectionsNow` 多调一次 `refreshPlusPermission()`（无 `plusView==='permission'` 时立即返回）。
+
+验证覆盖＝字符层全量 **1239 项／1237 绿／0 红／2 skip**（新增 `NF-1b` 四项：宿主默认回落、
+catalog 存 `defaultPreset`、`renderPermissionSheet` 不再出裸破折号；`NF-1` 的两条断言由
+「空描述槽 + 破折号」反转为「零破折号 + 说出正在读取」）。**外壳预算未抬**：本线实测
+zh 341 553 B（css 50 598 ＋ js 290 955）／en 341 445 B，仍在 `ASSET_BUDGET_BYTES = 342_000` 内
+（余量 447 B，比上一版 2.1 KB 紧）。渲染层与实机层未覆盖 ⇒ 「横杠是否真的不见了、危险档是否亮起」
+须真机走查。
+
 ## 0.4.47 — 2026-10-16
 
 **预取包不再压成一行——点进会话先有内容，不等全量**（用户口述「如果一开始已经把显示出来的对话最后几条消息加载了，
