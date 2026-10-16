@@ -254,6 +254,8 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'wsFlagRank')}
     ${extractFunction(js, 'wsFlagsOf')}
     ${extractFunction(js, 'wsFlagHtml')}
+    ${extractFunction(js, 'wsRunning')}
+    ${extractFunction(js, 'wsGlyphOf')}
     ${extractFunction(js, 'renderWorkspaces')}
     return {
       renderWorkspaces,

@@ -6,6 +6,32 @@
 
 ## 未发布（工作树）
 
+**工作区头不再把「还有人在跑」误报成「已完成」**（用户口述 m00001：「如果工作区里面正在进行的几个对话中
+有一个对话已经完成，就会把这个工作区的状态定为已完成」「只有当工作区里面任何一个对话都已经完成了，
+并且不在这 3 个状态里面时，才会显示"已完成"」）。
+
+- **根因＝头部兜底只看最新那一行**：徽标为空时，头画的是 `taskState(tasks[0])`——`tasks` 按置顶／
+  `sortAtOf` 降序，`tasks[0]` 就是最新一行。于是「最新那行刚跑完、工作区里另一行还在跑」＝绿色对勾，
+  而此刻该工作区根本没完成。**四态里 error／待回答／新完成本来就走徽标（与运行态无关），漏的正是
+  「正在进行」这一态**：它不在 `wsFlagOf` 的返回值里，只作为兜底 glyph 存在，而兜底又被最新一行绑死。
+- **改法＝把兜底从「最新一行」改成「整个工作区」**：新增 `wsRunning(tasks)`（任一行 running）与
+  `wsGlyphOf(tasks)`——**只要还有一行在跑就画 running，绝不许画 done**；全为 done 才画 done；
+  其余混态回落 `states[0]`（＝旧行为，逐字节不变）。运行态**不吃 `isSessionUnread`**：未读与否是
+  「要不要提醒你」，与「还在不在跑」无关——若吃，一个已读的 running 行会让头回落成绿勾，缺陷原样复现。
+- **不做第四态「需要提权」**：宿主 `session/list` 行 schema 实测只有 `agentAvailable/sessionId/updatedAt/
+  running/blank/parentSessionId?/origin?/cwd?/projections`，**没有任何待审批字段**；手机 mux 转发表列了
+  `user-questions/request`，**没有 `approval/request`**（asar 里那 6 处 `awaitingApproval` 全属 Cordis
+  动态插件面板的 run 状态，与会话行无关）；`permissions` 投影是**当前权限档名**（如 danger-full-access），
+  不是「有个审批在等你」。⇒ 该态要落地必须先改宿主（把 `approval/request` 接进转发面或加轮询 RPC），
+  违反硬约束 7「手机端只走 pocket 源码、禁改宿主文件」。**已在 L 表注释里写明这条结论**，不留错觉。
+- **回归锁**：`workspace-head-notices.test.js` 新增两条——`one busy row anywhere stops the head claiming
+  the workspace is done`（已读＋最新行 done＋别处 running ⇒ 头必须是 `ws-last is-running`，且不得出现
+  `ws-last is-done`）与 `a workspace of only blank chats does not claim completion either`（全 blank
+  工作区不许因 `every(done)` 之外的新兜底而误画绿勾）。三个测试沙箱的 extract 名单同步加
+  `wsRunning`/`wsGlyphOf`（`workspace-head-notices`／`pages-scroll-anchors`／`subagent-session-dom-assertions`）。
+- 字符层全量 **1243 项／1241 绿／0 红／2 跳过**；头徽标专项 22 项全绿。
+- **欠重启宿主**；重启后手机页须完全关闭重开拿新壳。
+
 **有些会话点进去一直完全没有消息**（用户口述 m00003「点击主页中显示的会话，消息同步加载需要很长时间」，
 m00274「有些对话点进去好像完全没有消息，是不是还有一个什么总量的受到限制了」）。
 

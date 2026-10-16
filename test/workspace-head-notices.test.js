@@ -79,7 +79,7 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
     ${[
       'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
       'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
-      'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'sessionModelLabel',
+      'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'wsRunning', 'wsGlyphOf', 'sessionModelLabel',
       'readLastMessageMap', 'pruneLastMessageMap', 'noteSessionMessageAt',
       'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank',
       // T5: the renderer paints a tail line from the prefetch cache and hands the
@@ -189,6 +189,29 @@ test('a quiet workspace keeps exactly the head it had before', () => {
   assert.deepEqual(headFlags(markup), [], 'nothing to interrupt for')
   assert.ok(markup.includes('ws-last is-done'), 'the newest-row glyph stays')
   assert.match(wsTime(markup), /^\d{2}:\d{2}$/, 'and so does its clock — absolute 24h wall clock (2026-10-13 unification)')
+})
+
+test('one busy row anywhere stops the head claiming the workspace is done (2026-10-16 四态裁定)', () => {
+  // User ruling (m00001): 「只有当工作区里面任何一个对话都已经完成了，并且不在这 3 个状态
+  // 里面时，才会显示"已完成"」. The old fallback read tasks[0] — newest row only — so a
+  // workspace whose newest row had finished while an older one still ran painted a green
+  // check. Nothing is unread here, so there are no badges to ride: the head glyph alone
+  // decides, and it must say running.
+  const markup = listSandbox({
+    summaries: [row({ sessionId: 'fresh', updatedAt: ago(1) }), row({ sessionId: 'busy', running: true, updatedAt: ago(4) })],
+    ledger: { fresh: ago(0.1), busy: ago(30) },
+  })
+  assert.deepEqual(headFlags(markup), [], 'every row already read — nothing to interrupt for')
+  assert.ok(markup.includes('ws-last is-running'), 'the head falls back to the spinner, not the check')
+  assert.ok(!markup.includes('ws-last is-done'), 'and never claims completion while a row still runs')
+})
+
+test('a workspace of only blank chats does not claim completion either', () => {
+  // wsGlyphOf only says done when EVERY row is done: an all-blank workspace used to show
+  // the newest row's dash, and a flat 「done」 there would be a new false positive.
+  const markup = listSandbox({ summaries: [row({ sessionId: 'b1', blank: true }), row({ sessionId: 'b2', blank: true })], ledger: {} })
+  assert.ok(!markup.includes('ws-last is-done'), 'no finished turn to report')
+  assert.ok(markup.includes('ws-last is-blank'), 'the blank glyph stands (the newest row, as before)')
 })
 
 test('a notice comes with the newest row clock, and the notice rows keep their own glyphs', () => {

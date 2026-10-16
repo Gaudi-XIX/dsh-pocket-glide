@@ -418,7 +418,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     'tailTextOf',
     // The head notices (0.4.31): wsFlagsOf/wsFlagHtml are top-level on the page, so
     // the sandbox has to carry them exactly like the renderer it extracts.
-    'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'sessionModelLabel',
+    'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'wsRunning', 'wsGlyphOf', 'sessionModelLabel',
     'normalizeSelection', 'fieldText',
   ]
     .map((name) => extractFunction(js, name))
