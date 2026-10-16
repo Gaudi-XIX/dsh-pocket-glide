@@ -562,3 +562,55 @@ test('T6 the named-tunnel panel hints where ingress must point', () => {
   assert.match(enPanel, /<a href="https:\/\/one\.dash\.cloudflare\.com\/"[^>]*>Cloudflare Zero Trust<\/a>/, 'en hint links too')
   assert.doesNotMatch(zhHtml, /127\.0\.0\.1:\d{2,5}</, 'no hardcoded bridge port in the rendered page')
 })
+
+// 2026-10-16 用户裁定：「在手机 pocket 推理强度的那一面打个括号，写上"桌面端指定"，
+// 然后就不给选择的空间得了」。理由（取证，别把这段当历史账删掉）：宿主 selectionFor()
+// 每次 system-prompt/assemble 都用 model/selection 事件重算 picked，而桌面端模型菜单
+// 关闭时会提交一次（selectionOf 用本地快照 / 目录 defaultEffort 补值），于是手机上选的
+// 档约 2 秒后被盖回去——session-191fcc40 seq=22 15:30:00 medium → seq=23 15:30:02 high，
+// qoder 线 session-8226f15b seq=6338→6339 同形。给一个注定被覆盖的按钮比不给更糟。
+test('E1 the effort row is a read-only value that names the desktop as its source', () => {
+  assert.equal(L.reasoningEffortFixed, '由桌面端指定')
+  assert.equal(LEN.reasoningEffortFixed, 'Set by the desktop app')
+
+  // 只读行不带任何可点的东西：没有 setting-pick 按钮、没有 setting-list 容器。
+  const row = extractFunction(js, 'settingReadonlyHtml')
+  assert.match(row, /class="setting-value"/, 'the value ships in its own span')
+  assert.doesNotMatch(row, /data-pick|data-field|setting-list|setting-opt|button/,
+    'a read-only row must not ship a button or a picker list')
+
+  // effort 行现在走只读渲染，并且标签带来源说明。
+  const render = extractFunction(js, 'renderSessionSettings')
+  assert.match(render, /settingReadonlyHtml\(L\.reasoningEffort,L\.reasoningEffortFixed/,
+    'the effort row is rendered read-only, labelled with its source')
+  assert.doesNotMatch(render, /settingFieldHtml\('effort'/,
+    'the effort row must not be a picker any more')
+
+  // 选择器与提交路径整体退场：列表分支、草稿覆盖参数、RPC 里的 effort 全都不在了。
+  const pick = extractFunction(js, 'pickRows')
+  assert.doesNotMatch(pick, /field==='effort'/, 'pickRows no longer builds an effort list')
+  assert.doesNotMatch(pick, /effortValue|effortsOf/, 'and no longer reads the effort value')
+  const apply = extractFunction(js, 'applyPick')
+  assert.doesNotMatch(apply, /effort/, 'applyPick has no effort arm left')
+  const select = extractFunction(js, 'selectModel')
+  assert.doesNotMatch(select, /effort/i, 'selectModel never submits a reasoning effort')
+  assert.match(select, /rpc\('session\.selectModel',\{sessionId:activeSession,provider,model\}\)/,
+    'the model RPC carries provider+model only')
+  assert.doesNotMatch(extractFunction(js, 'draftSetModel'), /effort/i,
+    'the draft buffer carries no effort either')
+  assert.doesNotMatch(js, /effortPick/, 'the effortPick state is gone')
+})
+
+test('E2 the read-only effort row still tells the truth about the current value', () => {
+  // 值仍照实显示（另一端改了档就显示新档）；解析顺序保持：会话选择 → 目录默认 → 首档。
+  const value = extractFunction(js, 'effortValue')
+  assert.match(value, /currentSelection\(\)\.reasoningEffort/, 'an explicit selection wins')
+  assert.match(value, /reasoning\?\.defaultEffort/, 'the catalogue default is the next tier')
+  assert.match(value, /ids\[0\]/, 'the first listed effort is the last resort')
+  const label = extractFunction(js, 'effortLabel')
+  assert.match(label, /effortsOf\(entry\)\.find\(item=>item\.id===id\)\?\.name/, 'the label is the catalogue name')
+  assert.match(label, /fieldText\(/, 'a blank catalogue name falls back to the id')
+  // 只读不等于不刷新：流事件仍会重画面板，值跟着走。
+  const show = extractFunction(js, 'showSessionModel')
+  assert.match(show, /renderSessionSettings\(\)/, 'the live model/selection event still repaints')
+})

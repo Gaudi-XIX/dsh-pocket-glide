@@ -950,7 +950,11 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   +120 B；后者是 TAIL_RETRY_MAX 的自愈逻辑与解释它的注释，约 +900 B（注释按最短
 //   口径压过一轮）。两条合起来相对 HEAD 341 703 净 +975 B，css 零增长。实测
 //   zh 342 678（css 50 598 + js 292 080）/ en 342 570。取 344 000（余量 ~1.3 KB）。
-const ASSET_BUDGET_BYTES = 344_000
+// 2026-10-16 思考强度改为只读展示（用户裁定「标注桌面端指定，不给选择空间」）：
+//   删掉 effort 的按钮列表分支与 effortPick 状态，加上只读行 settingReadonlyHtml 与
+//   说明文案（含解释为何不给按钮的注释），净 +1 330 B（js），css 零增长。实测
+//   zh 344 127（css 50 717 + js 293 410）/ en 344 023。取 346 000（余量 ~1.9 KB）。
+const ASSET_BUDGET_BYTES = 346_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {
