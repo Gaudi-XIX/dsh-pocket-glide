@@ -954,7 +954,13 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   删掉 effort 的按钮列表分支与 effortPick 状态，加上只读行 settingReadonlyHtml 与
 //   说明文案（含解释为何不给按钮的注释），净 +1 330 B（js），css 零增长。实测
 //   zh 344 127（css 50 717 + js 293 410）/ en 344 023。取 346 000（余量 ~1.9 KB）。
-const ASSET_BUDGET_BYTES = 346_000
+// 2026-10-17 重启确认卡「一行一行」＋点确认后转圈代替「正在重启…」（用户 m00118）：
+//   增长全在 css——`.host-spin` 一条环形转圈（13px，复用现成 @keyframes headSpin），
+//   js 侧只把 status.textContent 换成 status.innerHTML 挂 span（文案键 hostRestarting
+//   改为 span 的 aria-label，可读性不丢）。确认卡 <li> 拆行与 /bye 四行走的是 SSR 文档
+//   与静态页，不进壳计量。实测 zh 346 012（css 51 945 + js 294 067）/ en 345 908，
+//   相对 HEAD（zh 345 772 / en 345 668）净 +240 B，css +191 / js +49。取 347 000（余量 ~1.0 KB）。
+const ASSET_BUDGET_BYTES = 347_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

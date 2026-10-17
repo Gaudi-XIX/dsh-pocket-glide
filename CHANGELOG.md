@@ -6,6 +6,17 @@
 
 ## 未发布（工作树）
 
+**重启回执改文艺文案、确认卡一行一条、告别页四行楚门台词、点重启改为转圈**（⏳ 待重启生效：`lib/pages.js` 三处属宿主装载面。`scripts/dsh-revive.ps1` 是计划任务现读，推送文案落盘即生效，不需重启）。
+
+- **推送回执（成功分支）**：标题 `Curiouser and curiouser!`、正文 `Pocket 一级准备，任意回复获得本轮公网地址。`。文艺只给成功那一次——**未完全就位分支保持白话**（`DSH 已重启（未完全就位）` / `gui=… bridge=…，请回电脑看一眼。`），别让爱丽丝台词挡住「回电脑看一眼」这个动作。锁屏只显示标题一行，故正文首词是产品名 `Pocket`；「回一句话＝拿地址＝续额度」三件因果留在正文里。
+- **重启确认卡**：原三条长句 `<li>` 拆成**八条一行一个事实**（zh/en 同步），字面随推送标题同步。
+- **中间态**：点「确认重启」后不再显示文字「正在重启…」，`status` 挂 `.host-spin` 转圈（复用现成 `@keyframes headSpin`）；`hostRestarting` 文案键降级为 `aria-label`，读屏仍可听见。
+- **`GET /bye` 告别页**：`h1` 从「已受理，再见」换成《楚门的世界》四行 `in case i don't see you / good afternoon / good evening / and good night`（`h1.farewell span{display:block}`，中英同串不翻译）；原第二个 `<p>` 里的 `<br>` 拆成三个独立 `<p>`，不再写死推送标题字面。仍零 `<script>`。
+- **不改成文艺的**：`/reconnect`、`/disconnected`、SW 离线页——那三处是故障叙事，不是告别。
+- **计量账**：`ASSET_BUDGET_BYTES` 346_000 → **347_000**。实测壳字节 zh 345 772 → 346 012、en 345 668 → 345 908（净 +240 B：css +191／js +49）。确认卡 `<li>` 拆行与 /bye 四行属 SSR 文档，不进壳计量。
+- **回归锁**：`test/host-restart.test.js`（八条 `</li>` 逐行断言／`host-spin` 存在且仍带 `L.hostRestarting`／/bye 四行 + `doesNotMatch /<br>/`／`任意回复` 字面）＋ `test/mobile-assets.test.js` WP1 抬额。`node --test test/host-restart.test.js test/mobile-assets.test.js` = 30 pass／0 fail。
+- **文档同步**：`docs/GUI-CHECKLIST.md` 第 14／37 条六处旧字面逐条替换（每条命中数=1 才改）。
+
 **Pocket 手机端深色模式消除夜间纯白刺眼，锁定系统设置且不损白天易读性**（✅ 2026-10-17 12:37:47 重启已带上线：运行桥 `V=pocket-4b779940b1ee`＝磁盘同式实算，运行态＝磁盘态）。
 
 - **根因＝深色模式下反转变量导致主操作按钮变成纯白高亮圆盘**：在白天模式下，主按钮使用 `background: var(--ink)`（黑底 `#18191c`）与白图标；而在 `@media (prefers-color-scheme: dark)` 下，`--ink` 翻转为 `#f5f5f6`，导致输入框右下角 44px 发送按钮、停止生成按钮、展开后的会话设置齿轮、提问确认弹窗提交按钮、选中控制点、Toast 气泡及重连页大按钮全部变成刺眼的实心大白块，夜晚暗光环境下眩目严重。

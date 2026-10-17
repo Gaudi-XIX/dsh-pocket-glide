@@ -23,26 +23,29 @@ test('the phone home document carries the header button and the confirm card say
     assert.match(html, /id="hostRestart" class="head-icon"/, 'the power button sits in the home header')
     assert.match(html, /id="hostCard" class="host-card"/)
     assert.match(html, /id="hostGo" type="button" class="is-danger"/)
-    // REQ5②③: 页面结构带强制结束按钮（默认 hidden）、「正在重启…」文案、
+    // REQ5②③: 页面结构带强制结束按钮（默认 hidden）、转圈中间态（.host-spin）、
     // busy 名单改 <ul> 每名一行——这些都在壳 JS /app.js 里不在 HTML，但按钮和
     // 文案地标在 HTML 中，它们缺席说明结构没补上。
     assert.match(html, /id="hostForce" type="button" class="host-force"/, 'the force-stop button is in the confirm card')
     assert.match(html, /强制结束这些会话并重启/, 'the force button carries its own label')
-    // 用户 2026-10-12 定的丑话（原四条，额度与隧道两条同年精简合并为一条），
-    // 确认卡必须写全，让用户自适应：
+    // 用户 2026-10-12 定的丑话，2026-10-17 追加「一行一行」的排法（原三条长句拆成
+    // 八个 <li>，一条一个事实），要点必须写全，让用户自适应：
     assert.match(html, /所有会话中断/)
     assert.match(html, /唯一回执是微信推送/)
-    assert.match(html, /回任意一句话/)
+    assert.match(html, /任意回复/)
     assert.match(html, /隧道默认关着/)
+    assert.match(html, /<li>点确认后约 8 秒，桌面端整体关闭。<\/li>/, 'each truth is its own line')
     // 页面 JS 在外链 /app.js（壳资产）里：退出调用要在那里验，不在文档里。
     const appJs = await httpFetch(t.base + '/app.js', { headers: { cookie } })
     assert.equal(appJs.status, 200)
     const app = await appJs.text()
     assert.match(app, /location\.replace\('\/bye'\)/, 'a confirmed restart exits the page to the goodbye')
-    // REQ5①③: 名单每名一行（<ul><li>）而不是顿号拼一行；点下去先出「正在重启…」
-    // 中间态再把请求发出去（用户：「需要给一个对话中间态（比如转圈圈，提示正在重启）」）。
+    // REQ5①③: 名单每名一行（<ul><li>）而不是顿号拼一行；点下去先出中间态再把请求
+    // 发出去。2026-10-17 用户 m00118 追加：中间态不要文字「正在重启…」，要转圈圈
+    // ——status 挂 .host-spin（文案键降级为 aria-label，读屏仍可听见）。
     assert.match(app, /hostBusyRefuse\+'<ul>'/, 'the busy list is one line per session')
-    assert.match(app, /L\.hostRestarting/, 'the card shows a restarting state')
+    assert.match(app, /status\.innerHTML='<span class="host-spin"/, 'the restarting state is a spinner, not a sentence')
+    assert.match(app, /L\.hostRestarting/, 'the spinner still carries its accessible label')
     assert.match(app, /confirmHostRestart\(true\)/, 'the force button routes to the forced path')
   } finally { await t.stop() }
 })
@@ -64,8 +67,10 @@ test('the goodbye page answers on /bye and the service worker lets it through', 
     const bye = await httpFetch(t.base + '/bye')
     assert.equal(bye.status, 200)
     const body = await bye.text()
-    assert.match(body, /已受理，再见/)
-    assert.match(body, /回任意一句话/)
+    assert.match(body, /in case i don't see you/, 'the farewell page opens with the four-line quote')
+    assert.match(body, /and good night/)
+    assert.match(body, /任意回复/, 'the goodbye page still points at the reply-for-address path')
+    assert.doesNotMatch(body, /<br>/, 'the hints are separate lines, not one <br>-stacked paragraph')
     assert.doesNotMatch(body, /<script/, 'a page shown while the host dies must carry no script')
     const sw = await httpFetch(t.base + '/sw.js')
     assert.match(await sw.text(), /consent\|bye\)/, 'the SW must not hijack /bye back into the cached shell')
