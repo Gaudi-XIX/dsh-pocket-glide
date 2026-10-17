@@ -118,5 +118,63 @@ test('the cold-open prewarm puts the catalogue in flight', async () => {
 
 test('the catalogue cache is declared in the assigned-fields doc block', () => {
   assert.ok(bridgeSource.includes('_modelCatalogCache'), 'the field is documented next to its siblings')
+  assert.ok(bridgeSource.includes('invalidateSessionList'), 'the session-list helper is named, not an inline field clear')
   assert.ok(bridgeSource.includes('MODEL_CATALOG_TTL_MS'), 'the TTL is a named constant, not an inline literal')
+})
+test('a model switch drops the session catalogue cache so the next read re-reads', async () => {
+  const calls = []
+  const bridge = makeBridge({
+    calls,
+    value: { ok: true, value: { items: [], selected: { provider: 'p', model: 'm' } } },
+  })
+  await bridge.cachedSessionList(false)
+  assert.equal(calls.filter((c) => c === 'session/list').length, 1)
+  await bridge.cachedSessionList(false)
+  assert.equal(calls.filter((c) => c === 'session/list').length, 1, 'served from cache inside 10s')
+
+  await bridge.forwardRpc('session.selectModel', { sessionId: 's1', provider: 'p', model: 'm2' })
+  assert.equal(bridge._sessionListCache, null, 'promise cache is cleared')
+  assert.equal(bridge._sessionListValue, undefined, 'stale-while-revalidate value is cleared')
+
+  await bridge.cachedSessionList(false)
+  assert.equal(calls.filter((c) => c === 'session/list').length, 2, 'host is asked again after switch')
+})
+
+test('a failed model switch does not drop the session catalogue cache', async () => {
+  const calls = []
+  let fail = false
+  const bridge = makeBridge({ calls })
+  bridge.invokeHarness = async (endpoint) => {
+    calls.push(endpoint)
+    if (fail) return { ok: false, error: 'refused' }
+    return { ok: true, value: { items: [] } }
+  }
+  await bridge.cachedSessionList(false)
+  assert.equal(calls.filter((c) => c === 'session/list').length, 1)
+
+  fail = true
+  const res = await bridge.forwardRpc('session.selectModel', { sessionId: 's1', provider: 'p', model: 'm2' })
+  assert.equal(res.ok, false)
+  assert.ok(bridge._sessionListCache, 'cache still standing')
+
+  fail = false
+  await bridge.cachedSessionList(false)
+  assert.equal(calls.filter((c) => c === 'session/list').length, 1, 'served from standing cache')
+})
+
+test('an agent preset switch drops the session catalogue cache', async () => {
+  const calls = []
+  const bridge = makeBridge({
+    calls,
+    value: { ok: true, value: { items: [] } },
+  })
+  await bridge.cachedSessionList(false)
+  assert.equal(calls.filter((c) => c === 'session/list').length, 1)
+
+  await bridge.forwardRpc('agentPreset.select', { sessionId: 's1', agentPreset: 'deep' })
+  assert.equal(bridge._sessionListCache, null)
+  assert.equal(bridge._sessionListValue, undefined)
+
+  await bridge.cachedSessionList(false)
+  assert.equal(calls.filter((c) => c === 'session/list').length, 2)
 })

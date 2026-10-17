@@ -614,3 +614,75 @@ test('E2 the read-only effort row still tells the truth about the current value'
   const show = extractFunction(js, 'showSessionModel')
   assert.match(show, /renderSessionSettings\(\)/, 'the live model/selection event still repaints')
 })
+
+test('DM-1 dark mode protects night vision: primary/send buttons, cancel, settings and dialogs avoid glaring white', () => {
+  // 1. 深色模式媒体查询覆盖，消除夜间纯白发光
+  const darkBlockStart = css.indexOf('@media(prefers-color-scheme:dark)')
+  assert.ok(darkBlockStart >= 0, 'mobile CSS owns a dark-mode media query')
+  const darkContent = css.slice(darkBlockStart)
+
+  // 发送按钮启用时走品牌蓝，禁用时走默认 surface，彻底消除白炽光
+  assert.match(darkContent, /\.composer \.primary:not\(:disabled\)\{background:var\(--brand\);border-color:var\(--brand\);color:#fff\}/,
+    'dark-mode send button uses brand accent with white arrow, not glaring ink')
+  // 停止生成按钮走暗底危险色
+  assert.match(darkContent, /\.primary\.cancel\{background:color-mix\(in srgb,var\(--danger\) 16%,var\(--card\)\)/,
+    'dark-mode cancel/stop button uses dark card tinted with danger red')
+  // 会话设置展开态避免白球
+  assert.match(darkContent, /\.settings-trigger\[aria-expanded=true\]\{border-color:var\(--brand\);background:var\(--hover\);color:var\(--brand\)\}/,
+    'dark-mode settings trigger expanded state avoids solid white')
+  // 提问弹窗主提交按钮
+  assert.match(darkContent, /\.question-actions \.submit-answer:not\(:disabled\)\{border-color:var\(--brand\);background:var\(--brand\);color:#fff\}/,
+    'dark-mode question submit button uses brand accent')
+  // 提问选项选中态
+  assert.match(darkContent, /\.question-option\.selected \.option-control\{border-color:var\(--brand\);background:var\(--brand\);color:#fff\}/,
+    'dark-mode question option selected control uses brand accent')
+  // 浮层提示 toast 走深灰微光
+  assert.match(darkContent, /\.toast\{background:#232428;color:var\(--ink\);border:1px solid var\(--line\)/,
+    'dark-mode toast uses dark elevated pill instead of stark white capsule')
+
+  // 2. 白天模式基准保持不变，保证白天高对比度与易读性
+  assert.ok(css.includes('button.primary{display:flex;align-items:center;justify-content:center;gap:6px;flex:none;min-width:68px;height:44px;border:1px solid var(--ink);border-radius:13px;padding:0 11px 0 13px;background:var(--ink);color:var(--paper);'),
+    'daytime light mode retains black button with white text for maximum readability')
+  assert.ok(css.includes('.composer .primary,.primary.cancel{width:44px;min-width:44px;border-radius:50%;padding:0;background:var(--ink);border-color:var(--ink)}'),
+    'daytime composer send button retains crisp black background')
+
+  // 3. 移动端重连页面在深色模式下同样消除全屏大白块
+  const reconnectZh = renderMobileReconnectPage('zh', 'lan')
+  assert.ok(
+    reconnectZh.includes('.primary,#pinSubmit{background:var(--brand);border-color:var(--brand);color:#fff}'),
+    'reconnect page primary and pinSubmit buttons use brand accent under dark mode',
+  )
+})
+
+test('E3 model and preset selections write through to session row projections immediately', () => {
+  // selectModel 成功后就地写入 sessionSummaries 该行 projections.values.modelSelection.next，
+  // 杜绝 10s 缓存窗口内 reopen 设置面板时被旧 summary 盖回。
+  const select = extractFunction(js, 'selectModel')
+  assert.match(select, /sessionRowValues\(activeSession\)/, 'selectModel writes through to row values')
+  assert.match(select, /modelSelection\s*=\s*\{.*next:\s*\{/, 'modelSelection.next is updated with the new selection')
+
+  // selectPreset 不再就地回写：行回写只服务 model 选择（本次报障范围），
+  // preset 的行更新由桥侧 invalidateSessionList() 负责，页面侧保持既有形状。
+  const preset = extractFunction(js, 'selectPreset')
+  assert.doesNotMatch(preset, /sessionRowValues/, 'the page no longer writes the preset row; the bridge drops the cache instead')
+
+  // sessionRowValues helper 存在且返回 values 容器
+  const helper = extractFunction(js, 'sessionRowValues')
+  assert.match(helper, /sessionSummaries\.find/, 'looks up the session in sessionSummaries')
+  assert.match(helper, /r\.projections.*p\.values/, 'navigates or builds projections.values')
+})
+
+// B2 (user m00788): after a switch the settings panel must not snap back to the
+// previous model. The Host answer is pushed into the row the page already holds,
+// because session.list is served from the bridge's 10s window and rows are never
+// re-read while a chat is open (the page-side poll bails when activeSession is set).
+test('B2 a successful model switch writes the selection into the held row', () => {
+  const select = extractFunction(js, 'selectModel')
+  assert.match(select, /v\.modelSelection=\{?\.\.\.v\.modelSelection,next:\{\.\.\.selected\}\}?/,
+    'the Host answer lands on modelSelection.next, the field the page actually reads')
+  const rowValues = extractFunction(js, 'sessionRowValues')
+  assert.match(rowValues, /sessionSummaries\.unshift\(/, 'a row that is not held yet is created, like markRowRunning does')
+  assert.match(rowValues, /r\.projections=\(/, 'the row gets a projections object before its values are written')
+  assert.match(rowValues, /return p\.values=/, 'the write targets the row values the projection reader walks')
+  assert.doesNotMatch(select, /effort/i, 'the switch still never submits a reasoning effort')
+})
