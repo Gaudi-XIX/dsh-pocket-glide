@@ -71,6 +71,9 @@ const LIST_ROWS_MAX = Number(js.match(/LIST_ROWS_MAX=(\d+)/)[1]);
 // The 12h default cap the expanded card applies (0.4.36); ROWS-RECENT pins it,
 // everything else here passes Infinity so fixture age cannot hide rows.
 const RECENT_WINDOW_MS = Number(js.match(/RECENT_WINDOW_MS=(\d+)/)[1]);
+// How many rows one tap of「更多」discloses (2026-10-17: it pages instead of
+// expanding the whole table in one synchronous paint).
+const MORE_ROWS = Number(js.match(/MORE_ROWS=(\d+)/)[1]);
 // The workspace head builds its notices through wsFlagsOf/wsFlagHtml (0.4.31), which
 // read this same ceiling out of page scope — the sandbox has to declare it too.
 const WS_FLAGS_MAX = Number(js.match(/WS_FLAGS_MAX=(\d+)/)[1]);
@@ -267,7 +270,8 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     }
   `,
   );
-  const sandbox = make(workspaces, summaries, new Set(expanded ?? workspaces.map((w) => w.workspaceId)), new Set(revealed ?? []), host, recentWindowMs);
+  // revealedLists is a Map now: workspaceId -> how many rows「更多」has disclosed.
+  const sandbox = make(workspaces, summaries, new Set(expanded ?? workspaces.map((w) => w.workspaceId)), new Map(revealed ?? []), host, recentWindowMs);
   sandbox.host = host;
   return sandbox;
 }
@@ -638,16 +642,18 @@ test('ROWS-2 an expanded workspace shows EVERY in-window row — the 25-row ceil
   assert.doesNotMatch(sandbox.markup, /data-action="more"/, 'nothing waits behind a more row when all of it is fresh');
 });
 
-test('ROWS-3 stale rows wait behind the more row; revealing shows the full table', () => {
+test('ROWS-3 stale rows wait behind the more row; paging discloses them a page at a time', () => {
   // The「更多」affordance survives (user m00057: it is the way back through the
   // window edge). Its meaning changed with ROWS-2: it reveals the OUT-OF-WINDOW
-  // tail, not a fixed 25-row slice.
+  // tail, not a fixed 25-row slice. And since 2026-10-17 it PAGES: one tap
+  // discloses MORE_ROWS rows, not the whole table at once (user:「一次全量有可能
+  // 真的会卡住，每次加载10条差不多」). revealedLists therefore stores a running
+  // total per workspace, not a boolean.
   const fresh = manyRows(3, 'b');
   const stale = manyRows(2, 'old').map((r) => ({ ...r, updatedAt: Date.now() - RECENT_WINDOW_MS * 2 }));
+  const ids = [...fresh, ...stale].map((r) => r.sessionId);
   const sandbox = buildRenderSandbox({
-    workspaces: [
-      { workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: [...fresh, ...stale].map((r) => r.sessionId) },
-    ],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ids }],
     summaries: [...fresh, ...stale],
     recentWindowMs: RECENT_WINDOW_MS,
   });
@@ -655,15 +661,48 @@ test('ROWS-3 stale rows wait behind the more row; revealing shows the full table
   assert.equal(sandbox.rowIds().length, fresh.length, 'by default only the in-window rows paint');
   assert.ok(sandbox.markup.includes('>' + L.moreRows.replace('{n}', String(stale.length)) + '<'), 'the stale tail is counted, never silently dropped');
 
+  // A page larger than the hidden tail still finishes it in one tap.
   const revealed = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: [...fresh, ...stale].map((r) => r.sessionId) }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ids }],
     summaries: [...fresh, ...stale],
-    revealed: ['w1'],
+    revealed: [['w1', fresh.length + MORE_ROWS]],
     recentWindowMs: RECENT_WINDOW_MS,
   });
   revealed.renderWorkspaces();
-  assert.equal(revealed.rowIds().length, fresh.length + stale.length, 'the revealed card shows everything');
+  assert.equal(revealed.rowIds().length, fresh.length + stale.length, 'a page covers the whole tail');
   assert.doesNotMatch(revealed.markup, /data-action="more"/, 'and stops offering more');
+});
+
+test('ROWS-PAGE one tap of「更多」discloses MORE_ROWS rows, never the whole table', () => {
+  // The stall this prevents: a workspace holding hundreds of sessions built every
+  // row in one synchronous innerHTML pass the moment「更多」was tapped.
+  const fresh = manyRows(2, 'n');
+  const stale = manyRows(30, 'old').map((r) => ({ ...r, updatedAt: Date.now() - RECENT_WINDOW_MS * 2 }));
+  const ids = [...fresh, ...stale].map((r) => r.sessionId);
+  const build = (revealed) => buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/x', sessionIds: ids }],
+    summaries: [...fresh, ...stale],
+    revealed,
+    recentWindowMs: RECENT_WINDOW_MS,
+  });
+
+  const base = fresh.length
+  const page1 = build([['w1', base + MORE_ROWS]])
+  page1.renderWorkspaces()
+  assert.equal(page1.rowIds().length, base + MORE_ROWS, 'the first tap adds exactly one page')
+  assert.ok(
+    page1.markup.includes('>' + L.moreRows.replace('{n}', String(stale.length - MORE_ROWS)) + '<'),
+    'the rest is still counted behind another more row',
+  )
+
+  const page2 = build([['w1', base + MORE_ROWS * 2]])
+  page2.renderWorkspaces()
+  assert.equal(page2.rowIds().length, base + MORE_ROWS * 2, 'the second tap adds one more page')
+
+  const all = build([['w1', base + MORE_ROWS * 3]])
+  all.renderWorkspaces()
+  assert.equal(all.rowIds().length, ids.length, 'the third tap lands exactly on the end')
+  assert.doesNotMatch(all.markup, /data-action="more"/, 'and the more row retires once nothing is hidden')
 });
 
 test('ROWS-RECENT the default view follows the 24h window, floored at one row', () => {
@@ -688,8 +727,8 @@ test('ROWS-RECENT the default view follows the 24h window, floored at one row', 
   allOld.renderWorkspaces();
   assert.equal(allOld.rowIds().length, 1, 'one row is always visible');
 
-  // Revealing lifts the window entirely.
-  const revealed = buildRenderSandbox({ workspaces, summaries, revealed: ['w1'], recentWindowMs: RECENT_WINDOW_MS });
+  // Revealing lifts the window entirely — in pages now, so ask for enough.
+  const revealed = buildRenderSandbox({ workspaces, summaries, revealed: [['w1', 5 + MORE_ROWS]], recentWindowMs: RECENT_WINDOW_MS });
   revealed.renderWorkspaces();
-  assert.equal(revealed.rowIds().length, 5, 'the more row shows the full table regardless of age');
+  assert.equal(revealed.rowIds().length, 5, 'the more row pages past the window regardless of age');
 });

@@ -98,7 +98,7 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
     [{ workspaceId: 'w1', title: 'DSH', sessionIds: summaries.map((row) => row.sessionId) }],
     summaries,
     new Set(['w1']),
-    new Set(),
+    new Map(),
     activeSession,
     host,
     {},

@@ -55,6 +55,32 @@ test('desktop tunnel payload endpoint also includes connectedDevices', async () 
   }
 })
 
+// The pairing page polls ONE route per tick (2026-10-17). That only works while
+// this payload keeps carrying what /desktop/status carried, so the contract is
+// pinned here rather than left to the page to discover at runtime.
+test('the tunnel payload is a superset of /desktop/status: the pairing page polls once', async () => {
+  const t = await startBridge()
+  try {
+    const desktopCookie = await t.pairDesktop()
+    const status = await (await httpFetch(`${t.base}/desktop/status`, { headers: { Cookie: desktopCookie } })).json()
+    const tunnel = await (await httpFetch(`${t.base}/desktop/tunnel/status`, { headers: { Cookie: desktopCookie } })).json()
+    for (const key of ['connected', 'connectedDevices', 'pendingPairings']) {
+      assert.ok(key in tunnel, `the one-request poll needs ${key} on the tunnel payload`)
+      assert.deepEqual(tunnel[key], status[key], `${key} must agree between the two routes`)
+    }
+  } finally {
+    await t.stop()
+  }
+})
+
+test('the pairing page issues one poll request per tick, and the tick is 2s', () => {
+  const page = renderDesktopPairingPage({ locale: 'zh', pairingUrl: 'http://127.0.0.1:1/pair?token=x', pairingPin: '12345678' })
+  const pollBody = page.slice(page.indexOf('async function poll()'), page.indexOf('setInterval(poll,'))
+  assert.match(pollBody, /fetch\('\/desktop\/tunnel\/status'\)/, 'it asks for the merged payload')
+  assert.ok(!pollBody.includes("fetch('/desktop/status')"), 'and it no longer pays a second round trip for the same tick')
+  assert.match(page, /setInterval\(poll,2000\)/, 'an 800ms tick was 2.5 polls a second for a page nobody watches that closely')
+})
+
 test('HTML inside a device card label is escaped', () => {
   const malicious = '<img src=x onerror=alert(1)>'
   const { deviceCardHtml } = extractDeviceRenderer()

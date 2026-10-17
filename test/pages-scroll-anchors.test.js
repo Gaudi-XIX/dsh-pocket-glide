@@ -463,7 +463,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
       { sessionId: 'blank1', updatedAt: 9000, blank: true },
     ],
     new Set(['w1']),
-    new Set(),
+    new Map(),
     activeSession,
     host,
     {

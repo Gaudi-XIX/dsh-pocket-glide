@@ -345,12 +345,12 @@ function initHarness(modeView) {
 }
 
 // The tail of the page script: `renderPendingPairings(pendingPairings);`
-// `if(modeView==='devices')loadDevicePanel();` `setInterval(poll,800);poll()`.
+// `if(modeView==='devices')loadDevicePanel();` `setInterval(poll,2000);poll()`.
 function extractInit() {
   const start = PAGES_SOURCE.lastIndexOf('renderPendingPairings(pendingPairings);')
-  const end = PAGES_SOURCE.lastIndexOf('setInterval(poll,800);')
+  const end = PAGES_SOURCE.lastIndexOf('setInterval(poll,2000);')
   assert.ok(start >= 0 && end > start, 'the init tail must be findable in pages.js')
-  return PAGES_SOURCE.slice(start, end + 'setInterval(poll,800)'.length)
+  return PAGES_SOURCE.slice(start, end + 'setInterval(poll,2000)'.length)
 }
 
 test('B-3 the init kick fetches /desktop/devices only when the device view is on', async () => {
