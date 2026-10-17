@@ -44,13 +44,13 @@ test('renderManifestJson returns a parseable manifest with the pinned fields', (
 test('renderConsentPage renders the risk checkbox, the submit form and passes next through', () => {
   const zh = renderConsentPage('zh', { next: '/?x=1' })
   assert.match(zh, /公网访问确认/)
-  assert.match(zh, /我理解此页面经公网暴露/)
+  assert.match(zh, /我明白这条链接别人也能打开/)
   assert.match(zh, /<form[^>]*action="\/consent\/accept"/)
   assert.match(zh, /<input type="hidden" name="next" value="\/\?x=1">/)
   assert.match(zh, /type="checkbox"[^>]*required/)
   const en = renderConsentPage('en', { next: '/sessions' })
   assert.match(en, /Public Access Confirmation/)
-  assert.match(en, /exposed publicly/)
+  assert.match(en, /anyone with this link can open it/)
   assert.match(en, /<input type="hidden" name="next" value="\/sessions">/)
 })
 
@@ -251,7 +251,7 @@ test('opening the pairing page generates the public link by itself', () => {
   const taken = renderDesktopPairingPage({ locale: 'zh', pairingUrl: 'https://x', pairingPin: '12345678', tunnelActive: true, connected: true })
   const guard = 'if(!phoneConnected&&selectedTunnelTab&&!tunnelActive)void switchMode(true);'
   assert.ok(fresh.includes(guard), 'the page starts the tunnel on load')
-  assert.ok(fresh.indexOf(guard) < fresh.indexOf('setInterval(poll,800)'), 'it fires before the first status poll, not after it')
+  assert.ok(fresh.indexOf(guard) < fresh.indexOf('setInterval(poll,2000)'), 'it fires before the first status poll, not after it')
   assert.match(fresh, /tunnelActive=false/, 'a fresh pairing page renders with the tunnel down…')
   // phoneConnected is interpolated raw, so "no phone yet" is `undefined` — falsy, which
   // is what the guard reads; a real pairing pins it to true (the `taken` render below).

@@ -6,6 +6,16 @@
 
 ## 未发布（工作树）
 
+**Pocket 电脑端页面文案顺写：去极客黑话、统一产品名口径**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面）。
+
+- **产品名口径**（沿用既有规则：原「手机连接／DSH」位一律写产品名 `Pocket`，中英同串不翻译）：`manageHint`「这台手机当前已连接到 DSH。」→「这台手机已连上 Pocket。」／`Your phone is connected to Pocket.`。
+- **网络黑话改白话**：`tunnelError`「隧道建立失败：」→「公网通道没打开：」（与「正在开通公网通道」同口径；「隧道」只留给固定域名面板那种真要操作 Cloudflare 的语境）；`clawbotStatusReady`「通道就绪」→「已接通」；`clawbotStatusNeedMsg`「需在微信发任意消息激活」→「在微信回一句话即可接通」；`clawbotActivated`「授权成功！请在微信中向机器人发送任意文字（如发“1”）以激活通道…」→「授权成功。在微信里随便回一句话，就接通了。」（删「机器人」「激活通道」与举例）。
+- **公网同意卡去「暴露」**：`risk`「此页面通过公网隧道暴露，任何拿到链接的人都可能打开它。请确认你了解这一风险后继续。」→「这个页面走的是公网链接，任何拿到链接的人都能打开它。确认明白再继续。」；`agree`「我理解此页面经公网暴露，存在被他人访问的风险」→「我明白这条链接别人也能打开」。风险信息一字未减，只换说法。
+- **运维口吻改人话**：`devFingerprint`「指纹」→「设备标识」／`Device ID`（「指纹」易被读成手机指纹解锁）；`devCredExpiry`「凭证到期」→「连接有效期」；`devPermBadge`「通道权限：{v}」→「访问范围：{v}」。
+- **故意不改的**：「桌面端」是全仓既定术语（手机壳 4 处同用，改要连壳一起动，超出本批范围）；`lanRisk`「可能被听到」精准且最省字；`diagProbeHint` 全文（写代价是产品决策，一个字不软）；固定域名面板 `tunnelIngressHtml`（只有要配 Cloudflare 固定域名的人会打开，`127.0.0.1`／桥端口／`online` 行正是操作坐标，顺成人话反而没法照做）。
+- **生效路径**：桌面页与同意卡都是 SSR 文档/静态页，**不进手机壳字节预算**（`ASSET_BUDGET_BYTES` 不变）；改的是 `lib/pages.js` ⇒ 需重启宿主才上线。
+- **回归锁**：`test/pages-panel-ux.test.js` 的同意卡 zh/en 两条锚点同步；该文件六档 + connected-devices + device-panel-exec + pages-input-hardening + diagnostics-panel + desktop-connected-unlocked 合跑 **62 pass／0 fail**。
+
 **重启回执改文艺文案、确认卡一行一条、告别页四行楚门台词、点重启改为转圈**（⏳ 待重启生效：`lib/pages.js` 三处属宿主装载面。`scripts/dsh-revive.ps1` 是计划任务现读，推送文案落盘即生效，不需重启）。
 
 - **推送回执（成功分支）**：标题 `Curiouser and curiouser!`、正文 `Pocket 一级准备，任意回复获得本轮公网地址。`。文艺只给成功那一次——**未完全就位分支保持白话**（`DSH 已重启（未完全就位）` / `gui=… bridge=…，请回电脑看一眼。`），别让爱丽丝台词挡住「回电脑看一眼」这个动作。锁屏只显示标题一行，故正文首词是产品名 `Pocket`；「回一句话＝拿地址＝续额度」三件因果留在正文里。
