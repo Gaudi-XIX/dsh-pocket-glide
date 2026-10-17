@@ -111,3 +111,36 @@ test('the all-old workspace still ships its newest row (the page floors at one)'
   const boot = await bridge.buildMobileBoot()
   assert.deepEqual(idsOf(boot.sess.items), ['newer'], 'same floor as the renderer: one row is always visible')
 })
+
+// Regression (2026-10-17, caught on the restart verification of the trim).
+//
+// The page orders a workspace's rows `pinRank(b)-pinRank(a) || sortAtOf(b)-sortAtOf(a)`
+// and then applies its cap, so the cap always lands on pinned rows plus the newest
+// visible ones. The bridge reproduced the count but sorted on "pinned" alone, so
+// with one fresh and one stale unpinned row the cap of 1 took whichever the
+// catalogue happened to list first — it shipped the STALE row and hid the fresh
+// one, and the landing painted an old title with「更多」behind it.
+test('a workspace with one fresh and one stale row ships the FRESH one, not whichever came first', async () => {
+  const now = Date.now()
+  // Catalogue order is deliberately adversarial: stale first.
+  const items = [row('stale', now - 5 * DAY), row('fresh', now - 60 * 1000)]
+  const bridge = makeBridge({ items })
+  const boot = await bridge.buildMobileBoot()
+  assert.deepEqual(idsOf(boot.sess.items), ['fresh'], 'the tie-break is recency, as in the renderer')
+
+  // And the answer cannot depend on how the host happened to order the catalogue.
+  const flipped = makeBridge({ items: [row('fresh', now - 60 * 1000), row('stale', now - 5 * DAY)] })
+  const bootFlipped = await flipped.buildMobileBoot()
+  assert.deepEqual(idsOf(bootFlipped.sess.items), ['fresh'], 'same answer whichever way the catalogue is ordered')
+})
+
+test('pinned still outranks recency inside the same workspace', async () => {
+  const now = Date.now()
+  // Two unpinned rows inside the window plus an old pin: cap is 3, so all travel,
+  // but the ORDER the cap counts through must put the pin first.
+  const items = [row('fresh', now - 1000), row('pinnedOld', now - 30 * DAY)]
+  const bridge = makeBridge({ items, pinnedSessionIds: ['pinnedOld'] })
+  const boot = await bridge.buildMobileBoot()
+  assert.ok(idsOf(boot.sess.items).includes('pinnedOld'), 'an old pin is never squeezed out by a fresh row')
+  assert.ok(idsOf(boot.sess.items).includes('fresh'), 'and the fresh row rides with it')
+})
