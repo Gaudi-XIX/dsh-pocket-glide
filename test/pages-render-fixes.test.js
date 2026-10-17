@@ -624,6 +624,8 @@ test('DM-1 dark mode protects night vision: primary/send buttons, cancel, settin
   // 发送按钮启用时走品牌蓝，禁用时走默认 surface，彻底消除白炽光
   assert.match(darkContent, /\.composer \.primary:not\(:disabled\)\{background:var\(--brand\);border-color:var\(--brand\);color:#fff\}/,
     'dark-mode send button uses brand accent with white arrow, not glaring ink')
+  assert.match(darkContent, /\.composer \.primary:disabled\{background:var\(--surface\);border-color:var\(--line\);color:var\(--muted\);box-shadow:none\}/,
+    'dark-mode disabled send button avoids white glare with muted surface')
   // 停止生成按钮走暗底危险色
   assert.match(darkContent, /\.primary\.cancel\{background:color-mix\(in srgb,var\(--danger\) 16%,var\(--card\)\)/,
     'dark-mode cancel/stop button uses dark card tinted with danger red')
@@ -631,7 +633,7 @@ test('DM-1 dark mode protects night vision: primary/send buttons, cancel, settin
   assert.match(darkContent, /\.settings-trigger\[aria-expanded=true\]\{border-color:var\(--brand\);background:var\(--hover\);color:var\(--brand\)\}/,
     'dark-mode settings trigger expanded state avoids solid white')
   // 提问弹窗主提交按钮
-  assert.match(darkContent, /\.question-actions \.submit-answer:not\(:disabled\)\{border-color:var\(--brand\);background:var\(--brand\);color:#fff\}/,
+  assert.match(darkContent, /\.question-actions \.submit-answer\{border-color:var\(--brand\);background:var\(--brand\);color:#fff\}/,
     'dark-mode question submit button uses brand accent')
   // 提问选项选中态
   assert.match(darkContent, /\.question-option\.selected \.option-control\{border-color:var\(--brand\);background:var\(--brand\);color:#fff\}/,
