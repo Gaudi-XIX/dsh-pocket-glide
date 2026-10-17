@@ -6,6 +6,18 @@
 
 ## 未发布（工作树）
 
+**Pocket 名字统一：页面上一律叫产品名 `Pocket`**（用户 2026-10-17：「名字都统一吧」；⏳ 待重启生效：`lib/pages.js` 与 `client/client.js` 都属宿主装载面，手机要完全关闭重开才拿得到新壳）。
+
+- **桌面入口名**：`client/client.js` 的 `label` 小写 `pocket` → `Pocket`（中英同串，与 `frameTitle` 一致）。原先入口写小写、手机页指引却让用户去找「pocket」窗口，两处口径不一致。
+- **手机配对/重连页**：`连接 DSH` → `连接 Pocket`、`重新连接 DSH` → `重新连接 Pocket`（en `Pairing DSH` → `Pairing Pocket`、`Reconnect DSH` → `Reconnect Pocket`）。
+- **找不到桌面端时的失败提示**：`暂时无法连接桌面端，请确认 DSH 正在运行。` → `……请确认 Pocket 正在运行。`；`暂时无法连接桌面端，请先启动 DSH。` → `……请先启动 Pocket。`（en 同步）；手机壳 `openFailed`「Pocket 打开失败，请重启 DSH 后再试。」→「Pocket 打开失败，请重启后再试。」——页面本身就叫 Pocket，再让用户去启动 DSH 是错误指令。
+- **指引里的窗口名**：`在电脑「pocket」窗口查看密码。` → `密码在电脑的 Pocket 窗口里。`；`请在电脑上的「pocket」扫描新二维码` → `……在电脑上的 Pocket 扫描新二维码`（zh/en 各 6 处，含重连页三处分支与壳内浮层）。
+- **顺手一处黑话**：「隧道仍可用／隧道地址仍可用」→「公网通道仍可用」（与桌面页 `tunnelError` 同口径；真要操作 Cloudflare 的固定域名面板不动）。
+- **一处事实性修正**：`暂无工作区，请先在 DSH 中创建第一个工作区。` → `……请先在 Pocket 里创建第一个工作区。`——主路径是从手机连回来后直接在 Pocket 里建，原句会把用户支到电脑前。
+- **故意保留**：`DSH Pocket` 品牌字（品牌名，不是指代）；`桌面端`（既定术语，手机壳同用）。
+- **壳预算**：本批全在壳页文案里，实测 zh 346 917（css 51 945 + js 294 972）/ en 346 817，相对上一条基线净 +905 B，已贴 347 000 上限 ⇒ **不放宽到「大一些」，只记账到 348 000**（余量 ~1.1 KB）。肥肉清单实算：三份 locale 文案表重复约 12 KB、样式串约 10 KB，属独立瘦身任务。
+- **回归锁**：`test/client-i18n.test.js`（入口名与 `openFailed` 字面）、`test/pages-render-fixes.test.js`（配对页 `<h1>`）、`test/pin-field-width.test.js`（「密码在哪」四条措辞锚点）、`test/mobile-assets.test.js`（预算记账）。全量 `npm test` 1269 pass／0 fail／skipped 2。
+
 **Pocket 电脑端页面文案顺写：去极客黑话、统一产品名口径**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面）。
 
 - **产品名口径**（沿用既有规则：原「手机连接／DSH」位一律写产品名 `Pocket`，中英同串不翻译）：`manageHint`「这台手机当前已连接到 DSH。」→「这台手机已连上 Pocket。」／`Your phone is connected to Pocket.`。

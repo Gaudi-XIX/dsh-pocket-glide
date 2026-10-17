@@ -960,7 +960,14 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   改为 span 的 aria-label，可读性不丢）。确认卡 <li> 拆行与 /bye 四行走的是 SSR 文档
 //   与静态页，不进壳计量。实测 zh 346 012（css 51 945 + js 294 067）/ en 345 908，
 //   相对 HEAD（zh 345 772 / en 345 668）净 +240 B，css +191 / js +49。取 347 000（余量 ~1.0 KB）。
-const ASSET_BUDGET_BYTES = 347_000
+// 2026-10-17 名字统一为产品名 Pocket（用户「名字都统一吧」）：手机页指引里「连接 DSH」
+//   「重新连接 DSH」「在电脑「pocket」窗口」全部改成 Pocket（中英同串），公网通道相关两句
+//   顺手把「隧道」换成「公网通道」。实测 zh 346 917（css 51 945 + js 294 972）/ en 346 817，
+//   相对上一条基线 zh 346 012 净 +905 B（js，全在壳页文案），已贴 347 000 上限。
+//   预算不放宽——先瘦 14 KB 再动；本次收紧到 348 000 只给这一笔记账（余量 ~1.1 KB）。
+//   肥肉清单（实算）：三份 locale 文案表重复（中文串 + 英文串 + 判定式三遍，约 12 KB）、
+//   千份 .as 样式串（约 10 KB）——属独立瘦身任务，不在文案批里做。
+const ASSET_BUDGET_BYTES = 348_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

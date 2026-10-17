@@ -18,24 +18,25 @@ window.__ModuleLoader__.load({
      * 语言判定优先宿主 locale 服务（ctx.locale.getLocale().active，与 dsh-memory-river
      * client 半区同机制），服务缺席时退回 <html lang>；判定式 /^zh/i 与 pages 侧统一，
      * 未知语言一律回落 en。
-     * 字面配对齐 lib/pages.js 桌面配对页既有中英：入口名 pocket（手机端页面
-     * 指引里指代本按钮的同一称呼），内嵌页标题 Pocket（= text.title）。 */
+     * 字面配对齐 lib/pages.js 桌面配对页既有中英：入口名 Pocket（2026-10-17 用户定
+     * 「名字都统一吧」——原先入口写小写 pocket、手机页指引写「pocket」窗口，两处一并改成
+     * 产品名 Pocket，中英同串不翻译），内嵌页标题 Pocket（= text.title）。 */
     var I18N = {
       zh: {
-        label: 'pocket',
+        label: 'Pocket',
         close: '关闭',
         opening: '正在打开 Pocket…',
         frameTitle: 'Pocket',
-        openFailed: 'Pocket 打开失败，请重启 DSH 后再试。',
+        openFailed: 'Pocket 打开失败，请重启后再试。',
         reactUnavailable: 'react 不可用：client 半区不注册 UI（请核对 package.json dsh.client.inject）',
         slotsUnavailable: 'slots 服务不可用：UI 未挂载（请核对 package.json dsh.client.inject）',
       },
       en: {
-        label: 'pocket',
+        label: 'Pocket',
         close: 'Close',
         opening: 'Opening Pocket…',
         frameTitle: 'Pocket',
-        openFailed: 'Failed to open Pocket. Restart DSH and try again.',
+        openFailed: 'Failed to open Pocket. Restart and try again.',
         reactUnavailable: 'react unavailable: the client half registers no UI (check dsh.client.inject in package.json)',
         slotsUnavailable: 'slots service unavailable: UI not mounted (check dsh.client.inject in package.json)',
       },

@@ -207,7 +207,7 @@ function openModal(r) {
 
 const statusOf = (m) => m.panel.querySelector('.dsh-pocket-status')
 
-// The sidebar label is the product name `pocket` in BOTH packs, so it can no
+// The sidebar label is the product name `Pocket` in BOTH packs, so it can no
 // longer separate the locales on its own (that is the point of the rename).
 // Every locale-resolution assertion below is therefore paired with the zh-only
 // close string, which is what actually proves which pack the client resolved.
@@ -241,40 +241,40 @@ test('the client registers once by package name and keeps inject = ["slots"]', (
 })
 
 test('with no host locale service the client falls back to <html lang>, unknown tags resolve to en', () => {
-  assert.equal(label(mount('zh-CN')), 'pocket', 'html lang=zh-CN → zh')
+  assert.equal(label(mount('zh-CN')), 'Pocket', 'html lang=zh-CN → zh')
   assert.equal(closeLabel(mount('zh-CN')), '关闭', 'html lang=zh-CN really resolved the zh pack')
-  assert.equal(label(mount('en-US')), 'pocket', 'html lang=en-US → en')
+  assert.equal(label(mount('en-US')), 'Pocket', 'html lang=en-US → en')
   assert.equal(closeLabel(mount('en-US')), 'Close', 'html lang=en-US really resolved the en pack')
-  assert.equal(label(mount('ja-JP')), 'pocket', 'unknown language ja falls back to en')
-  assert.equal(label(mount('')), 'pocket', 'an empty lang attribute falls back to en')
-  assert.equal(label(mount('zh-TW')), 'pocket', 'zh-TW must not degrade to English (/^zh/i)')
+  assert.equal(label(mount('ja-JP')), 'Pocket', 'unknown language ja falls back to en')
+  assert.equal(label(mount('')), 'Pocket', 'an empty lang attribute falls back to en')
+  assert.equal(label(mount('zh-TW')), 'Pocket', 'zh-TW must not degrade to English (/^zh/i)')
   assert.equal(closeLabel(mount('zh-TW')), '关闭', 'zh-TW must not degrade to English (/^zh/i)')
 })
 
 test('the host locale service outranks <html lang> in both directions', () => {
-  assert.equal(label(mount('en-US', 'zh-TW')), 'pocket', 'ctx.locale overrides html lang')
+  assert.equal(label(mount('en-US', 'zh-TW')), 'Pocket', 'ctx.locale overrides html lang')
   assert.equal(closeLabel(mount('en-US', 'zh-TW')), '关闭', 'ctx.locale overrides html lang')
-  assert.equal(label(mount('zh-CN', 'en-US')), 'pocket', 'ctx.locale overrides html lang (reverse)')
+  assert.equal(label(mount('zh-CN', 'en-US')), 'Pocket', 'ctx.locale overrides html lang (reverse)')
   assert.equal(closeLabel(mount('zh-CN', 'en-US')), 'Close', 'ctx.locale overrides html lang (reverse)')
 })
 
 test('the visible label, the rail title and the omitted text node share one source', () => {
   const zh = mount('zh-CN', 'zh')
-  assert.equal(renderBtn(zh).kids[1].kids[0], 'pocket', 'the wide label comes from the same key')
-  assert.equal(renderBtn(zh, false).props.title, 'pocket', 'the narrow title comes from the same key')
+  assert.equal(renderBtn(zh).kids[1].kids[0], 'Pocket', 'the wide label comes from the same key')
+  assert.equal(renderBtn(zh, false).props.title, 'Pocket', 'the narrow title comes from the same key')
   assert.equal(renderBtn(zh, false).kids[1], null, 'the rail renders no text node')
 })
 
 test('locale/change withdraws the old registration and re-registers exactly once', () => {
   const live = mount('en-US', 'en-US')
-  assert.equal(label(live), 'pocket')
+  assert.equal(label(live), 'Pocket')
   assert.equal(closeLabel(live), 'Close', 'the en pack is the one on screen before the switch')
 
   live.setLocale('zh-CN')
   live.fireLocale({ active: 'zh-CN' })
   assert.deepEqual(live.disposals, ['sidebar.footer.action'], 'switching language must withdraw the old registration')
   assert.equal(live.registrations.length, 2, 'switching language re-registers once')
-  assert.equal(label(live), 'pocket')
+  assert.equal(label(live), 'Pocket')
   assert.equal(closeLabel(live), '关闭', 'the switch really moved the shell to the zh pack')
 
   live.fireLocale({ active: 'zh-CN' })
@@ -300,13 +300,13 @@ test('dispose unwinds the subscription and the registration, and later events st
 
 test('every string on the modal shell comes from the table, in zh and in en', () => {
   const zhModal = openModal(mount('zh-CN', 'zh'))
-  assert.equal(zhModal.panel.getAttribute('aria-label'), 'pocket')
+  assert.equal(zhModal.panel.getAttribute('aria-label'), 'Pocket')
   assert.equal(zhModal.close.getAttribute('aria-label'), '关闭')
   assert.equal(zhModal.frame.getAttribute('title'), 'Pocket')
   assert.equal(zhModal.status.textContent, '正在打开 Pocket…')
 
   const enModal = openModal(mount('en-US', 'en-US'))
-  assert.equal(enModal.panel.getAttribute('aria-label'), 'pocket')
+  assert.equal(enModal.panel.getAttribute('aria-label'), 'Pocket')
   assert.equal(enModal.close.getAttribute('aria-label'), 'Close')
   assert.equal(enModal.frame.getAttribute('title'), 'Pocket')
   assert.equal(enModal.status.textContent, 'Opening Pocket…')
@@ -317,7 +317,7 @@ test('the iframe error branch reports through the openFailed key, not a literal'
   fail.frame.listeners.error[0]()
   assert.equal(
     statusOf(fail).textContent,
-    'Failed to open Pocket. Restart DSH and try again.',
+    'Failed to open Pocket. Restart and try again.',
     'the failure string is the table value for openFailed'
   )
 
@@ -330,18 +330,18 @@ test('the iframe error branch reports through the openFailed key, not a literal'
 test('a locale switch while the modal is open re-resolves every shell string', () => {
   const live = openModal(mount('en-US', 'en-US'))
   live.frame.listeners.error[0]()
-  assert.equal(statusOf(live).textContent, 'Failed to open Pocket. Restart DSH and try again.')
+  assert.equal(statusOf(live).textContent, 'Failed to open Pocket. Restart and try again.')
 
   live.r.setLocale('zh-CN')
   live.r.fireLocale({ active: 'zh-CN' })
-  assert.equal(live.panel.getAttribute('aria-label'), 'pocket')
+  assert.equal(live.panel.getAttribute('aria-label'), 'Pocket')
   assert.equal(live.close.getAttribute('aria-label'), '关闭')
   assert.equal(live.frame.getAttribute('title'), 'Pocket')
-  assert.equal(statusOf(live).textContent, 'Pocket 打开失败，请重启 DSH 后再试。', 'the remembered status key re-resolves')
+  assert.equal(statusOf(live).textContent, 'Pocket 打开失败，请重启后再试。', 'the remembered status key re-resolves')
 
   live.r.fireLocale({ active: 'zh' })
   assert.equal(live.r.registrations.length, 2, 'the language did not really change, so no extra re-registration')
-  assert.equal(statusOf(live).textContent, 'Pocket 打开失败，请重启 DSH 后再试。')
+  assert.equal(statusOf(live).textContent, 'Pocket 打开失败，请重启后再试。')
 })
 
 /* ------------------------------------------------------------------ *
@@ -452,13 +452,15 @@ test('the zh and en packs expose the same seven keys, with the product-name lite
   const enKeys = Object.keys(I18N.en).sort()
   assert.deepEqual(enKeys, zhKeys, 'zh/en key sets must be equal')
   assert.deepEqual(zhKeys, [...KEYS].sort(), 'the table holds exactly the seven AC-CLI keys')
-  // Product-name keys: `label` is the desktop entry (lowercase on purpose) and
-  // `frameTitle` is the embedded page's own title (= lib/pages.js text.title).
-  // Both are deliberately the SAME literal in both packs — a product name is not
-  // translated — so they are the only two keys allowed to compare equal.
+  // Product-name keys: `label` is the desktop entry and `frameTitle` is the
+  // embedded page's own title (= lib/pages.js text.title). Both are deliberately
+  // the SAME literal in both packs — a product name is not translated. Since
+  // 2026-10-17 (user:「名字都统一吧」) the entry is spelled `Pocket` too: the
+  // phone pages used to point at a lowercase「pocket」window that no longer exists
+  // under that spelling, so label and frameTitle are now the same string.
   const PRODUCT_KEYS = new Set(['label', 'frameTitle'])
-  assert.equal(I18N.zh.label, 'pocket', 'the desktop entry is named pocket in zh')
-  assert.equal(I18N.en.label, 'pocket', 'and the very same literal in en')
+  assert.equal(I18N.zh.label, 'Pocket', 'the desktop entry is named Pocket in zh')
+  assert.equal(I18N.en.label, 'Pocket', 'and the very same literal in en')
   assert.equal(I18N.zh.frameTitle, 'Pocket', 'the embedded page title is the product name in zh')
   assert.equal(I18N.en.frameTitle, 'Pocket', 'and the very same literal in en')
   for (const k of zhKeys) {
