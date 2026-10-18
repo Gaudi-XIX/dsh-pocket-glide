@@ -290,6 +290,7 @@ function buildInstantPaintSandbox() {
     const painted=[]
     function paintInstantHistory(events){painted.push(events.map(eventSeq))}
     function ensureTranscriptFilled(){}
+    function evictSessionCache(){}
     ${body}
     return {
       painted,
@@ -298,7 +299,7 @@ function buildInstantPaintSandbox() {
       setOlder(value){olderEvents=value},
       setCached(session,value){sessionCache.set(session,value)},
       setTail(session,value){tailCache.set(session,value)},
-      read(){return {streamEvents,olderEvents}},
+      read(){return {streamEvents,olderEvents,olderHasMore,sessionCache}},
       paintInstantSession,
     }
   `)
@@ -326,8 +327,10 @@ test('AC-D1 a cached visit keeps both older windows as well', () => {
 })
 
 // 预载包分支（用户 2026-10-15 m01005②）：sessionCache 没有这个会话（冷开或已被
-// 驱逐）时，主页登录时拉回的尾包先画上，屏幕不该是骨架。它只并进尾部缓冲，
-// 不动 olderEvents、不打 at 戳——全量读回来再按 seq 去重续上。
+// 驱逐）时，主页登录时拉回的尾包先画上，屏幕不该是骨架。2026-10-18 起它还盖 at 戳
+// 并声明 olderHasMore=true（m02296①②）：不盖戳 → instantFresh 恒 false，点进去照付
+// 一次全量（「进去还要加载消息」）；不声明还有更早 → closeSessionStream 清零过的
+// olderHasMore 让 ensureTranscriptFilled 直接返回，一屏都填不满。
 test('AC-D1b a cold entry paints from the tail pack instead of a skeleton', () => {
   const sandbox = buildInstantPaintSandbox()
   sandbox.setActive('s9')
@@ -336,6 +339,9 @@ test('AC-D1b a cold entry paints from the tail pack instead of a skeleton', () =
   assert.equal(sandbox.paintInstantSession(), true, 'the pack counts as an instant paint')
   assert.deepEqual(sandbox.painted[0], [12, 13], 'and what it holds is on screen')
   assert.deepEqual(sandbox.read().olderEvents, [], 'the older window is not touched')
+  assert.equal(sandbox.read().olderHasMore, true, 'the pack declares there is more above it — the fill loop may run (m02296①)')
+  const stamped = sandbox.read().sessionCache.get('s9')
+  assert.ok(stamped && typeof stamped.at === 'number', 'the painted pack stamps the snapshot — a re-entry inside the fresh window skips the full read (m02296②)')
   assert.equal(sandbox.paintInstantSession(), true, 'a re-entry merges by seq, no duplicates')
   assert.deepEqual(sandbox.painted[1], [12, 13], 'still the same two messages')
 })

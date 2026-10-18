@@ -21,7 +21,7 @@ function userRecord(text, time) {
   return { seq: 1, event: { type: 'user/message', time, data: { message: { source: { kind: 'user' }, content: [{ type: 'text', text }] }, stream: 'x', header: 'h', meta: 'm' } } }
 }
 
-function makeBridge({ items = [], pages = null, pageDelay = 0 } = {}) {
+function makeBridge({ items = [], pages = null, pageDelay = 0, refreshed = null } = {}) {
   const bridge = Object.create(LanMobileBridge.prototype)
   bridge.logs = []
   bridge.log = () => {}
@@ -35,7 +35,13 @@ function makeBridge({ items = [], pages = null, pageDelay = 0 } = {}) {
   let active = 0
   let maxActive = 0
   bridge._maxActive = () => maxActive
-  bridge.cachedSessionList = async () => ({ ok: true, value: { items } })
+  const listCalls = []
+  bridge._listCalls = listCalls
+  bridge.cachedSessionList = async (force = false) => {
+    listCalls.push(force === true)
+    const source = force && refreshed !== null ? refreshed : items
+    return { ok: true, value: { items: source } }
+  }
   bridge.invokeHarness = async (endpoint, args) => {
     assert.equal(endpoint, 'session/page')
     calls.push(args.request)
@@ -78,6 +84,31 @@ test('an unknown session and a cursorless row are markers, not failures', async 
   assert.deepEqual(result.value.tails.ghost, { error: 'unknown' })
   assert.deepEqual(result.value.tails.nocursor, { error: 'no-cursor' })
   assert.equal(bridge._pageCalls.length, 0, 'neither row reached the Host')
+  assert.deepEqual(bridge._listCalls, [false, true], 'a hopeless row gets exactly one forced refetch, no more')
+})
+
+// 2026-10-18 (m00002): the page-side stamp only re-arms on a SUCCESS, so a row the
+// 10s-old cached list missed — a session created on the desktop after the last
+// refresh — was a permanent dead end: every open paid the full history read. The
+// batch now forces one refetch when any asked row cannot be served from the cache.
+test('a row missing from the cached list is re-asked once from a forced refresh', async () => {
+  const at = Date.now() - MIN
+  const bridge = makeBridge({
+    items: [],
+    refreshed: [{ sessionId: 'fresh', updatedAt: at, projections: { asOfSeq: 77 } }]
+  })
+  const result = await bridge.forwardRpc('session.tails', { sessions: ['fresh'] })
+  assert.deepEqual(bridge._listCalls, [false, true], 'cached miss forced exactly one refetch')
+  const entry = result.value.tails.fresh
+  assert.equal(entry.updatedAt, at)
+  assert.equal(entry.events.length, 1, 'the forced list gave the row a cursor and the tail came back')
+  assert.equal(bridge._pageCalls[0].throughSeq, 77, 'the cursor comes from the refreshed row')
+})
+
+test('a ready batch never pays the forced refetch', async () => {
+  const bridge = makeBridge({ items: [{ sessionId: 'a', updatedAt: 1, projections: { asOfSeq: 5 } }] })
+  await bridge.forwardRpc('session.tails', { sessions: ['a'] })
+  assert.deepEqual(bridge._listCalls, [false], 'no needy row, no extra Host list call')
 })
 
 test('every page shape failing marks the row and keeps the response good', async () => {
