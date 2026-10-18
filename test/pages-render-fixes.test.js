@@ -10,6 +10,7 @@
 // fix landing. Geometry layer (the part a string can never prove) lives in
 // test/dom/pages-geometry.mjs — gated, real browser, 390x844.
 import { test } from 'node:test'
+import { execFileSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import {
   mobilePageAssets,
@@ -67,6 +68,14 @@ function extractFunction(source, name) {
     }
   }
   throw new Error(`unbalanced braces after ${name}`)
+}
+
+function betweenA3(start, end, source) {
+  const a = source.indexOf(start)
+  assert.notEqual(a, -1, `${start} must exist`)
+  const b = source.indexOf(end, a + start.length)
+  assert.notEqual(b, -1, `${end} must follow ${start}`)
+  return source.slice(a, b)
 }
 
 // --------------------------------------------------------------- T1 chatError
@@ -687,4 +696,130 @@ test('B2 a successful model switch writes the selection into the held row', () =
   assert.match(rowValues, /r\.projections=\(/, 'the row gets a projections object before its values are written')
   assert.match(rowValues, /return p\.values=/, 'the write targets the row values the projection reader walks')
   assert.doesNotMatch(select, /effort/i, 'the switch still never submits a reasoning effort')
+})
+
+// BUG-2 (user m00002 第 2 条「在正在进行的会话里面，更新切换模型好像不行」)：
+// 草稿缓冲（draftPending）原本对任何状态都优先：只要缓冲里有 model/preset，运行中会话的
+// 设置面板显示的就是草稿里选过的那个（openSessionSettings 还会把它写进 modelCatalog.current），
+// 而草稿态点选只进缓冲、当场不发 RPC，却弹与真切换同一条「会话设置已更新」⇒ 看着切了、实际没动。
+// 修法：缓冲只在没有活动会话（真正的草稿态）时说话；缓冲命中弹「待生效」文案，不再冒充实况。
+test('BUG2 the draft buffer never speaks for a live session and never claims a live update', () => {
+  const model = extractFunction(js, 'draftModelSelection')
+  assert.match(model, /!activeSession&&draftPending&&draftPending\.model/,
+    'the buffered model only wins while no session is active')
+  assert.match(extractFunction(js, 'draftAgentPreset'), /!activeSession&&draftPending&&draftPending\.preset/,
+    'the buffered preset is draft-scoped too')
+  assert.match(extractFunction(js, 'renderSessionSettings'), /!activeSession&&draftPending&&draftPending\.preset/,
+    'the preset row falls back to the buffer only in a draft')
+  assert.match(extractFunction(js, 'permissionCurrent'), /!activeSession&&draftPending&&draftPending\.permission/,
+    'the permission sheet marks the buffered preset as current only in a draft')
+  for (const name of ['draftSetModel', 'draftSetPreset', 'draftSetPermission']) {
+    const setter = extractFunction(js, name)
+    assert.match(setter, /showToast\(L\.settingsPending\)/, `${name} announces a pending pick`)
+    assert.doesNotMatch(setter, /showToast\(L\.settingsUpdated\)/, `${name} must not reuse the applied copy`)
+  }
+  assert.doesNotMatch(extractFunction(js, 'draftSetPreset'), /currentPreset=next/,
+    'a draft pick must not overwrite the current-session preset variable')
+  assert.ok(L.settingsPending && LEN.settingsPending, 'both locales carry the pending copy')
+  assert.notEqual(L.settingsPending, L.settingsUpdated, 'the pending copy is distinct from the applied one')
+})
+
+// BUG-3 / BUG-4 (user m01210「乐观加载碰到排队消息时明显有问题」「发送按钮没有把停止按钮顶掉……」)：
+// send() 在 RPC 之前就乐观入列，而 agentRunning 时 session.prompt 的 mode 是 busyEnter（"queue"）——
+// 这条消息在宿主侧只进 inbox，不是 transcript 事件，却同时被画成会话气泡（messagesWithOptimistic
+// 只看文本相似度、完全不看 inbox 投影）⇒ 同一句话在气泡和队列坞各出现一次，看着像已投递。
+// 修法：乐观气泡只在真正空闲的发送里画（item.queued 跳过），队列坞本来就是它的呈现位。
+// 按钮同源：syncPromptUi 只按 canSend 决定 send 显隐，cancel 只看 agentRunning ⇒ 打字时两个都在，
+// 输入框长高把 send 挤到中间/左边、cancel 在右，一滑就误触停止。修法：有待发内容即只显发送。
+test('BUG3 a prompt queued behind a running turn is not painted as a transcript bubble', () => {
+  const echo = extractFunction(js, 'messagesWithOptimistic')
+  assert.match(echo, /if\(item\.queued\)continue;/,
+    'the queued echo is not spliced into the transcript')
+  const send = betweenA3('async function send()', 'function formatBytes(n)', js)
+  assert.match(send, /queued:agentRunning\}/,
+    'a send into a running turn records that it went to the inbox, not the transcript')
+})
+
+test('BUG4 a typed draft takes the stop button\'s place instead of sitting beside it', () => {
+  const ui = extractFunction(js, 'syncPromptUi')
+  assert.match(ui, /cancel\.hidden=!agentRunning\|\|canSend/,
+    'while there is something to send, the stop button must yield to the send button')
+  assert.match(ui, /\$\('send'\)\.hidden=agentRunning&&!canSend/,
+    'the send button still only shows when it actually has something to send')
+})
+
+// Red-first: these three assertions must hold on the HEAD page source, where the
+// queued echo and the always-on stop button are exactly what the user reported.
+// This keeps the two tests below honest — if the guard strings ever disappear from
+// the working tree again, this fails before they can silently pass.
+test('RED the BUG3/BUG4 guards are absent on the committed page source', () => {
+  const head = execFileSync('git', ['show', 'HEAD:lib/pages.js'], { cwd: 'F:/defws/dsh-pocket', maxBuffer: 1e8 }).toString()
+  assert.ok(head.includes('cancel.hidden=!agentRunning;'), 'HEAD lets the stop button sit beside a typed draft')
+  assert.ok(!head.includes('queued:agentRunning'), 'HEAD cannot tell a queued send from a plain one')
+  assert.ok(!head.includes('if(item.queued)continue'), 'HEAD splices every echo into the transcript')
+})
+
+// The two tests above pin the source words; these run the REAL functions out of
+// the rendered page against synthetic state, so a refactor that keeps the words
+// but breaks the guard fails here. Precedent: test/pages-state-reset.test.js
+// buildSendSandbox().
+function buildQueueSendSandbox(opts) {
+  const body = 'async ' + extractFunction(js, 'send').replace(/^async\s+/, '')
+  const echo = extractFunction(js, 'messagesWithOptimistic').replace(/^async\s+/, '')
+  const make = new Function('box', `
+    let activeSession='s1',agentRunning=${String(opts && opts.agentRunning === true)},busyEnter='queue',sendBusy=false,sessionBlank=false
+    let optimisticPrompts=[],lastHistoryKey='',composerDrafts=[]
+    const rpcCalls=[],toasts=[],errors=[]
+    let flight=null
+    async function ensureSession(){return activeSession}
+    async function applyDraftPending(){}
+    function $(id){return id==='prompt'?box:{value:'',hidden:false,disabled:false,style:{},innerHTML:''}}
+    function readyDrafts(){return []}
+    function validateImagesReady(){}
+    function slashExecuteName(){return ''}
+    function attachmentParts(){return []}
+    function submittedAttachmentParts(){return []}
+    function draftSummary(){return ''}
+    function latestEventSeq(){return 5}
+    function durableUserPromptText(message){return String((message.blocks&&message.blocks[0]&&message.blocks[0].text)||message.text||'')}
+    function armAwaitingTurn(){}
+    function clearAwaitingTurn(){}
+    function markRowRunning(){}
+    function syncSettingsControls(){}
+    function syncPromptUi(){}
+    function paintMessages(){}
+    function clearSentDrafts(){}
+    function showError(id,error){errors.push({id,error})}
+    function showToast(message){toasts.push(message)}
+    function encodedPromptBytes(){return 1}
+    function rpcBodyCeilingFor(){return 1024}
+    async function loadHistory(){}
+    async function refreshActiveSessionSummary(){}
+    async function rpc(method,payload){rpcCalls.push({method,payload});await new Promise((resolve)=>{flight=resolve})}
+    function currentTranscript(){return []}
+    const L={sendFailed:'send failed',draftUploading:'uploading',draftFailed:'failed',attachNotAccepted:'no {command}',attachTooLarge:'too large'}
+    ${extractFunction(js, 'attachFailureCopy')}
+    ${echo}
+    ${body}
+    return {run:send,accept:()=>flight(),rpcCalls,toasts,errors,bubbles:()=>messagesWithOptimistic([]).length}
+  `)
+  return make({ value: 'hello', style: {}, scrollHeight: 40 })
+}
+
+test('BUG3 a send into a running turn is queued host-side and never drawn as a bubble', async () => {
+  const sandbox = buildQueueSendSandbox({ agentRunning: true })
+  sandbox.run().catch(() => {})
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(sandbox.rpcCalls.length, 1, 'the send still reaches the host')
+  assert.equal(sandbox.rpcCalls[0].payload.mode, 'queue', 'a turn that is running takes mode=queue')
+  assert.equal(sandbox.bubbles(), 0, 'and the queued text must not appear in the transcript box')
+  sandbox.accept()
+})
+
+test('BUG3 a send into an idle session still paints its own bubble', async () => {
+  const sandbox = buildQueueSendSandbox({ agentRunning: false })
+  sandbox.run().catch(() => {})
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(sandbox.bubbles(), 1, 'the ordinary echo is still drawn while the answer is pending')
+  sandbox.accept()
 })

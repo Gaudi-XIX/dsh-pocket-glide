@@ -183,14 +183,17 @@ test('draft creation: "+" mints nothing; ensureSession is the only session.creat
   assert.match(ensure, /rpc\('session\.create'/, 'the session is minted on first real use')
   assert.match(ensure, /if\(activeSession\)return activeSession/, 'a materialized draft never re-creates')
   assert.match(js, /startDraftChat\(wsId\)/, 'the + button is wired to the draft, not to a create')
-  // The actions that mean "this draft is in use" must materialize first.
   // 2026-10-16（首次发送延迟）：send() 的材质化不再走早退分支，而是把它当作失败
-  // 的一条路径——`if(!activeSession&&!(await ensureSession()))throw new Error(...)`，
-  // 由外层 catch 统一回滚乐观气泡、解锁运行态并把正文放回输入框。断言按语义钉：
-  // send 里必须出现 ensureSession 的 await，且该调用仍受「没有活跃会话」守卫。
+  // 的一条路径，由外层 catch 统一回滚乐观气泡、解锁运行态并把正文放回输入框。
+  // 2026-10-19（空会话）：材质化仍在 send 内、无会话仍走 throw+回滚，但 owner 只从
+  // 这次 await 取：`const owner=activeSession||await ensureSession();if(!owner)throw`。
+  // 旧写法在 await 之后回读 activeSession，返回手势能把 owner 读成 null 并发出
+  // sessionId:null 的 session.prompt（宿主 gateway/input-invalid，会话盘上留空壳）。
   const sendBody = extractFunction(js, 'send')
-  assert.match(sendBody, /if\(!activeSession&&!\(await ensureSession\(\)\)\)throw/,
+  assert.match(sendBody, /const owner=activeSession\|\|await ensureSession\(\)/,
     'a draft send materializes the session inside the rollback path')
+  assert.match(sendBody, /if\(!owner\)throw/,
+    'and still fails the send when no session could be minted')
   assert.match(sendBody, /await ensureSession\(\)/)
   assert.match(extractFunction(js, 'uploadGenericFile'), /await ensureSession\(\)/)
   assert.match(extractFunction(js, 'retryDraft'), /await ensureSession\(\)/)

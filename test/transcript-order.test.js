@@ -852,7 +852,11 @@ test('M17 the send records what retirement needs', () => {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const send = betweenA3('async function send()', 'function formatBytes(n)', js)
   assert.ok(send.includes('sameTextAtSend=currentTranscript().reduce('), 'the same-text count is taken at send time')
-  assert.ok(send.includes('sameTextAtSend,afterSeq}'), 'and travels with the echo')
+  // 2026-10-19 BUG-3: the queued flag rides along with the retirement record, so
+  // the literal moved from `sameTextAtSend,afterSeq}` to
+  // `sameTextAtSend,afterSeq,queued:agentRunning}`. Pin the fields by name, not
+  // by the closing brace — otherwise every new field turns this red.
+  assert.ok(send.includes('sameTextAtSend,afterSeq'), 'and travels with the echo')
   const echo = betweenA3('function messagesWithOptimistic(durable)', 'function latestEventSeq()', js)
   assert.ok(echo.includes('return!(matches===1&&(floor>=0||item.sameTextAtSend===0))'), 'retirement is the narrow rule, not the first match')
   assert.ok(echo.includes('const floor=item.afterSeq'), 'the gate reads the watermark as it was before this paint')

@@ -214,13 +214,26 @@ test('B-5 send() re-checks the session it started for', () => {
   // owner=null and both guards below could never match — the send-into-a-new-chat
   // path would read as "the reader left". The capture has to sit after the await,
   // next to the markRowRunning that now needs the real id.
+  //
+  // 2026-10-19: "after the await" became "from the await" — the id is the one the
+  // create returned, never a re-read of the shared variable. Re-reading it was its
+  // own defect: a back-tap landing inside the buffered draft RPCs in ensureSession
+  // ran showSessionList(), which nulls activeSession, and the send then went out
+  // with sessionId:null (host gateway/input-invalid) while the created session
+  // stayed on disk as a completely empty conversation. The sibling pin lives in
+  // test/pages-status-light.test.js.
   const awaitedAt = body.indexOf('await ensureSession()')
-  const capturedAt = body.indexOf('const owner=activeSession')
+  const capturedAt = body.indexOf('const owner=activeSession||await ensureSession()')
   assert.notEqual(awaitedAt, -1, 'send() still mints the draft session itself')
-  assert.notEqual(capturedAt, -1, 'the send still captures whose session it is')
-  assert.ok(
-    capturedAt > awaitedAt,
-    'owner is captured after the create, or a first-message send pins a null owner',
+  assert.notEqual(
+    capturedAt,
+    -1,
+    'owner is taken from the create, or a first-message send pins a null owner',
+  )
+  assert.equal(
+    (body.match(/const owner=activeSession;/g) || []).length,
+    0,
+    'no bare re-read of activeSession after the await — that is what sent sessionId:null',
   )
   // Both guards still have to be there, but they no longer sit side by side: the
   // success branch checks `activeSession!==owner`, and the reply branch checks

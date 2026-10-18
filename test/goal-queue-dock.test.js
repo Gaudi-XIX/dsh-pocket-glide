@@ -96,7 +96,9 @@ test('queuedRowsOf marks which rows carry the Host MessageId', () => {
 // -------------------------------------------------------------- dock render
 
 function buildDockSandbox() {
-  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120, classList: { toggle() {}, add() {}, remove() {} } });
+  // querySelector mirrors the sibling sandbox: renderQueueDock looks up its own
+  // list to re-arm it when it overflows, and a headless fake has no layout.
+  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120, querySelector: () => null, classList: { toggle() {}, add() {}, remove() {} } });
   const containers = { goalBar: fake(), queueDock: fake() };
   const classState = {};
   const cssVars = {};
@@ -450,8 +452,20 @@ test('the queue dock slots into the composer with the todo-dock height protocol'
     'and never precedes the composer again (the flex-flow slot is gone)');
 
   assert.match(css, /--queue-h:0px/, 'the height variable has a root default beside --todo-h');
-  assert.match(css, /\.queue-dock\{[^}]*pointer-events:auto/,
-    'the dock is clickable inside the pointer-events:none composer');
+  // BUG-5 (2026-10-19): the dock boxes sit inside the pointer-events:none composer and
+  // used to claim pointer-events:auto themselves. That turned the whole reserved band
+  // above the input row into a dead zone: a touch there hit the dock, the dock's list had
+  // nothing to scroll, the composer is not an ancestor of #messages, and the chain ends at
+  // body{overflow:hidden} — so the transcript could not be dragged while a message queued.
+  // The containers are transparent now; only the controls that have click semantics opt back in.
+  assert.match(css, /\.queue-dock\{[^}]*pointer-events:none/,
+    'the dock container is transparent so vertical gestures reach the transcript');
+  assert.match(css, /\.queue-list\{[^}]*pointer-events:none/, 'and so is its list wrapper');
+  assert.match(css, /\.queue-act\{[^}]*pointer-events:auto/, 'the row action buttons keep their hit area');
+  assert.match(css, /\.queue-edit-btn\{[^}]*pointer-events:auto/, 'and so do the save/cancel pair');
+  assert.match(css, /\.composer \.queue-edit-box\{[^}]*pointer-events:auto/, 'and the inline edit box stays typeable');
+  assert.match(js, /queueList\.style\.pointerEvents=queueList\.scrollHeight>queueList\.clientHeight\+1\?'auto':'none'/,
+    'the list re-arms its own scrolling only when it actually overflows');
   assert.match(css, /\.queue-list\{[^}]*max-height:180px/,
     'the list is capped so --queue-h stays bounded');
   assert.match(css, /\.chat-open .messages\{[^}]*var\(--todo-h\) \+ var\(--queue-h\)/,

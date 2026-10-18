@@ -82,9 +82,18 @@ test('the click handler is the only enter point and Enter still just types a new
 test('a draft send materializes the session inside the rollback path', () => {
   // The await moved INTO the try, so a failed create now unwinds through the
   // same catch as a failed prompt: bubble withdrawn, lock released, text back.
-  const guardAt = sendBody.indexOf('if(!activeSession&&!(await ensureSession()))');
-  assert.notEqual(guardAt, -1, 'the draft still materializes on first use')
-  assert.ok(guardAt < sendBody.indexOf('const owner=activeSession'), 'and owner is captured only once the session exists')
+  // 2026-10-19: the create still runs in the try, but the id it returns IS the
+  // owner — `activeSession||await ensureSession()`. Reading activeSession again
+  // after the await handed the send a session the reader had already left (a
+  // back-tap landing inside ensureSession's buffered draft RPCs) and put
+  // sessionId:null on the wire, which the Host rejects as gateway/input-invalid.
+  const ownerAt = sendBody.indexOf('const owner=activeSession||await ensureSession()')
+  assert.notEqual(ownerAt, -1, 'the draft still materializes on first use')
+  assert.match(
+    sendBody,
+    /rpc\('session\.prompt',\{sessionId:owner/,
+    'and the send addresses the session it just materialized',
+  )
   assert.match(sendBody, /throw new Error\(L\.sendFailed/, 'a create that returns nothing is a failure, not a silent return')
 });
 

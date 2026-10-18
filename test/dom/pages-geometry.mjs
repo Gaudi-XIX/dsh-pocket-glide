@@ -32,6 +32,10 @@
 //   C  .queue-list does not scroll horizontally on long queued text: scrollWidth
 //      <= clientWidth, the × handle fully inside, ellipsis engaged, dock band
 //      regression (dock sits above the composer with its 8px gap).
+//   H  (2026-10-19-fix BUG-5) dock passthrough: with a live queue dock (and with the
+//      todo dock expanded) no dock CHROME point may win a hit-test — the band above the
+//      input row must pass touches down to #messages — while the row × handles, the
+//      inline edit box and the todo header keep their own hit areas.
 //   D  (2026-10-07-fix-pocket-r2-pages-batch, W2) todo dock vs the failure
 //      banner: with a real todos projection up (todo-open, --todo-h > 0) the
 //      banner must clear #todoDock by area 0, the dock header must self-hit at
@@ -257,6 +261,24 @@ async function withPage(port, origin, fn) {
       if (probe?.result?.value === true) break;
       await wait(150);
     }
+    // 2026-10-19: the page no longer jumps into a conversation from the boot payload
+    // (the `initialChat` first-byte jump was retired in 653f26c「冷开一律停主页」).
+    // Every scenario below measures the CHAT view, so the harness walks in the way a
+    // reader does — click the canned session row and wait for chat-open. Without this
+    // the page stays on the workspace list and all assertions fail against a blank view.
+    const entered = await send('Runtime.evaluate', {
+      expression: `(() => { const row = document.querySelector('button[data-action="open"]'); if (!row) return 'no-row'; row.click(); return 'clicked' })()`,
+      returnByValue: true,
+    });
+    if (entered?.result?.value !== 'clicked') throw new Error(`geometry harness: no session row to open (${entered?.result?.value})`);
+    const chatDeadline = Date.now() + 15000;
+    let chatOpen = false;
+    while (Date.now() < chatDeadline) {
+      const probe = await send('Runtime.evaluate', { expression: `document.body.classList.contains('chat-open')`, returnByValue: true });
+      if (probe?.result?.value === true) { chatOpen = true; break; }
+      await wait(150);
+    }
+    if (!chatOpen) throw new Error('geometry harness: the chat view never opened after clicking the session row');
     return await fn({
       send,
       evaluate: async (expression) => {
@@ -746,6 +768,156 @@ async function scenarioScroll(host, port, failures) {
   });
 }
 
+// ------------------------------------------------------------------ scene H
+// Scene H (2026-10-19, BUG-5 "有排队消息的时候页面不能滑动"): the dock dead zone.
+// The queue/todo docks sit inside the pointer-events:none composer and used to claim
+// pointer-events:auto for their WHOLE box. A touch anywhere in that reserved band then
+// hit-tested to the dock: the dock's own list had nothing to scroll, the composer is not
+// an ancestor of #messages, and the chain dies at body{overflow:hidden} — so the
+// transcript could not be dragged while a message was queued. The docks are transparent
+// containers now and only controls with click semantics opt back in. Character-level pins
+// cannot prove a hit-test; this does, at the real 390x844 viewport.
+const DOCK_LAYERS = ['queueDock', 'todoDock', 'composer-inner', 'composer-other'];
+
+const OWNER_HELPER = `  const ownerOf = (el) => {
+    if (!el) return 'null'
+    if (el.closest) {
+      if (el.closest('#queueDock')) return 'queueDock'
+      if (el.closest('#todoDock')) return 'todoDock'
+      if (el.closest('.composer-inner')) return 'composer-inner'
+      if (el.closest('#composer')) return 'composer-other'
+    }
+    return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '')
+  }
+  const at = (x, y) => ownerOf(document.elementFromPoint(Math.round(x), Math.round(y)))`;
+
+const dockPassthroughSnapshot = `(() => {
+  const dock = document.getElementById('queueDock')
+  const box = document.getElementById('messages')
+  if (!dock || !box) return { missing: true }
+${OWNER_HELPER}
+  const r = dock.getBoundingClientRect()
+  const list = dock.querySelector('.queue-list')
+  const lr = list ? list.getBoundingClientRect() : null
+  const act = dock.querySelector('[data-queue-action="remove"]')
+  const ar = act ? act.getBoundingClientRect() : null
+  const actEl = ar ? document.elementFromPoint(Math.round(ar.left + ar.width / 2), Math.round(ar.top + ar.height / 2)) : null
+  const item = dock.querySelector('.queue-item')
+  const qr = item ? item.getBoundingClientRect() : null
+  const overflows = !!list && list.scrollHeight > list.clientHeight + 1
+  return {
+    missing: false,
+    dockVisible: r.height > 0 && r.width > 0,
+    rows: dock.querySelectorAll('.queue-item').length,
+    overflows,
+    listPointerEvents: list ? getComputedStyle(list).pointerEvents : '',
+    bandTop: at(r.left + r.width / 2, r.top + 3),
+    bandMid: at(r.left + r.width / 2, r.top + r.height / 2),
+    bandLeftEdge: at(r.left + 4, r.top + r.height / 2),
+    bandRightEdge: at(r.right - 4, r.top + r.height / 2),
+    itemLeftEdge: qr ? at(qr.left + 3, qr.top + qr.height / 2) : 'no-item',
+    listBottomPad: lr ? at(lr.left + lr.width / 2, lr.bottom - 2) : 'no-list',
+    actOwner: actEl ? ownerOf(actEl) : 'null',
+    actSelfHit: !!act && (!!actEl && (actEl === act || act.contains(actEl))),
+    messagesBottom: Math.round(box.getBoundingClientRect().bottom),
+    dockTop: Math.round(r.top),
+  }
+})()`
+
+const dockEditHitSnapshot = `(() => {
+  const dock = document.getElementById('queueDock')
+  const editBtn = dock && dock.querySelector('[data-queue-action="edit"]')
+  if (!editBtn) return { missing: true, reason: 'no edit button' }
+  editBtn.click()
+  return new Promise((resolve) => setTimeout(() => {
+    const boxEl = document.querySelector('[data-queue-edit-text]')
+    if (!boxEl) return resolve({ missing: true, reason: 'no edit box after click' })
+    const r = boxEl.getBoundingClientRect()
+    const el = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2))
+    resolve({
+      missing: false,
+      self: !!el && (el === boxEl || boxEl.contains(el)),
+      tag: el ? el.tagName.toLowerCase() + (el.className ? '.' + el.className : '') : 'null',
+    })
+  }, 140))
+})()`
+
+const todoPassthroughSnapshot = `(() => {
+  const dock = document.getElementById('todoDock')
+  const header = dock && dock.querySelector('.todo-header')
+  if (!dock || !header || !dock.offsetParent) return { missing: true }
+${OWNER_HELPER}
+  const hr = header.getBoundingClientRect()
+  const hel = document.elementFromPoint(Math.round(hr.left + hr.width / 2), Math.round(hr.top + hr.height / 2))
+  const headerOwner = ownerOf(hel)
+  if (!document.body.classList.contains('todo-expanded')) header.click()
+  return new Promise((resolve) => setTimeout(() => {
+    const item = dock.querySelector('.todo-item')
+    const target = item || dock.querySelector('.todo-list')
+    const out = {
+      missing: false,
+      headerSelfHit: !!hel && (hel === header || header.contains(hel)),
+      headerOwner,
+      expanded: document.body.classList.contains('todo-expanded'),
+      rowOwner: 'no-row',
+      rowPointerEvents: '',
+      dockBottom: Math.round(dock.getBoundingClientRect().bottom),
+    }
+    if (!target) return resolve(out)
+    const r = target.getBoundingClientRect()
+    out.rowOwner = at(r.left + 6, r.top + Math.min(r.height / 2, 8))
+    out.rowPointerEvents = getComputedStyle(target).pointerEvents
+    resolve(out)
+  }, 180))
+})()`
+
+
+async function scenarioDockPassthrough(host, port, failures) {
+  return withPage(port, host.origin, async (page) => {
+    await wait(900); // the stream snapshot paints the queue dock with the two canned rows
+    const snap = await page.evaluate(dockPassthroughSnapshot);
+    const no = (cond, msg) => { if (!cond) failures.push(`H(dock-passthrough): ${msg} — ${JSON.stringify(snap)}`); };
+    no(!snap.missing, 'queueDock or #messages missing from the DOM');
+    if (snap.missing) return snap;
+    no(snap.dockVisible && snap.rows >= 2, `non-vacuity: the dock must paint the canned rows, got ${JSON.stringify({ visible: snap.dockVisible, rows: snap.rows })}`);
+    no(snap.dockTop < snap.messagesBottom, 'the dock band must sit inside the transcript box (that is the reserved padding the user drags through)');
+    // Every sample below is dock CHROME — border, header strip, list padding, the left
+    // edge of a row. None of it has click semantics, so all of it must be transparent.
+    // When the list genuinely overflows it re-arms its own scrolling (inline style) and
+    // the two inner samples legitimately land on the dock — that case asserts the
+    // opposite: the list must be self-hittable so it can be dragged.
+    const chrome = ['bandTop', 'bandMid', 'bandLeftEdge', 'bandRightEdge', 'itemLeftEdge', 'listBottomPad'];
+    if (snap.overflows) {
+      no(snap.listPointerEvents === 'auto', `an overflowing queue-list must keep its own scroll, computed pointer-events=${JSON.stringify(snap.listPointerEvents)}`);
+    } else {
+      for (const key of chrome) {
+        no(!DOCK_LAYERS.includes(snap[key]), `${key} is still eaten by the dock layer (${snap[key]}): a vertical drag there can neither scroll the dock nor the transcript`);
+      }
+      no(snap.listPointerEvents === 'none', `a non-overflowing queue-list must stay transparent, computed pointer-events=${JSON.stringify(snap.listPointerEvents)}`);
+    }
+    no(snap.actSelfHit, `the × handle lost its own hit area (topmost=${snap.actOwner})`);
+    const edit = await page.evaluate(dockEditHitSnapshot);
+    const ne = (cond, msg) => { if (!cond) failures.push(`H2(queue-edit-hit): ${msg} — ${JSON.stringify(edit)}`); };
+    ne(!edit.missing, `the edit state is unreachable: ${edit.reason || 'unknown'}`);
+    if (!edit.missing) ne(edit.self, `the inline edit box is not hittable (topmost=${edit.tag})`);
+    return { snap, edit };
+  });
+}
+
+async function scenarioTodoPassthrough(host, port, failures) {
+  return withPage(port, host.origin, async (page) => {
+    await wait(900);
+    const snap = await page.evaluate(todoPassthroughSnapshot);
+    const no = (cond, msg) => { if (!cond) failures.push(`H3(todo-passthrough): ${msg} — ${JSON.stringify(snap)}`); };
+    no(!snap.missing, 'todoDock or its header missing from the DOM');
+    if (snap.missing) return snap;
+    no(snap.headerSelfHit, `the collapse header must keep its hit area (topmost=${snap.headerOwner})`);
+    no(snap.expanded, 'the scenario must run with the todo list expanded');
+    no(snap.rowOwner !== 'no-row', 'no todo row to probe — the expanded list painted nothing');
+    no(!DOCK_LAYERS.includes(snap.rowOwner), `a todo row is still eaten by the dock layer (${snap.rowOwner})`);
+    return snap;
+  });
+}
 // ----------------------------------------------------------------------- main
 
 async function main() {
@@ -795,6 +967,7 @@ async function main() {
       report.scenarios.push(await scenarioBanner(plain, CDP_PORT, failures));
       report.scenarios.push(await scenarioQueue(plain, CDP_PORT, failures));
       report.scenarios.push(await scenarioNoticeDismiss(plain, CDP_PORT, failures));
+      report.scenarios.push(await scenarioDockPassthrough(plain, CDP_PORT, failures));
     } finally {
       await plain.close();
     }
@@ -807,6 +980,7 @@ async function main() {
     try {
       report.scenarios.push(await scenarioBannerTodo(todoHost, CDP_PORT, failures));
       report.scenarios.push(await scenarioNoticeBand(todoHost, CDP_PORT, failures));
+      report.scenarios.push(await scenarioTodoPassthrough(todoHost, CDP_PORT, failures));
     } finally {
       await todoHost.close();
     }
@@ -840,7 +1014,7 @@ async function main() {
     for (const line of failures) console.log(`  - ${line}`);
     return 1;
   }
-  console.log('GEOMETRY PASS: banner/edit-box/queue-list/todo-dock/notice/scroll-follow hold their geometry at 390x844');
+  console.log('GEOMETRY PASS: banner/edit-box/queue-list/todo-dock/notice/scroll-follow/dock-passthrough hold their geometry at 390x844');
   return 0;
 }
 

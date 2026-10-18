@@ -404,7 +404,7 @@ test('AC-UI1 every control the audit measured small now clears the 44px floor', 
   const raised = [
     '.head-icon{flex:none;display:grid;place-items:center;width:44px;height:44px;',
     '.settings-close{display:grid;place-items:center;width:44px;height:44px;',
-    '.question-close{width:44px;height:44px;',
+    '.question-close,.question-toggle{width:44px;height:44px;',
     '.back{display:grid;place-items:center;flex:none;width:44px;height:44px;',
     '.plus-trigger{display:grid;place-items:center;width:44px;min-width:44px;height:44px;',
     '.settings-trigger{display:grid;place-items:center;width:44px;min-width:44px;height:44px;',
@@ -967,7 +967,24 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   预算不放宽——先瘦 14 KB 再动；本次收紧到 348 000 只给这一笔记账（余量 ~1.1 KB）。
 //   肥肉清单（实算）：三份 locale 文案表重复（中文串 + 英文串 + 判定式三遍，约 12 KB）、
 //   千份 .as 样式串（约 10 KB）——属独立瘦身任务，不在文案批里做。
-const ASSET_BUDGET_BYTES = 348_000
+// 2026-10-18 方案C：重连/等待页与首屏加载壳双端贯通文艺就绪视觉（用户「C吧？都改下」）：
+//   增加首屏加载占位 .ws-splash（爱丽丝台词与就绪提示）。实测 zh 348 222（css 52 195 + js 296 027）/ en 348 122，
+//   净 +250 B。取 349 000（余量 ~778 B）。
+// 2026-10-18 子代理状态链（m00002/m00053）：多层 descendantRunning 聚合 + 页面 unknown
+//   态/补拉全量子行/CSS 三条（running dot 脉冲、is-unknown dot、.subagent-rows 禁横拖）。
+//   实测 zh 351 264（css 52 607 + js 298 657）/ en 351 163，相对上一条基线净 +3 042 B
+//   （css +412 / js +2 630）。取 352 000（余量 ~736 B）。
+// 2026-10-18 子代理胶囊排版裁剪修复 + 只读视图独立悬浮停止按钮（方案一）：
+//   .subagent-rows 单列隐式轨道约束、.subagent-row 溢出隐藏与右对齐；
+//   新增 #subagentCancel 44px 悬浮停止按钮（.subagent-stop）、停止状态联动与消息区底部避让。
+//   实测 zh 352 550（css 53 012 + js 299 538）/ en 352 447，净 +1 286 B。取 354 000（余量 ~1 450 B）。
+// 2026-10-19 提问弹窗可收起（用户 m02235「回答问题那个弹窗不能往下…缺个下拉或者隐藏的按钮」）：
+//   新增 .question-toggle 44px 收起钮（与 .question-close 共用圆钮规则）+ .question-chevron 收起态翻转 +
+//   收起态隐藏 body/actions/error 三条 CSS、body.question-collapsed 的 messages 底部避让、页面状态
+//   questionCollapsed 与 handler 的 collapse 分支（不落答案、不取消提问）、一条文案键 questionCollapse。
+//   实测 zh 354 860（css 53 521 + js 301 339）/ en 354 777，相对上一条基线（zh 353 876 / en 353 788，
+//   BUG-5 指针穿透补丁之后）净 +984 B（css +389 / js +595）。取 356 000（余量 ~1.1 KB）。
+const ASSET_BUDGET_BYTES = 356_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

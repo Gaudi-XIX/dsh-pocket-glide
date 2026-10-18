@@ -7,8 +7,9 @@
 //   3. over-long lines are clipped with an ellipsis, whitespace flattened;
 //   4. the time handed to the row clock is the last text record's own stamp,
 //      0 when absent — sortAtOf must not invent a timestamp;
-//   5. the fetch is judged on updatedAt: unchanged rows and running rows are
-//      never pulled, and one batch is in flight per id at most.
+//   5. the fetch is judged on updatedAt: unchanged rows are never pulled, a RUNNING
+//      row is pulled too (the pack is there for the tap that opens it — 2026-10-19),
+//      and one batch is in flight per id at most.
 //   6. 2026-10-14 (m02164①): this is a PREFETCH ONLY — the landing row paints
 //      title/clock/state and no message text. The first version rendered the
 //      tail into the row and the user rejected it outright:「我要你做的是，在
@@ -172,13 +173,13 @@ const listSandbox = ({ state = {}, rpcImpl }) => {
   }))
 }
 
-test('rows whose stamp did not move and rows still running are never pulled', async () => {
+test('rows whose stamp did not move are never pulled, and a running row is pulled too', async () => {
   const asked = []
   const state = { rows: [{ sessionId: 'a', updatedAt: 10 }, { sessionId: 'b', updatedAt: 20, state: 'running' }, { sessionId: 'c', updatedAt: 30 }], visible: ['a', 'b', 'c', 'ghost'] }
   const box = listSandbox({ state, rpcImpl: async (method, payload) => { asked.push(payload.sessions.slice()); return { tails: {} } } })
   box.tailArmedAt.a = 10 // already fetched at this exact stamp
   await box.requestVisibleTails()
-  assert.deepEqual(asked[0], ['c'], 'unchanged row, running row and a row with no summary are all skipped')
+  assert.deepEqual(asked[0], ['b', 'c'], 'unchanged row and a row with no summary are skipped; a running row is pulled too')
 })
 
 test('an active transcript stops the prefetch, and a batch is in flight once per id', async () => {
@@ -335,7 +336,7 @@ test('the batch is prefetch only: no tail line in the row, no re-render after it
 // 读一个会话时，别的会话刚跑完也要被预载（用户：「在读的时候，如果其他会话已经结束了，
 // 那就应该把它加载进来」）。behindChat 是这条静默档的通行证：主页档照旧被 activeSession
 // 挡住（不能隔着聊天页重画列表），静默档只补首屏行的包，且正在读的那一行不敲（流是真相源）。
-test('requestVisibleTails is blocked inside a chat and prefetches unrunning visible rows on landing', async () => {
+test('requestVisibleTails is blocked inside a chat and prefetches visible rows on landing (running included)', async () => {
   const askedChat = []
   const stateChat = {
     activeSession: 'b',
@@ -354,7 +355,7 @@ test('requestVisibleTails is blocked inside a chat and prefetches unrunning visi
   }
   const boxLanding = listSandbox({ state: stateLanding, rpcImpl: async (method, payload) => { askedLanding.push(payload.sessions.slice()); return { tails: {} } } })
   await boxLanding.requestVisibleTails()
-  assert.deepEqual(askedLanding[0], ['a', 'b'], 'on landing, all visible unrunning rows without stamps are prefetched')
+  assert.deepEqual(askedLanding[0], ['a', 'b', 'c'], 'on landing every visible row without a stamp is prefetched, running included')
 })
 
 // 首屏判据不在这里——折叠区的行压根不进 #workspaces 的 DOM（renderWorkspaces 的 cap），

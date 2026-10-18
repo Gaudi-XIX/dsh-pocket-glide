@@ -15,11 +15,17 @@
 // 上面那句「唯一入口」的命题只由 handler + advanceQuestion + submitQuestionAnswers 决定。
 // 而真实按钮条的**结构**由最后一条断言打在渲染源文本上（skip 与 continue 直接相邻），
 // 因为误点的物理可能性是这件事的另一半，不能只靠读码口头承认。
+//
+// 2026-10-19 追加命题三（用户 m02235「回答问题那个弹窗不能往下…缺个下拉或者隐藏的按钮」）：
+// 提问卡此前只有 ×（= 取消这次提问）一条出路，没有「收起来看会话」的非破坏性选项。本文件新增
+// 收起钮的契约：收起只改本页折叠状态，既不落答案也不取消（P-13/P-13b），控件落在标题行、
+// 不进「跳过/提交」那一行（P-14），且它在 HEAD 上不存在（RED）。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { mobilePageAssets } from '../lib/pages.js'
 
-const { js } = mobilePageAssets({ locale: 'zh' })
+const { css, js } = mobilePageAssets({ locale: 'zh' })
 
 // The page's OWN label table, so every copy asserted below is what the phone renders
 // (house pattern from error-visibility.test.js — a hand-copied table drifts).
@@ -51,7 +57,7 @@ const KEYDOWN = slice(js, "$('questionComposer').onkeydown=", "document.addEvent
 // The page-level state every one of those organs reads or writes. Names and initial values
 // are copied from the page's own declaration line so the sandbox cannot drift from it.
 const STATE = `
-    let pendingQuestion=null,questionIndex=0,questionDrafts={},questionBusy=false
+    let questionCollapsed=false,pendingQuestion=null,questionIndex=0,questionDrafts={},questionBusy=false
     let activeSession='s1',lastHistoryKey='kept',agentRunning=false
 `
 
@@ -111,6 +117,7 @@ function build(setup) {
     return { handler, keydown, sync: syncPendingQuestion, advance: advanceQuestion, draft: questionDraft, sent,
       get busy(){return questionBusy}, get index(){return questionIndex}, get drafts(){return questionDrafts},
       get error(){return box.questionError.textContent}, get lastKey(){return lastHistoryKey},
+      get collapsed(){return questionCollapsed},
     };
     `
   )
@@ -273,4 +280,69 @@ test('P-10 nothing in the page settles a batch from a timer or a stream frame', 
     .map((m) => js.slice(Math.max(0, m.index - 120), m.index))
     .filter((back) => /setTimeout\(|setInterval\(|addEventListener\(/.test(back))
   assert.deepEqual(driven, [], 'no submit call site may sit behind a timer or a listener')
+})
+
+// -------------------------- 命题三：收起是给会话让路，不是作答，也不是取消（2026-10-19，用户 m02235）
+
+test('P-13 collapsing the sheet settles nothing and cancels nothing; tapping again restores it', () => {
+  // 报障：提问卡占着整个输入区，想把它拉下去看会话，界面上却只有 × —— 那是 cancelQuestionRequest，
+  // 真的取消这次提问（agent 拿不到答案）。收起钮走第三条路：只改本页折叠状态，批次仍在待答。
+  const page = build({ ...ONE })
+  assert.equal(page.collapsed, false, 'the sheet starts expanded')
+  page.handler({ target: target('collapse') })
+  assert.equal(page.collapsed, true, 'the first tap collapses the sheet')
+  assert.equal(answersSent(page).length, 0, 'collapsing never answers the batch')
+  assert.equal(page.sent.filter((s) => s.method === 'interaction.cancel').length, 0, 'and never cancels it')
+  assert.equal(page.index, 0, 'the question the operator was reading stays the current one')
+  page.handler({ target: target('collapse') })
+  assert.equal(page.collapsed, false, 'the second tap brings it back')
+  assert.equal(answersSent(page).length, 0, 'and still settles nothing')
+})
+
+test('P-13b a collapsed sheet still answers when the operator comes back to it', () => {
+  const page = build({ ...ONE })
+  page.handler({ target: target('collapse') })
+  page.handler({ target: target(null, 1) })
+  page.handler({ target: target('continue') })
+  const sent = answersSent(page)
+  assert.equal(sent.length, 1, 'the batch settles once, from the collapsed state')
+  assert.deepEqual(sent[0].payload.answers, [{ id: 'final', selected: ['不对，我要改'] }])
+})
+
+test('P-14 the toggle sits in the header, so the skip/submit cluster is untouched', () => {
+  const shellAt = js.indexOf('<div class="question-shell')
+  const barAt = js.indexOf('<div class="question-actions">')
+  const toggleAt = js.indexOf('data-question-action="collapse"')
+  assert.ok(shellAt >= 0 && toggleAt > shellAt && toggleAt < barAt, 'the toggle renders above the action bar')
+  // P-9 的全部意义就是「跳过挨着提交」在这一行的右端；往那一行再加控件等于把这条误点重新打开。
+  assert.equal(js.slice(barAt, barAt + 700).includes('collapse'), false, 'the action bar gains no control')
+  const collapseBranch = js.indexOf("if(action==='collapse')")
+  assert.ok(collapseBranch >= 0 && collapseBranch < js.indexOf("if(action==='continue')"),
+    'the collapse branch is decided before any settling branch')
+  assert.match(css, /\.question-shell\.is-collapsed \.question-actions\{display:none\}/,
+    'what collapses is the answer surface')
+  assert.match(css, /body\.question-open\.question-collapsed \.messages\{padding-bottom/,
+    'and the transcript gets its room back while collapsed')
+  // 这一条不是风格洁癖：首版补丁把 84px 写死在这里，直接撞红 pages-render-fixes.test.js:127
+  // ——「写死的 composer 带（84px + env）必须保持被清扫」。提问卡收起后的净空只能由页面
+  // 自己量出来（同 syncTodoHeight/syncQueueHeight 的 --todo-h/--queue-h 协议）。
+  assert.match(css, /body\.question-open\.question-collapsed \.messages\{padding-bottom:var\(--question-h/,
+    'the room it gives back is the measured band, never a hardcoded height')
+  assert.doesNotMatch(css, /calc\(84px \+ env\(safe-area-inset-bottom\)/,
+    'the swept hardcoded composer band must stay swept')
+  assert.match(js, /setProperty\('--question-h',host\.offsetHeight/,
+    'and the page measures that band itself, at render time')
+  // 独立复核（2026-10-19，task-5）的 M5 变异存活：删掉空态早退里的 questionCollapsed=false
+  // 时 16 条全绿——「关掉提问即复位折叠态」当时无钉。缺了它，下一张卡会以「收起态」开场
+  // （作答面 hidden，只剩标题行的展开钮），用户会以为卡片坏了。
+  assert.match(js, /if\(!pendingQuestion\|\|!pendingQuestion\.questions\?\.length\)\{questionCollapsed=false;/,
+    'closing the question resets the collapsed state for the next card')
+})
+
+test('RED the collapse affordance does not exist on the committed page source', () => {
+  // 红先：这条在 HEAD 上必须失败，否则它证明不了本次修的是它（house pattern，同
+  // test/pages-render-fixes.test.js 的 RED 用例）。
+  const head = execFileSync('git', ['show', 'HEAD:lib/pages.js'], { cwd: 'F:/defws/dsh-pocket', maxBuffer: 1e8 }).toString()
+  assert.equal(head.includes('data-question-action="collapse"'), false, 'HEAD has no collapse control')
+  assert.equal(head.includes('questionCollapsed'), false, 'HEAD has no collapsed state')
 })
