@@ -128,8 +128,8 @@ test('E the landing poll re-arms itself and reads through resumeOnReturn, quietl
   const poller = sliceTo('function stopListPoll()', 'function showToast')
   assert.match(
     poller,
-    /listPoll=setTimeout\(\(\)=>\{listPoll=null;if\(document\.hidden\)return;if\(activeSession&&!draftWorkspaceId\)\{void quietListRefreshBehindChat\(\)\.finally\(startListPoll\);return\}if\(draftWorkspaceId\)return;void resumeOnReturn\(true\)\.finally\(startListPoll\)\},LIST_POLL_MS\)/,
-    'one tick re-arms the next; a hidden tab or an open draft stops the chain, and an open chat switches it to the quiet档 instead of killing it (m02327②) — no second timer',
+    /listPoll=setTimeout\(\(\)=>\{listPoll=null;if\(document\.hidden\|\|activeSession\|\|draftWorkspaceId\)return;void resumeOnReturn\(true\)\.finally\(startListPoll\)\},LIST_POLL_MS\)/,
+    'one tick re-arms the next; an open chat, draft or hidden tab stops the chain — no background treadmill',
   )
   assert.match(
     js,

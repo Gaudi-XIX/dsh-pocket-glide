@@ -164,7 +164,7 @@ const listSandbox = ({ state = {}, rpcImpl }) => {
     const sessionSummaries=${JSON.stringify(state.rows ?? [])}
     ${body}
     return {
-      requestVisibleTails: (behindChat) => requestVisibleTails(fakeHost(), behindChat),
+      requestVisibleTails: () => requestVisibleTails(fakeHost()),
       tailArmedAt, tailPending, tailCache, tailFailed, sessionSummaries
     }
   `)(rpcImpl, (s) => s.state || '', (...a) => { state.stamps = state.stamps || []; state.stamps.push(a) }, () => { state.paints = (state.paints || 0) + 1 }, () => ({
@@ -335,24 +335,32 @@ test('the batch is prefetch only: no tail line in the row, no re-render after it
 // 读一个会话时，别的会话刚跑完也要被预载（用户：「在读的时候，如果其他会话已经结束了，
 // 那就应该把它加载进来」）。behindChat 是这条静默档的通行证：主页档照旧被 activeSession
 // 挡住（不能隔着聊天页重画列表），静默档只补首屏行的包，且正在读的那一行不敲（流是真相源）。
-test('a quiet refresh behind an open chat still prefetches the other first-screen rows', async () => {
-  const asked = []
-  const state = {
+test('requestVisibleTails is blocked inside a chat and prefetches unrunning visible rows on landing', async () => {
+  const askedChat = []
+  const stateChat = {
     activeSession: 'b',
     rows: [{ sessionId: 'a', updatedAt: 10 }, { sessionId: 'b', updatedAt: 20 }, { sessionId: 'c', updatedAt: 30, state: 'running' }],
     visible: ['a', 'b', 'c'],
   }
-  const box = listSandbox({ state, rpcImpl: async (method, payload) => { asked.push(payload.sessions.slice()); return { tails: {} } } })
-  await box.requestVisibleTails()
-  assert.equal(asked.length, 0, 'the landing档 stays blocked inside a chat — only the quiet档 passes')
-  await box.requestVisibleTails(true)
-  assert.deepEqual(asked[0], ['a'], 'the row being read is left to its stream, a running row is never pulled')
+  const boxChat = listSandbox({ state: stateChat, rpcImpl: async (method, payload) => { askedChat.push(payload.sessions.slice()); return { tails: {} } } })
+  await boxChat.requestVisibleTails()
+  assert.equal(askedChat.length, 0, 'the landing档 stays blocked inside a chat')
+
+  const askedLanding = []
+  const stateLanding = {
+    activeSession: null,
+    rows: [{ sessionId: 'a', updatedAt: 10 }, { sessionId: 'b', updatedAt: 20 }, { sessionId: 'c', updatedAt: 30, state: 'running' }],
+    visible: ['a', 'b', 'c'],
+  }
+  const boxLanding = listSandbox({ state: stateLanding, rpcImpl: async (method, payload) => { askedLanding.push(payload.sessions.slice()); return { tails: {} } } })
+  await boxLanding.requestVisibleTails()
+  assert.deepEqual(askedLanding[0], ['a', 'b'], 'on landing, all visible unrunning rows without stamps are prefetched')
 })
 
 // 首屏判据不在这里——折叠区的行压根不进 #workspaces 的 DOM（renderWorkspaces 的 cap），
 // querySelectorAll 拿不到，就永远不预载（m02327①：「只要是被首屏折叠的会话，逻辑就固定为
 // 不加载，都是点进去再加载」）。沙盒的 visible 列表就是那份 DOM。
-test('the quiet chain is judged on the wiring, not on memory', () => {
+test('the landing poll and instant paint are judged on the wiring, not on memory', () => {
   const js = assets.zh.js
   const tailPaint = extractFunction(js, 'paintInstantSession')
   // 预载包画出后必须盖 at 戳（判据②「有最终答案就显示最后一条」的落地）：旧写法不盖章，
@@ -361,17 +369,12 @@ test('the quiet chain is judged on the wiring, not on memory', () => {
   // 返回主页的交接 stash 也补了 at（判据：返回列表再进来同样免全量）。
   const leaving = js.slice(js.indexOf('async function showSessionList(){'), js.indexOf('function paintInstantHistory'))
   assert.match(leaving, /streamEvents,olderEvents,olderHasMore,olderExhausted,streamProjections,at:Date\.now\(\)\}\)/, 'the back-to-list handover stamps its snapshot')
-  // 60s 一条链（m02338：不新增第二个轮询）：会话页时走静默档，链不断；列表页时走原档。
+  assert.match(leaving, /void resumeOnReturn\(true\);startListPoll\(\)\}/, 'back to the list refreshes quietly and arms the clock as its last statement')
+  // 方案B：会话页不跑后台轮询（防宿主30s超时与断联），返回主页由 showSessionList 按需对齐
   const poll = extractFunction(js, 'startListPoll')
-  assert.match(poll, /void quietListRefreshBehindChat\(\)\.finally\(startListPoll\)/, 'the chat档 keeps the SAME listPoll chain alive via the quiet refresh')
-  assert.match(poll, /if\(document\.hidden\)return;/, 'a hidden tab still stops the chain — no background treadmill')
-  const quiet = extractFunction(js, 'quietListRefreshBehindChat')
-  assert.match(quiet, /await loadListData\(\);renderWorkspaces\(\);requestVisibleTails\(\$\('workspaces'\),true\)/, 'quiet档 = fingerprint-deduped list read + hidden-DOM repaint + first-screen packs, nothing else')
-  assert.doesNotMatch(quiet, /resumeOnReturn|beginListGlow|showError/, 'the quiet档 never touches the reader-visible path')
-  // openSession 进门后重挂链（旧写法 stopListPoll 之后就断了，读半小时外面一条都不预载）。
+  assert.match(poll, /if\(document\.hidden\|\|activeSession\|\|draftWorkspaceId\)return;/, 'an open chat, draft or hidden tab stops the poll — no background treadmill')
+  assert.match(poll, /void resumeOnReturn\(true\)\.finally\(startListPoll\)/, 'landing poll re-arms itself through resumeOnReturn')
+  // openSession 进门后停止主页轮询
   const opening = extractFunction(js, 'openSession')
-  assert.match(opening, /stopListPoll\(\)/, 'the entry still resets the clock — one chain, not two')
-  assert.match(opening, /startListPoll\(\)/, 'and re-arms it for the read-while-warm档 (m02327②)')
-  // 切回前台时会话页也重挂（旧写法会话档直接不 startListPoll，链就死在那次 hidden）。
-  assert.match(js, /if\(activeSession\)\{void loadHistory\(false\);startListPoll\(\)\}/, 'visible again inside a chat re-arms the list chain')
+  assert.match(opening, /stopListPoll\(\)/, 'the entry stops list poll during chat')
 })
