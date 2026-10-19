@@ -4,6 +4,13 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.4.52 — 2026-10-19
+
+**刷新按钮在「手机已连上」时不再静默失效**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面。2026-10-19 重启后实测发现 0.4.51 的强制重建仍被一层页面门拦住：`switchMode` 首句 `if(phoneConnected||modeSwitching)return`——手机在线时点「刷新」静默无操作，桥侧 `force` 日志（`tunnel rebuilt on desktop refresh`）命中为 0，即原始报障「点刷新链接二维码都不刷新」在连接态下的完整成因。桥侧 force 重建本就允许把在线手机 park 掉而非拒绝（同隧道意外死亡处置），页面这一层与服务端口径不符，按「服务端已允许的，页面不得自行再加一层」删去）。
+
+- **force 豁免连接态早退**：`switchMode(enableTunnel,force)` 首句改为 `if(modeSwitching||(!force&&phoneConnected))return`——普通切模式在连接态仍照旧拒绝（2026-10-12 裁定的风险口径不变），但桌面刷新按钮的强制重建放行；桥侧 park 手机会话（不登出），手机拿新链接重配即可。
+- **回归锁**：`test/desktop-connected-unlocked.test.js` D 例的源码锚点同步为新守卫；`test/queue-steer-refresh-20261019.test.js` ① 例加两条断言（普通切换仍被连接态拦、旧守卫写法不残留）。全量 **1314 tests / 1312 pass / 0 fail / 2 skipped**。
+
 ## 0.4.51 — 2026-10-19
 
 **刷新按钮＝强制重建公网隧道 ＋ 排队消息即时上屏与按写入时间复位落位**（⏳ 待重启生效：`lib/bridge.js` 与 `lib/pages.js` 都属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算的 zh `pocket-bab0c067b098` / en `pocket-1f45ea709999`。用户 2026-10-19 三项报障，裁定「改成强制重建」「修复」「刚刚给你发的图片就是证据」）。

@@ -125,6 +125,10 @@ test('① refresh button: tunnel mode rebuilds, LAN mode still rotates the pairi
   const switchMode = extractFunction(PAGES_SOURCE, 'switchMode')
   assert.match(switchMode, /if\(!force&&selectedTunnelTab===enableTunnel&&tunnelActive===enableTunnel\)return;/,
     'and the same-tab early return does not block a forced rebuild')
+  assert.match(switchMode, /if\(modeSwitching\|\|\(!force&&phoneConnected\)\)return;/,
+    'a live phone still blocks a plain mode switch')
+  assert.ok(!/if\(phoneConnected\|\|modeSwitching\)return/.test(switchMode),
+    'but not a forced rebuild — the bridge parks the handset instead')
   assert.match(switchMode, /body:JSON\.stringify\(force\?\{enable:enableTunnel,force:true\}:\{enable:enableTunnel\}\)/,
     'force travels to the bridge')
 })
