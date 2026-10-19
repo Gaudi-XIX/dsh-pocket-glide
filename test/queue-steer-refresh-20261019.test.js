@@ -162,6 +162,12 @@ function assistantEvent(seq, time, turn, step, text) {
   return { event: { seq, time, type: 'assistant/message', data: { turn, step, message: { content: [{ type: 'text', text }] } } } }
 }
 
+// A tool call turns into the stamp-less process card the phone draws as
+// 「正在运行命令」 — the row that blocked the 2026-10-20 report.
+function toolEvent(seq, turn, step, callId, name) {
+  return { event: { seq, type: 'tool/call', data: { turn, step, callId, name, arguments: {} } } }
+}
+
 function buildSandbox() {
   const { js } = mobilePageAssets({ locale: 'zh' })
   const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime']
@@ -207,7 +213,7 @@ test('③ normal transcripts are untouched: rising clocks keep their seq order',
   assert.deepEqual(rendered.map((m) => m._seq), [1, 2, 3])
 })
 
-test('③ a row with no clock is a wall: nothing is moved past it', () => {
+test('③ a stamp-less row above is transparent, not a wall', () => {
   const sandbox = buildSandbox()
   sandbox.setStream([
     userEvent(1, 1_000, '第一条'),
@@ -215,8 +221,38 @@ test('③ a row with no clock is a wall: nothing is moved past it', () => {
     userEvent(3, 1_500, '排队的一条'),
   ])
   const rendered = sandbox.render()
-  assert.deepEqual(rendered.map((m) => m.role), ['user', 'assistant', 'user'],
-    'without a stamp above it there is no evidence to reorder on')
+  assert.deepEqual(rendered.map((m) => m._seq), [1, 3, 2],
+    'the bubble walks over the stamp-less row and anchors under the oldest stamped one')
+})
+
+test('③ with no stamp anywhere above there is nothing to reorder on: seq order stands', () => {
+  const sandbox = buildSandbox()
+  sandbox.setStream([
+    assistantEvent(1, undefined, 1, 1, '没有时间戳的回答'),
+    toolEvent(2, 2, 1, 'call-1', 'run_command'),
+    userEvent(3, 1_500, '排队的一条'),
+  ])
+  const rendered = sandbox.render()
+  assert.deepEqual(rendered.map((m) => m._seq), [1, 2, 3],
+    'absence of every clock is not evidence, so the bubble keeps the seq order')
+})
+
+// The 2026-10-19 fix made stamp-less rows walls, and the report came straight
+// back (2026-10-20 06:05 bubble under the 06:13 reply): the running turn's
+// process card sits between the two, so the bubble never got past it. This is
+// that transcript, byte for byte.
+test('③ a running turn process card does not wall the bubble in (2026-10-20 report)', () => {
+  const sandbox = buildSandbox()
+  sandbox.setStream([
+    userEvent(1, 1_000, '早先的一条'),
+    assistantEvent(2, 4_000, 1, 1, 'shows 25 failures, not the same reason as before.'),
+    toolEvent(3, 2, 1, 'call-1', 'run_command'),
+    userEvent(4, 1_500, '第二个也是显示的问题'),
+  ])
+  const rendered = sandbox.render()
+  assert.deepEqual(rendered.map((m) => m.role), ['user', 'user', 'assistant', 'assistant'])
+  assert.deepEqual(rendered.map((m) => m._seq), [1, 4, 2, 3],
+    'the 06:05 bubble lands above the 06:13 answer; the answer keeps its process card under it')
 })
 
 test('③ a user bubble without a stamp is never moved', () => {
