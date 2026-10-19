@@ -230,3 +230,84 @@ test('an empty session list ships an empty boot list and no focus', async () => 
   assert.equal('focus' in payload, false, 'no focus field ships at all')
   assert.deepEqual(payload.sess.items, [])
 })
+
+test('buildMobileBoot includes tails for visible rows', async () => {
+  const now = Date.now()
+  const bridge = makeBridge({
+    items: [
+      { sessionId: 's1', updatedAt: now - 1000, projections: { asOfSeq: 5 } },
+      { sessionId: 's2', updatedAt: now - 2000, projections: { asOfSeq: 8 } }
+    ],
+    invokeHarness: async (endpoint, args) => {
+      if (endpoint === 'session/page') {
+        const id = args.request.address.sessionId
+        return {
+          ok: true,
+          value: {
+            records: [
+              { seq: 1, type: 'assistant/message', data: { message: { content: [{ kind: 'text', text: `tail for ${id}` }] } } }
+            ]
+          }
+        }
+      }
+      return { ok: false }
+    }
+  })
+  const payload = await bridge.buildMobileBoot()
+  assert.ok(payload.tails, 'boot payload must include tails')
+  assert.ok(payload.tails.s1, 'tail for visible session s1 must be included')
+  assert.ok(payload.tails.s2, 'tail for visible session s2 must be included')
+  assert.equal(payload.tails.s1.events.length, 1)
+})
+
+test('buildMobileBoot skips subagent rows from boot tail fetch', async () => {
+  const now = Date.now()
+  let pageCalledForSubagent = false
+  const bridge = makeBridge({
+    items: [
+      { sessionId: 's1', updatedAt: now - 1000, projections: { asOfSeq: 5 } },
+      { sessionId: 'sub1', origin: 'subagent', updatedAt: now - 500, projections: { asOfSeq: 3 } }
+    ],
+    invokeHarness: async (endpoint, args) => {
+      if (endpoint === 'session/page') {
+        const id = args.request.address.sessionId
+        if (id === 'sub1') pageCalledForSubagent = true
+        return {
+          ok: true,
+          value: { records: [{ seq: 1, type: 'assistant/message', data: { message: { content: [{ kind: 'text', text: 'ok' }] } } }] }
+        }
+      }
+      return { ok: false }
+    }
+  })
+  const payload = await bridge.buildMobileBoot()
+  assert.equal(pageCalledForSubagent, false, 'subagent session must not trigger session/page RPC')
+  assert.ok(payload.tails.s1, 'visible row s1 is still fetched')
+})
+
+test('collectSessionTails hits memory cache on repeated calls without RPC', async () => {
+  const now = Date.now()
+  let rpcCount = 0
+  const bridge = makeBridge({
+    items: [{ sessionId: 's1', updatedAt: now - 1000, projections: { asOfSeq: 5 } }],
+    invokeHarness: async (endpoint) => {
+      if (endpoint === 'session/page') {
+        rpcCount++
+        return {
+          ok: true,
+          value: { records: [{ seq: 1, type: 'assistant/message', data: { message: { content: [{ kind: 'text', text: 'hi' }] } } }] }
+        }
+      }
+      return { ok: false }
+    }
+  })
+  const byId = new Map([['s1', { sessionId: 's1', updatedAt: now - 1000, projections: { asOfSeq: 5 } }]])
+  const tails1 = await bridge.collectSessionTails(['s1'], byId)
+  assert.equal(rpcCount, 1)
+  assert.equal(tails1.s1.events.length, 1)
+
+  // Second call with same state should hit cache
+  const tails2 = await bridge.collectSessionTails(['s1'], byId)
+  assert.equal(rpcCount, 1, 'repeated call must hit cache without additional RPC')
+  assert.equal(tails2.s1.events.length, 1)
+})

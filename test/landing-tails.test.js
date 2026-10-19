@@ -379,3 +379,41 @@ test('the landing poll and instant paint are judged on the wiring, not on memory
   const opening = extractFunction(js, 'openSession')
   assert.match(opening, /stopListPoll\(\)/, 'the entry stops list poll during chat')
 })
+
+test('applyBootTails populates tailCache and marks tailArmedAt from boot payload', () => {
+  const js = assets.zh.js
+  const body = [
+    extractFunction(js, 'eventSeq'),
+    extractFunction(js, 'contentBlocks'),
+    extractFunction(js, 'extractTail'),
+    extractFunction(js, 'tailPack'),
+    extractFunction(js, 'applyBootTails'),
+  ].join('\n')
+  const fn = new Function(
+    'tails',
+    `const tailCache = new Map(), tailArmedAt = {}, tailFailed = {}, TAIL_PACK_MAX = ${packMaxOf()}, TAIL_CACHE_MAX = ${cacheMaxOf()}, TAIL_TEXT_LIMIT = ${limitOf()};
+     function noteSessionMessageAt(id, time) {}
+     ${body}
+     applyBootTails(tails);
+     return { tailCache, tailArmedAt, tailFailed };`
+  )
+  const mockEvents = [
+    { seq: 1, type: 'user/message', data: { message: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Hello' }] } } },
+    { seq: 2, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'World' }] } } }
+  ]
+  const res = fn({
+    s1: { updatedAt: 123456, events: mockEvents },
+    s2: { error: 'no-cursor' }
+  })
+  assert.equal(res.tailCache.has('s1'), true)
+  assert.equal(res.tailCache.get('s1').text, 'World')
+  assert.equal(res.tailCache.get('s1').pack.length, 2)
+  assert.equal(res.tailArmedAt['s1'], 123456)
+  assert.equal(res.tailCache.has('s2'), false)
+})
+
+test('applyBootData wires boot.tails into tailCache', () => {
+  const js = assets.zh.js
+  const bootData = extractFunction(js, 'applyBootData')
+  assert.match(bootData, /if\(b\.tails\)applyBootTails\(b\.tails\)/, 'applyBootData forwards b.tails to applyBootTails')
+})

@@ -1001,10 +1001,13 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   新增 rpcUpload（XHR 才有 upload.onprogress）并加 45 s 静默看门狗；乐观气泡的计数串
 //   从第二段 text 改成 attachment-summary 块按 chips 数组逐个 span 渲染（.draft-chip），
 //   draftSummary 由「join 成串」改为「返回数组」，删掉不再使用的 draftJoin 标签。
-//   实测 zh 363 564（css 55 010 + js 308 554）/ en 363 482（css 55 010 + js 308 472），
-//   相对上一条基线（zh 357 070 / en 356 987）净 +6 494 B（css +1 506 / js +4 988）。
-//   取 365 000（余量 ~1 436 B）。
-const ASSET_BUDGET_BYTES = 365_000
+//   实测 zh 364 115（css 55 010 + js 309 105）/ en 364 033（css 55 010 + js 309 023），
+//   相对上一条基线（zh 357 070 / en 356 987）净 +7 045 B（css +1 506 / js +5 539）。
+//   取 365 000（余量 ~885 B）。
+// 2026-10-19 页面跳跃治理与全量首屏尾包预载（R1 离开跟随带不再拽回 + R2 移除重复贴底 + boot.tails 全量装载）：
+//   实测 zh 365 325（css 55 056 + js 310 269）/ en 365 243，
+//   相对上一条基线净 +1 210 B。取 367 000（余量 ~1.6 KB）。
+const ASSET_BUDGET_BYTES = 367_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

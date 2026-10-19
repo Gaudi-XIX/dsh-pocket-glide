@@ -20,7 +20,7 @@ import {
 // same five stage functions. They now pull one block from `sharedStageScript()`,
 // so every organ below must exist exactly once in the source and once per page.
 const SHARED_ORGANS = [
-  'const STEP_DWELL_MS=180,FETCH_TIMEOUT_MS=10000;',
+  'const STEP_DWELL_MS=800,FETCH_TIMEOUT_MS=10000;',
   'function withTimeout(promise,ms){',
   'function pinError(message){',
   'const rpc=async(method,payload={})=>{',
