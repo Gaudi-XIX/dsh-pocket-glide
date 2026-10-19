@@ -4,7 +4,52 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
-## 未发布（工作树）
+## 0.4.50 — 2026-10-19
+
+> 本节原先是 `## 未发布（工作树）`，一次性收录了 `0.4.48`～`0.4.50` 三批的条目：前两版随 commit 发布
+> （`0b55fc5`、`353a4ab`）但没单列节，条目一直挂在这里没丢；本次随六 bug 批正式提位并封节。
+> 条目里标着版本号的是该条实际所属版本，标着「✅ 已随某日重启上线」的是早于本节发布的、随当次重启生效的内容。
+
+**子代理胶囊时间戳右侧防截断 ＋ 只读视图独立悬浮停止按钮（方案一）**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面，手机端需重载 PWA 壳生效。用户反馈：「子代理胶囊里面的显示还是有问题，右边的时间被吃掉了一块儿，没有显示全」；「还要加一个子代理任务结束的按钮，跟主会话的按钮一样。加到哪儿呢？是不是加到子代理点进去的那个地方？这样会更符合操作逻辑一些……那就按方案一呗」）。
+
+- **胶囊排版右侧时间截断根因修复**：根因系 `.subagent-rows` 采用隐式 Grid 且未声明列宽规则，单元格按内容宽度（长标题）自动撑开至 520px+，致使内部 `<time>` 时间标签被顶出右侧可视边界截断。修复措施：`.subagent-rows` 增加 `grid-template-columns: minmax(0, 1fr)` 严格锁死列宽；`.subagent-row` 声明 `min-width: 0; max-width: 100%; overflow: hidden` 强制内部文字省略截断；`<time>` 显式指定 `text-align: right`，经 Headless Edge 实测行宽由 522.3px 严密收敛至 286.0px（有滚动条时 271.0px），时间戳完整展示且杜绝横向滚动。
+- **子代理只读视图新增 44px 悬浮停止按钮（方案一）**：
+  - **视觉与交互对齐主会话**：在 `#chatView` 内新增悬浮圆形停止按钮 `#subagentCancel`（`.subagent-stop`），规格 44×44px（深色背景、圆角矩形方块停止图标，点击触发与主会话停止相同的 0.94 弹性缩放），仅在 `subagentView && agentRunning` 时浮现在右下角（`bottom: calc(18px + env(safe-area-inset-bottom))`）；在 `body.subagent-open` 时消息列表底部增加 72px 安全间距防遮挡。
+  - **停止逻辑与状态联动**：点击后直接调用 `session.cancel` 取消当前子代理会话，停止中自动切为旋转菊花加载态并禁用防重复点击；离开会话或列表回退时立即隐匿。
+- **计量账**：`ASSET_BUDGET_BYTES` 352_000 → **354_000**。实测壳字节 zh 352 550（css 53 012 + js 299 538）/ en 352 447，净 +1 286 B（css +405 / js +881），余量约 1 450 B。
+- **回归锁**：`test/subagent-panel.test.js` 20 pass（新增子代理停止按钮 DOM/CSS/JS 状态联动断言，修复午夜跨天测试脆弱性）；`test/stop-pending.test.js` 19 pass；`test/mobile-assets.test.js` 20 pass。全量测试除另一在途线未碰文件外全绿。
+
+**子代理仍在跑时不再显示「已完成」＋ 胶囊运行态可见（0.4.50）**（⏳ 待重启生效：`lib/projections.js` 与 `lib/pages.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳。用户 m00002「主代理的会话结束了，子代理还在运行呢，这个会话显示就是"已完成"，这个是不对的」；m00053「子代理本身正在运行，但显示的不是"正在运行"的状态，应该是个蓝色的标志」）。
+
+- **聚合改成整棵子树（与宿主同判据）**：`lib/projections.js` 的 `applyDescendantRunning` 旧版只给运行中子行的**直接父**打 `descendantRunning`——孙辈在跑、子已收工时父仍误判 done。现在自每一行向下 BFS 整条后代链，任一后代 `running===true` 即标记该行，`visited` 防 `parentSession` 成环；与宿主自己的 `dsh-subagent/lib/index.js` `runningDescendants()` 同构。本机 590 个会话头实测：`origin` 只有 `'subagent'`(402) 与无(188)，带 `parentSession` 的非 subagent 行为 0，402 条 `parentSession` 全部命中现存 header.id ⇒ 现有 `origin==='subagent'` 过滤是完备的、join 字面同形。无脏行仍原数组直返（不变异缓存行，「never mutates」钉值不动）。
+- **页面不再谎报 idle**：`subagentStateOf` 拿不到子行时旧版一律 `'idle'`。新增 `parentRowOfActive()`，父行带 `descendantRunning` 而子行缺席（boot 只取最近 30 行，子会话历史行被切掉）时报新状态 `'unknown'`——诚实的「有子代理在跑但我定位不到哪一条」，不冒充 idle。
+- **胶囊头蓝点由父行标志兜底**：`has-running` 条件扩为「有 running 行 ∨ 有 unknown 行 ∨ 父行 `descendantRunning`」，故即使一行子状态都判不出来，胶囊头也是蓝色脉冲点、主页那格不再是绿勾。运行点/脉冲点加 `animation:pulse` 与静止灰点区分（复用既有 `@keyframes pulse`，未新增动画名）；`is-unknown` 点半透明蓝；`.subagent-rows` 补 `overflow-x:hidden;touch-action:pan-y`（只许上下滚、禁左右拖）。长标题单行省略、左标题右顶时间——CSS 层原本已成立，本次未动。
+- **进会话按需补拉一次全量子行**：`openSession` 尾挂 `refreshSubagentRowsIfNeeded()`——仅当「父有 catalog 且子行窗口为空」时发一次既有的全量 `session.list`（桥 10 秒窗内重复打开很便宜），同一会话最多一次，不为每个会话都付全量读；不新增 RPC 面。
+- **boot 行落地即重画胶囊**：`applyBootData` 更新 `subagentRowsByParent`/`sessionSummaries` 后，若在聊天页补一次 `renderSubagentBar()`（此前要等 60 秒列表轮询或显式刷新才反映，进聊天时可能一直显示旧态）。
+- **修不了的一条（宿主面缺口，非本插件）**：外部/ACP 工人子代理在宿主 `dsh-subagent/lib/index.js:827 establishExternalCatalogChild` 只写 catalog、**不建子 session 行**，且 catalog 条目只 append 永不移除（本机实测某父的 91 条 catalog `childId` **全部**指向已不存在的会话）；宿主自己的子代理树 `listDescendants`（`:2394`/`:2421`）对 `mode==='external'` 同样报 inactive，冷会话行 `running` 恒 `false`（`summarizeCold`）。⇒ 这类子代理的运行态在手机侧无可证数据源；真机若仍误判，需当次会话 id 判定是否 external/cold。
+- **计量账**：`ASSET_BUDGET_BYTES` 349_000 → **352_000**。实测壳字节 zh 351 264（css 52 607 + js 298 657）/ en 351 163，净 +3 042 B（css +412 / js +2 630）。
+- **回归锁**：`test/subagent-panel.test.js` 19 pass（夹具补注入 `parentRowOfActive` 与 `sessionSummaries`；新增 unknown 判定、父标志兜底亮蓝点、unknown 排序与计数）；`test/record-projection.test.js` 26 pass（旧「只一层」钉值按新语义改写为「aggregated all the way up to the root lead」，另加成环必收敛的反例）；`test/landing-fingerprint.test.js` 6 pass（改钉 `applyBootData` 的重画尾巴）。全量 `npm test` 1295 项／1292 pass／1 fail／2 skipped——唯一红属同工作树另一条在途线（`test/pin-field-width.test.js:118` 仍钉已被方案C 改掉的旧重连文案），本线未碰。
+
+**重启通知归位直白功能提醒 + 页面侧方案C双端贯通文艺就绪视觉**（⏳ 待重启生效：`lib/pages.js` 与 `lib/bridge.js` 属宿主装载面；`scripts/dsh-revive.ps1` 落盘即生效无需重启。用户「C吧？都改下」）。
+
+- **微信推送回归功能通知**：用户澄清「文案是在 pocket 加载页面里显示，不是微信推送里显示」。`scripts/dsh-revive.ps1` 成功推送标题切回直白的 `DSH 已重启`、正文 `已就绪。回任意一句话拿新地址。`；并顺手补齐脚本首部 UTF-8 BOM，消除 Windows PowerShell 5.1 解析失败崩溃（退出码 1）的历史根因。确认卡第 5 条丑话同步回切。
+- **页面侧方案 C 双端贯通与过渡页精简**（用户「副标题改为两行，一级准备那儿单独起一行 其余按你推荐」）：
+  - **`/reconnect` 等待过渡页**：标题保留 `连接已断开`，副标题独立分为两行（首行品牌引述 `Curiouser and curiouser!`，次行就绪提示 `Pocket 一级准备`），视觉层次清晰；
+  - **剔除多余次级按钮**：移除歧义严重的 `在电脑上查看密码` 弱按钮，消除手机端误导（在独立配对 PIN 页一并隐藏）；
+  - **精炼引导文案**：压缩长难句并删除极客黑话（`公网通道仍可用……不必重新扫码` 提炼为直白的 `输入电脑端 Pocket 显示的连接密码。`；局域网引导提炼为 `手机与电脑需在同一 Wi-Fi，正在自动重连…`）；
+  - **主页 `GET /` 首屏加载壳**：在列表数据未到达前，`<div id="workspaces">` 占位呈现 `.ws-splash`，展示爱丽丝台词与就绪提示，数据一到即无感覆盖。
+- **远程强制重启链路健壮性与确认卡交互收敛**（用户「有子任务的时候无法强制重启，这个点你要改一下。强重启不是会转圈圈嘛，直接在立刻重启上改UI直接变成转圈圈，把立刻重启直接改为强制重启，不能增加过多按钮」）：
+  - **强制重启穿透子任务限制**：`lib/bridge.js` 在 `force=true` 时对 busy 会话发起最佳努力 `session/cancel`，即便子任务（如 `agent-busy` 或 subagent 会话）取消失败或被拒，也不再返回 502 阻断流程，而是如实告警并坚决放行推进宿主武装重启；
+  - **转圈圈就地内嵌按钮**：`lib/pages.js` 点击重启后直接将 `#hostGo` 按钮内容替换为 `.host-spin` 环形转圈（同时禁用 `取消` 与重启钮），移除下方额外挤出一行的 `#hostStatus` 转圈，消除视觉跳动与排版下移；
+  - **单按钮状态就地切换**：遇有会话在推进时，`#hostGo` 按钮文本由 `确认重启` 就地切换为 `强制重启`，彻底废弃外挂的第三个 `#hostForce` 按钮，严格保持 `取消` + `确认/强制重启` 双按钮紧凑格局；取消或重开时复位。
+- **置顶/取消置顶按钮轻量乐观更新与微状态**（用户「你排查下，手机pocket页面，置顶按钮点击取消很卡」）：
+  - 点击置顶/取消瞬间立即在内存中反转 `pinnedSessionIds` 并即时呈现（0ms 等待感），消除等待网络 RPC 期间无视觉反馈引发的「界面卡顿/无响应」体感；
+  - 补充 `.task-pin:disabled{opacity:.5;pointer-events:none}` 状态样式，同步期间防重复狂点与误触；
+  - 针对展开卡片锁定 `revealedLists` 显式显示行数，防止取消置顶的超 24h 历史行从用户拇指下凭空蒸发折叠；
+  - RPC 失败时精准回滚 `pinnedSessionIds` 原值并弹出 `pinFailed` 提示；
+  - 回归锁：`test/workspace-head-notices.test.js` 24 pass、`test/mobile-assets.test.js` 20 pass，全量 1289 pass / 0 fail / 2 skipped；壳字节 zh 348 527（预算 349 000，余量 473 B）。
+- **计量账**：`ASSET_BUDGET_BYTES` 348_000 → **349_000**。实测壳字节 zh 348 222（css 52 195 + js 296 027）/ en 348 122，净 +250 B。
+- **回归锁**：`test/host-restart.test.js` 10 pass／`test/pages-render-fixes.test.js` 29 pass／`test/mobile-assets.test.js` 20 pass；全量 `npm test` 1283 项／1281 pass／0 fail／2 skipped。
 
 **预载会话点进去免全量 + 读会话时列表保温预载 + tails 冷行一次强刷（0.4.49）**（⏳ 待重启生效：`lib/pages.js` 与 `lib/bridge.js` 都属宿主装载面，手机要完全关闭重开才拿得到新壳。用户 m00002「已经预载的会话，点进去还要加载消息」）。
 
@@ -188,6 +233,35 @@ catalog 存 `defaultPreset`、`renderPermissionSheet` 不再出裸破折号；`N
 zh 341 553 B（css 50 598 ＋ js 290 955）／en 341 445 B，仍在 `ASSET_BUDGET_BYTES = 342_000` 内
 （余量 447 B，比上一版 2.1 KB 紧）。渲染层与实机层未覆盖 ⇒ 「横杠是否真的不见了、危险档是否亮起」
 须真机走查。
+
+**六个报障 bug 的修复（0.4.50）**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳；
+生效判据＝运行桥 `GET /sw.js` 的 `V=` 不再是 `pocket-8a85c83c0205`，盘上实算基线 zh `pocket-2288196767f0` /
+en `pocket-2074815f30a5`。施工账 `docs/交付报告-六bug修复批-20261019.md` 与 flow 卡
+`2026-10-19-pocket-six-bugs-20261019` 归档件）。
+
+- **发完消息秒退回主页不再留下空会话**：根因是 `send()` 在 `await ensureSession()` **之后**才回读共享的
+  `activeSession`——草稿态补发 preset/model/permission 是 1~3 个串行 RPC（真机实测窗口 1.19 s），
+  这段时间里返回主页的手势已把 `activeSession` 清成 `null` ⇒ 发出 `sessionId:null`，宿主以
+  `gateway/input-invalid` 拒收，而 `session.create` 已成功 ⇒ 用户看到的是一个**完全空的会话**。
+  修复＝owner 取 await 的返回值本身（`const owner=activeSession||await ensureSession()`），不再回读共享变量。
+- **草稿设置不再冒充运行中会话的实况**：草稿缓冲（`draftPending`）原先无条件优先于投影，`draftSetModel`/
+  `draftSetPreset`/`draftSetPermission` 只写缓冲不发 RPC，却弹与真切换同一句「会话设置已更新」。现在三个读取点
+  都加 `!activeSession` 门（运行中会话一律以投影为准），草稿点选改弹「已选定，会话开始后生效」；`draftSetPreset`
+  不再覆写运行中会话的 `currentPreset`。
+- **排队消息不再被画进会话框**：`send()` 的乐观记录带上 `queued` 标记，`messagesWithOptimistic` 遇排队项跳过
+  ——排队消息在宿主侧是 `agent/inbox/spliced` ＋ `values.inbox['next-turn']`，尚未成为转录事件，
+  把它画成气泡等于把「未投递」呈现成「已投递」。
+- **打字时发送钮顶掉停止钮**：`cancel.hidden=!agentRunning` 改成 `!agentRunning||canSend`——有输入或待发附件时
+  两钮并存，flex 挤压把发送钮挤向左侧，拇指一偏就按到停止。
+- **有排队消息时页面能滑动**：队列坞/待办坞是 `pointer-events:none` 的 fixed composer 的直接子元素却各自开了
+  `auto`，屏幕下方 131~168 px 那条带（视觉上只是转录区的预留空白）被坞吃掉，坞内无可滚范围、composer 又不是
+  `#messages` 的祖先 ⇒ 真·滑不动。现在坞容器放行、只有按钮与编辑框开回 `auto`，列表真溢出时才自取滚动权。
+- **提问弹窗可以收起**：原先只有 ×（真取消该次提问），没有非破坏性出口。现在标题行加收起钮，收起后能继续看
+  下方会话；底部净空由页面自量的 `--question-h` 承担（不写死 px，避免输入框长到上限时失准）。
+- **壳预算**：本批把 `ASSET_BUDGET_BYTES` 抬到 **356 000**（354 000 → 356 000，六 bug 的 CSS/JS 增量）；
+  实测 zh 354 914 B / en 354 831 B，余量 1 086 / 1 169 B。
+- **验证**：全量 1306 项 / 1301 绿 / 0 红 / 2 skip；真 Edge（390×844）几何台 BUG-5 穿透场景**修前红 8 条、
+  修后 0 条**；BUG-3/4/5/6 四组变异各自恰红恰复位。**真机走查六条未做**（用户重启宿主并完全重开页面后才验）。
 
 ## 0.4.47 — 2026-10-16
 

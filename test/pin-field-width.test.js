@@ -115,8 +115,11 @@ test('the pages do not spell the password width out', () => {
   assert.equal(PIN_PAGE_ZH.includes('查看 6 位密码'), false)
   assert.equal(PIN_PAGE_EN.includes('the 6-digit password'), false)
   // The wording still has to tell the user where the password is.
-  assert.ok(RECONNECT_ZH.includes('显示的密码即可继续'))
-  assert.ok(RECONNECT_EN.includes('Enter the password shown in Pocket'))
+  // 2026-10-19：重连页的提示文案随「精炼引导文案」批改写为「输入电脑端 Pocket 显示的连接密码。」
+  // （旧句「显示的密码即可继续」已不存在）。钉的语义不变——不得写出位数、必须说清在哪取，
+  // 所以这里钉「电脑端/连接密码」这组词，而不是钉上一版的具体句子。
+  assert.ok(RECONNECT_ZH.includes('电脑端 Pocket 显示的连接密码'))
+  assert.ok(RECONNECT_EN.includes('the pairing password shown in Pocket on the computer'))
   assert.ok(PIN_PAGE_ZH.includes('Pocket 窗口'))
   assert.ok(PIN_PAGE_EN.includes('Find the password in the Pocket window'))
 })
