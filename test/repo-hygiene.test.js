@@ -54,22 +54,22 @@ test('① files 收编了 README 承诺的每一项，且每一项都在盘上',
 })
 
 // ②（tasks.md AC-R 第②条）
-// 钉的是哪句语义：`package.json` 的 `"license": "Apache-2.0"` 这一**声明**。
-// 声明一个许可证而没有正文 = 把许可义务推给读者去猜；正文里留着 Apache 附录的模板占位
+// 钉的是哪句语义：`package.json` 的 `"license": "MIT"` 这一**声明**。
+// 声明一个许可证而没有正文 = 把许可义务推给读者去猜；正文里留着模板占位
 // （`{yyyy}` / `{name of copyright owner}`）= 有正文但没署名，法律上仍然没落地。
 // 权利人名字本身不钉死（WP-REPO 记档：LEAD 若换正式权利人名称，只改那一行）——钉的是
 // 「填过年份的版权声明行存在」这个不随人名漂移的形状。
-test('② 声明 Apache-2.0 ⇒ LICENSE 正文在场、随包发布、不是未填模板', () => {
-  assert.equal(pkg.license, 'Apache-2.0', 'README 与 LICENSE 都以这个 SPDX id 为准')
+test('② 声明 MIT ⇒ LICENSE 正文在场、随包发布、不是未填模板', () => {
+  assert.equal(pkg.license, 'MIT', 'README 与 LICENSE 都以这个 SPDX id 为准')
   assert(pkg.files.includes('LICENSE'), '许可证正文必须随包发布，否则声明到用户手里是空的')
   const license = read('LICENSE')
   assert.match(
     license.split('\n').slice(0, 4).join('\n'),
-    /Apache License/,
-    '首屏必须是 Apache License 标题（不是自写摘要顶上去的）',
+    /MIT License/,
+    '首屏必须是 MIT License 标题（不是自写摘要顶上去的）',
   )
   assert.doesNotMatch(license, /\{yyyy\}|\{name of copyright owner\}/, '附录占位不得原样留着')
-  assert.match(license, /Copyright\s+\d{4}/, '必须有一行填了年份的版权声明')
+  assert.match(license, /Copyright\s+(?:\(c\)\s+)?\d{4}/i, '必须有一行填了年份的版权声明')
 })
 
 // ③（tasks.md AC-R 第③条）
