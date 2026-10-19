@@ -27,7 +27,7 @@ const ENV_KEYS = [
   'LOCALAPPDATA',
   'XDG_CACHE_HOME',
   // R12/Q8: the cache root now follows the unified data root, so a test that
-  // does not pin DSH_HOME would download into the real per-user data root.
+  // does not pin DSH_HOME would download into the real ~/.dsh.
   'DSH_HOME',
   'USERPROFILE',
   'HOME',
@@ -107,9 +107,9 @@ test('resolveCloudflared falls through to the bare command name', () => {
 
 test('resolveCloudflared honors binaryPath then DSH_POCKET_CLOUDFLARED', () => {
   const saved = saveEnv()
+  const dir = makeTempDir('dsh-pocket-test-bin-')
   try {
     clearEnv()
-    const dir = makeTempDir('dsh-pocket-test-bin-')
     const direct = path.join(dir, 'direct.exe')
     const override = path.join(dir, 'override.exe')
     fs.writeFileSync(direct, 'x')
@@ -122,14 +122,15 @@ test('resolveCloudflared honors binaryPath then DSH_POCKET_CLOUDFLARED', () => {
     assert.equal(resolveCloudflared(direct), direct)
   } finally {
     restoreEnv(saved)
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 })
 
 test('resolveCloudflared reads legacy DSH_PHONE_NATIVE_CLOUDFLARED as fallback', () => {
   const saved = saveEnv()
+  const dir = makeTempDir('dsh-pocket-test-bin-')
   try {
     clearEnv()
-    const dir = makeTempDir('dsh-pocket-test-bin-')
     const legacy = path.join(dir, 'legacy.exe')
     fs.writeFileSync(legacy, 'z')
     process.env.DSH_PHONE_NATIVE_CLOUDFLARED = legacy
@@ -142,20 +143,22 @@ test('resolveCloudflared reads legacy DSH_PHONE_NATIVE_CLOUDFLARED as fallback',
     assert.equal(resolveCloudflared(), current)
   } finally {
     restoreEnv(saved)
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 })
 
 test('resolveCloudflared chain reaches CLOUDFLARED_BIN', () => {
   const saved = saveEnv()
+  const dir = makeTempDir('dsh-pocket-test-bin-')
   try {
     clearEnv()
-    const dir = makeTempDir('dsh-pocket-test-bin-')
     const bin = path.join(dir, 'cf.exe')
     fs.writeFileSync(bin, 'q')
     process.env.CLOUDFLARED_BIN = bin
     assert.equal(resolveCloudflared(), bin)
   } finally {
     restoreEnv(saved)
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 })
 

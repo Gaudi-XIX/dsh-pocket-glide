@@ -1,5 +1,6 @@
-// The pairing password widened from six digits to eight. What makes that safe
-// is the phone field: it has to accept the whole compatible range that the
+// The pairing password is six digits (2026-10-10: narrowed from eight, which
+// users kept mistyping). What makes that safe is the phone field: it has to
+// accept the whole compatible range that the
 // persistence gate accepts (PAIRING_PIN_MIN_DIGITS..PAIRING_PIN_MAX_DIGITS),
 // not exactly the width being issued today. A field narrowed to the issued
 // width locks out every phone holding a durable password of the old width, so
@@ -49,11 +50,11 @@ const PAGES = [
   ['pin page en', PIN_PAGE_EN],
 ]
 
-test('the issued password is eight digits', () => {
+test('the issued password is six digits', () => {
   // Deliberately a literal: this is the audit item, not a derivation.
-  assert.equal(PAIRING_PIN_DIGITS, 8)
+  assert.equal(PAIRING_PIN_DIGITS, 6)
   assert.equal(PAIRING_PIN_SPACE, 10 ** PAIRING_PIN_DIGITS)
-  assert.equal(PAIRING_PIN_SPACE - 1, 99999999)
+  assert.equal(PAIRING_PIN_SPACE - 1, 999999)
 })
 
 test('the issued width sits inside the range the field and the gate share', () => {
@@ -89,11 +90,14 @@ test('the field is not narrowed to the width being issued', () => {
     assert.notEqual(field.pattern, narrowed, `${name} must not demand exactly ${PAIRING_PIN_DIGITS} digits`)
     assert.notEqual(field.maxlength, PAIRING_PIN_DIGITS, `${name} must not cap at exactly ${PAIRING_PIN_DIGITS} characters`)
   }
-  // The regression this guards: a phone holding a six-digit durable password.
-  assert.equal(PAIRING_PIN_MIN_DIGITS < PAIRING_PIN_DIGITS, true)
+  // The regression this guards: a phone typing a durable eight-digit password
+  // issued by the previous width must still get through the field. The room for
+  // it is the ceiling, not the floor — the floor sits at the issued width
+  // because no build ever issued anything narrower.
+  assert.equal(PAIRING_PIN_MAX_DIGITS > PAIRING_PIN_DIGITS, true)
   const field = pinInput(PAGES[0][1])
-  assert.ok(field.accepts('123456'), 'a stored six-digit password still has to be typeable')
-  assert.ok(field.accepts('12345678'), 'a freshly issued eight-digit password has to be typeable')
+  assert.ok(field.accepts('123456'), 'a freshly issued six-digit password has to be typeable')
+  assert.ok(field.accepts('12345678'), 'a stored eight-digit password from the old width still has to be typeable')
   assert.ok(!field.accepts('1234567890123'), 'a thirteen-digit value is out of range on both sides')
 })
 
@@ -111,10 +115,13 @@ test('the pages do not spell the password width out', () => {
   assert.equal(PIN_PAGE_ZH.includes('查看 6 位密码'), false)
   assert.equal(PIN_PAGE_EN.includes('the 6-digit password'), false)
   // The wording still has to tell the user where the password is.
-  assert.ok(RECONNECT_ZH.includes('显示的密码即可继续'))
-  assert.ok(RECONNECT_EN.includes('Enter the password shown in pocket'))
-  assert.ok(PIN_PAGE_ZH.includes('窗口查看密码'))
-  assert.ok(PIN_PAGE_EN.includes('Find the password in pocket'))
+  // 2026-10-19：重连页的提示文案随「精炼引导文案」批改写为「输入电脑端 Pocket 显示的连接密码。」
+  // （旧句「显示的密码即可继续」已不存在）。钉的语义不变——不得写出位数、必须说清在哪取，
+  // 所以这里钉「电脑端/连接密码」这组词，而不是钉上一版的具体句子。
+  assert.ok(RECONNECT_ZH.includes('电脑端 Pocket 显示的连接密码'))
+  assert.ok(RECONNECT_EN.includes('the pairing password shown in Pocket on the computer'))
+  assert.ok(PIN_PAGE_ZH.includes('Pocket 窗口'))
+  assert.ok(PIN_PAGE_EN.includes('Find the password in the Pocket window'))
 })
 
 test('the desktop panel shows a password as long as the one it issues', () => {

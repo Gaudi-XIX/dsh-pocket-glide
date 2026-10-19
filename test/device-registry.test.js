@@ -129,12 +129,12 @@ test('PIN restore: a known device re-enters with the PIN alone — no desktop st
   }
 })
 
-test('PIN restore refreshes the credential lifetime and keeps the row single', async () => {
+test('PIN restore keeps the credential deadline ABSOLUTE (re-pairing never re-winds 30 days)', async () => {
   const t = await startBridge()
   try {
     const desktopCookie = await t.pairDesktop()
     await t.pairMobileTunnel('PocketRenew/1.0')
-    // The credential ages 25 days; the profile with it.
+    // The credential ages 25 days; the profile deadline does not move.
     const before = (await devicesList(t, desktopCookie))[0]
     t.bridge.now = () => Date.now() + 25 * 24 * 60 * 60 * 1000
     t.bridge.ephemeralPin = '123456'
@@ -146,13 +146,48 @@ test('PIN restore refreshes the credential lifetime and keeps the row single', a
       body: JSON.stringify({ pin: '123456' }),
     })
     assert.equal(verify.status, 200)
-    assert.equal((await verify.json()).pending, false)
+    assert.equal((await verify.json()).pending, false, 'still inside its lifetime: the PIN alone restores')
 
     const after = (await devicesList(t, desktopCookie))[0]
     assert.equal(after.id, before.id, 'same device row')
     assert.equal(after.firstPairedAt, before.firstPairedAt, 'the first pairing time is kept')
-    assert.ok(after.expiresAt > before.expiresAt, 'the credential was re-issued to a full TTL')
+    // 用户 2026-10-11 01:20 裁：「cookie 就应该是绝对时间，怎么能每次刷新呢」。
+    // 这一行就是那条裁定的判据：第 25 天恢复，到期线还是第 30 天，不是第 55 天。
+    assert.equal(after.expiresAt, before.expiresAt, 'the deadline is the device’s, not this pairing’s')
     assert.ok(after.lastSeenAt >= before.lastSeenAt, 'the sighting moved forward')
+
+    // The re-issued cookie must die with the deadline, not outlive it: 5 days left.
+    // cookieOf() strips attributes, so this reads the raw header.
+    const rawCookie = verify.headers.get('set-cookie') ?? ''
+    const maxAge = Number(/Max-Age=(\d+)/.exec(rawCookie)?.[1] ?? 0)
+    assert.ok(maxAge > 4 * 24 * 3600 && maxAge < 6 * 24 * 3600, `Max-Age rides the remaining lifetime, got ${maxAge} in ${rawCookie}`)
+  } finally {
+    await t.stop()
+  }
+})
+
+test('past the absolute deadline the same phone no longer restores on the PIN alone', async () => {
+  const t = await startBridge()
+  try {
+    const desktopCookie = await t.pairDesktop()
+    await t.pairMobileTunnel('PocketLapsed/1.0')
+    const before = (await devicesList(t, desktopCookie))[0]
+    // 第 31 天：档案的绝对到期线过了。
+    t.bridge.now = () => Date.now() + 31 * 24 * 60 * 60 * 1000
+    t.bridge.ephemeralPin = '123456'
+    t.bridge.ephemeralPinExpiresAt = t.bridge.now() + 5 * 60_000
+
+    const verify = await httpFetch(`${t.base}/pair/verify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...tunnelHeaders, 'user-agent': 'PocketLapsed/1.0' },
+      body: JSON.stringify({ pin: '123456' }),
+    })
+    assert.equal(verify.status, 200)
+    const body = await verify.json()
+    assert.equal(body.pending, true, 'a lapsed credential is a new device: the desktop confirms it')
+    assert.equal(body.ok, true, 'the PIN itself was still correct')
+    assert.ok(before.expiresAt <= t.bridge.now(), 'the deadline really is behind "now" in this scenario')
+    assert.equal(cookieOf(verify), '', 'and nothing is issued on this response')
   } finally {
     await t.stop()
   }
@@ -526,7 +561,11 @@ test('the registry persists across a real restart: PIN-only restore and silent c
     try {
       assert.equal(second.bridge.devices.size, 1, 'the profile came back from disk')
       assert.equal(second.bridge.devices.values().next().value.publicConsentedAt > 0, true, 'with the consent answer')
-      assert.equal(second.bridge.sessions.size, 1, 'the session map itself is intact too')
+      // Restart-parked, not live: the pairing record waits in the resumable map
+      // and revives silently only when the phone presents its cookie again.
+      assert.equal(second.bridge.sessions.size, 0, 'restored sessions stay parked — the live map fills only when the phone calls in')
+      assert.equal(second.bridge.resumableSessions.size, 1, 'the pairing record parks in the resumable map')
+      assert.equal(second.bridge.resumableSessions.values().next().value.parkedByRestart, true, 'marked restart-parked so the cookie may silently revive it')
       // New tunnel origin: the old cookie never arrives. Only the PIN.
       second.bridge.sessions.clear()
       second.bridge.pendingPairings.clear()

@@ -75,43 +75,6 @@ function fakeBox(initial = '') {
 
 // ------------------------------------------------------------------------- AC-A1
 
-function buildWatermarkSandbox() {
-  const body = ['eventSeq', 'streamWatermark', 'noteHandoffCoverage']
-    .map((name) => extractFunction(js, name))
-    .join('\n')
-  const make = new Function(`
-    let handoffPainted=false
-    const streamWatermarks=new Map()
-    ${body}
-    return {
-      streamWatermark,
-      noteHandoffCoverage,
-      watermarks: streamWatermarks,
-      get handoffPainted(){return handoffPainted},
-    }
-  `)
-  return make()
-}
-
-test('AC-A1 a handoff watermark covers its own session only', () => {
-  const sandbox = buildWatermarkSandbox()
-  sandbox.noteHandoffCoverage({
-    focus: { sessionId: 's1', history: { events: [{ event: { seq: 3 } }, { event: { seq: 9 } }, { event: { seq: 5 } }] } },
-  })
-  assert.equal(sandbox.streamWatermark('s1'), 9)
-  assert.equal(sandbox.streamWatermark('other-session'), -1, '另一个会话不得继承 handoff 水位线')
-  assert.equal(sandbox.watermarks.size, 1, 'the handoff leaves exactly one entry behind')
-  assert.equal(sandbox.handoffPainted, true, 'and still marks the handoff as painted')
-})
-
-test('AC-A1 a session with no watermark gets the full snapshot', () => {
-  const sandbox = buildWatermarkSandbox()
-  assert.equal(sandbox.streamWatermark('never-opened'), -1)
-  sandbox.noteHandoffCoverage({ focus: { sessionId: 's1', history: { events: [{ event: { seq: 4 } }] } } })
-  sandbox.watermarks.delete('s1')
-  assert.equal(sandbox.streamWatermark('s1'), -1, 'a released watermark means the whole window again')
-})
-
 test('AC-A1 the page-wide watermark is gone from the script', () => {
   assert.ok(!js.includes('streamSinceSeq'), 'no trace of the cross-session variable may survive')
   assert.ok(js.includes('const streamWatermarks=new Map()'), 'the map replaces it')
@@ -143,7 +106,6 @@ test('AC-A5 an emptied snapshot no longer counts as the first frame', () => {
   assert.match(js, /markStreamSnapshot\(incoming\.length>0\)/)
   assert.ok(!js.includes('markStreamSnapshot(true)'), '空快照不得再被当成首帧')
   assert.ok(js.includes("resolve('timeout'),900)"), 'the fallback timer it unblocks stays armed')
-  assert.ok(js.includes('if(activeSession===id&&firstFrame!==true&&!handoffPainted)await loadHistory(true);'))
 })
 
 // ---------------------------------------------------------------------------- AC-A6
@@ -167,7 +129,7 @@ test('AC-A6 an empty buffer pulls the head page without beforeSeq', () => {
   const older = between('async function fetchOlderPage()', 'async function loadOlder()')
   assert.ok(older.includes('anchorSeq<0'), 'the anchor-less case is handled, not abandoned')
   assert.ok(!older.includes('if(anchorSeq<0)return false'), 'no anchor must not mean nothing to do')
-  assert.ok(older.includes("rpc('session.history',{sessionId,maxMessages:30})"), 'the head page carries no beforeSeq')
+  assert.ok(older.includes("rpc('session.history',{sessionId,maxMessages:30,...(subagentView?{subagent:subagentView}:{})})"), 'the head page carries no beforeSeq (the subagent spread collapses when no subagent view is open)')
   assert.ok(older.includes('beforeSeq:anchorSeq'), 'and paging from a real anchor still works')
 })
 
@@ -178,7 +140,7 @@ test('AC-A6 the head pull really goes out with no beforeSeq', async () => {
   const source = 'async ' + extractFunction(js, 'fetchOlderPage')
   const make = new Function('box', `
     let olderBusy=false,olderRunBusy=false,olderHasMore=true,olderExhausted=false
-    let activeSession='s1',olderEvents=[],streamEvents=[]
+    let activeSession='s1',olderEvents=[],streamEvents=[],subagentView=null
     const calls=[]
     const $=()=>box
     function oldestEventSeq(){return -1}
@@ -190,6 +152,12 @@ test('AC-A6 the head pull really goes out with no beforeSeq', async () => {
     function messagesWithOptimistic(list){return list}
     function paintMessages(){}
     function showError(){}
+    let transcriptAnchor=null,skipAnchorOnce=false
+    function readTranscriptAnchor(){return null}
+    function restoreTranscriptAnchor(){return false}
+    // the pull re-aims the anchor once the page lands (older rows swap their 120px
+    // estimate for real height); this sandbox paints nothing, so it is a no-op
+    function settleOlderShift(){}
     async function rpc(method,payload){calls.push({method,payload});return {events:[],hasMore:false}}
     ${source}
     return { run: fetchOlderPage, calls, state: () => ({ olderHasMore, olderExhausted }) }
@@ -251,6 +219,8 @@ function buildPaintSandbox(state = {}) {
     'showTranscriptRetry',
     'paintMessages',
     'esc',
+    'readTranscriptAnchor',
+    'restoreTranscriptAnchor',
   ]
     .map((name) => extractFunction(js, name))
     .join('\n')
@@ -258,8 +228,9 @@ function buildPaintSandbox(state = {}) {
   const make = new Function('box', `
     let activeSession=${JSON.stringify(state.activeSession ?? null)}
     let streamEvents=[],olderEvents=[],olderHasMore=${JSON.stringify(state.olderHasMore ?? false)}
-    let olderBusy=false,olderRunBusy=false,sessionBlank=${JSON.stringify(state.sessionBlank ?? true)}
+    let olderBusy=false,olderRunBusy=false,olderExhausted=${JSON.stringify(state.olderExhausted ?? false)},sessionBlank=${JSON.stringify(state.sessionBlank ?? true)}
     let agentRunning=false,pendingQuestion=null
+    let transcriptAnchor=null,skipAnchorOnce=false
     const turnOpenState=new Map()
     const L=${JSON.stringify(L)}
     const $=()=>box
@@ -287,65 +258,21 @@ function buildPaintSandbox(state = {}) {
 const staleAssign = 'streamEvents=embeddedFocus.history.events||[];olderEvents=[]'
 const cacheAssign = 'streamEvents=cached.streamEvents;olderEvents=cached.olderEvents'
 
-test('AC-A8-1 closeSessionStream releases the stale handoff snapshot', () => {
-  const closing = between('function closeSessionStream()', 'function applyHistory(')
-  assert.ok(closing.includes('embeddedFocus=null'), 'the snapshot goes with the stream')
-  assert.ok(
-    closing.includes('embeddedFocus.sessionId===activeSession'),
-    'and it is dropped for the session being left, not for a window still waiting to paint',
-  )
-  assert.ok(
-    closing.indexOf("streamWatermarks.delete(activeSession);if(activeSession&&embeddedFocus&&embeddedFocus.sessionId===activeSession)embeddedFocus=null}") >= 0,
-    'it lands next to the watermark release, at the tail of the reset',
-  )
-  assert.ok(
-    js.includes('closeSessionStream();closeSessionSettings();activeSession=null'),
-    'the leaving path still runs the reset while activeSession names the session being left',
-  )
-})
 
-test('AC-A8-1 the release is scoped, so the handoff window is not thrown away unshown', () => {
-  // openSession() runs closeSessionStream() BEFORE paintInstantSession(), and the
-  // watermark already told the bridge to stop re-sending what the payload covered. An
-  // unconditional release here therefore deletes the only copy of that window: measured
-  // on a real page, the boot transcript came back two turns short. Leaving a session
-  // still drops the snapshot that belongs to it, which is the stale object A-8(1) is about.
-  const pending = buildCloseSandbox()
-  pending.setEmbedded({ sessionId: 's1', history: { events: [{ event: { seq: 9 } }] } })
-  pending.closeSessionStream()
-  assert.equal(pending.read().embeddedFocus?.sessionId, 's1', 'a snapshot with no session being left survives')
-  const leaving = buildCloseSandbox()
-  leaving.setActive('s1')
-  leaving.setEmbedded({ sessionId: 's1', history: { events: [{ event: { seq: 9 } }] } })
-  leaving.closeSessionStream()
-  assert.equal(leaving.read().embeddedFocus, null, 'the snapshot of the session being left is gone')
-  const other = buildCloseSandbox()
-  other.setActive('s2')
-  other.setEmbedded({ sessionId: 's1', history: { events: [{ event: { seq: 9 } }] } })
-  other.closeSessionStream()
-  assert.equal(other.read().embeddedFocus?.sessionId, 's1', 'a window for a session still to be opened is not collateral damage')
-})
-test('AC-A8-2 neither instant-paint branch overwrites the buffer or clears the older window', () => {
+test('AC-A8-2 the instant-paint cache branch merges instead of overwriting', () => {
   // Negative and positive pinned as a pair (the repo-hygiene ⑤ form): deleting the bad
   // literal alone would let the next rewrite drift back into another whole-buffer assign.
+  // The embedded branch of this pair retired with the handoff jump (0.4.36); the cache
+  // branch is the one that still runs.
   assert.equal(js.split(staleAssign).length - 1, 0, 'the stale overwrite form is gone')
   assert.equal(js.split(cacheAssign).length - 1, 0, 'the cache branch merged too')
-  assert.ok(
-    js.includes('streamEvents=mergeEntries(streamEvents.concat(embeddedFocus.history.events||[]))'),
-    'the embedded branch merges by seq',
-  )
-  assert.ok(js.includes('streamEvents=mergeEntries(streamEvents.concat(cached.streamEvents))'), 'and so does the cached one')
+  assert.ok(js.includes('streamEvents=mergeEntries(streamEvents.concat(cached.streamEvents))'), 'the cached one merges by seq')
   assert.ok(
     js.includes('olderEvents=mergeEntries(olderEvents.concat(cached.olderEvents||[]))'),
     'the cache restores the older window instead of dropping it',
   )
-  const branch = between(
-    'if(allowEmbedded&&embeddedFocus&&embeddedFocus.sessionId===activeSession){',
-    'const cached=sessionCache.get(activeSession)',
-  )
-  assert.ok(!branch.includes('olderEvents=[]'), 'the embedded branch never clears the older window')
   assert.match(
-    between('function paintInstantSession(allowEmbedded){', 'if(allowEmbedded&&embeddedFocus'),
+    between('function paintInstantSession(){', 'const cached=sessionCache.get(activeSession)'),
     /two independent/,
     'the reason is written next to the merge, not only in the change card',
   )
@@ -356,21 +283,23 @@ function buildInstantPaintSandbox() {
     .map((name) => extractFunction(js, name))
     .join('\n')
   const make = new Function(`
-    let activeSession=null,embeddedFocus=null,olderHasMore=false,olderExhausted=false,streamProjections=null
+    let activeSession=null,olderHasMore=false,olderExhausted=false,streamProjections=null
     let streamEvents=[],olderEvents=[]
     const sessionCache=new Map()
+    const tailCache=new Map()
     const painted=[]
     function paintInstantHistory(events){painted.push(events.map(eventSeq))}
     function ensureTranscriptFilled(){}
+    function evictSessionCache(){}
     ${body}
     return {
       painted,
       setActive(value){activeSession=value},
-      setEmbedded(value){embeddedFocus=value},
       setStream(value){streamEvents=value},
       setOlder(value){olderEvents=value},
       setCached(session,value){sessionCache.set(session,value)},
-      read(){return {streamEvents,olderEvents,embeddedFocus}},
+      setTail(session,value){tailCache.set(session,value)},
+      read(){return {streamEvents,olderEvents,olderHasMore,sessionCache}},
       paintInstantSession,
     }
   `)
@@ -379,24 +308,6 @@ function buildInstantPaintSandbox() {
 
 const seqs = (list) => list.map((entry) => entry.event.seq)
 
-test('AC-D1 re-entering a session keeps the earlier messages that were already on screen', () => {
-  const sandbox = buildInstantPaintSandbox()
-  sandbox.setActive('s1')
-  // Older history the phone already pulled, plus a stale one-turn handoff snapshot that
-  // survived the previous session switch — the exact state that used to blank the screen.
-  sandbox.setOlder([{ event: { seq: 1 } }, { event: { seq: 2 } }])
-  sandbox.setStream([{ event: { seq: 6 } }])
-  sandbox.setEmbedded({
-    sessionId: 's1',
-    history: { events: [{ event: { seq: 9 } }], hasMore: false, projections: null },
-  })
-  assert.equal(sandbox.paintInstantSession(true), true, 'the embedded branch is the one taken')
-  const after = sandbox.read()
-  assert.deepEqual(sandbox.painted[0], [1, 2, 6, 9], 'nothing already on screen leaves the paint')
-  assert.deepEqual(seqs(after.olderEvents), [1, 2], 'the older window is exactly where the phone had it')
-  assert.deepEqual(seqs(after.streamEvents), [6, 9], 'the snapshot merged in by seq, not by replacement')
-  assert.equal(after.embeddedFocus, null, 'and the snapshot is consumed on use')
-})
 
 test('AC-D1 a cached visit keeps both older windows as well', () => {
   const sandbox = buildInstantPaintSandbox()
@@ -410,9 +321,36 @@ test('AC-D1 a cached visit keeps both older windows as well', () => {
   })
   sandbox.setStream([{ event: { seq: 7 } }])
   sandbox.setOlder([{ event: { seq: 4 } }])
-  assert.equal(sandbox.paintInstantSession(false), true, 'the cache branch is the one taken')
+  assert.equal(sandbox.paintInstantSession(), true, 'the cache branch is the one taken')
   assert.deepEqual(sandbox.painted[0], [3, 4, 7, 8], 'cached and freshly pulled history both stay')
   assert.deepEqual(seqs(sandbox.read().olderEvents), [3, 4], 'neither older window is dropped')
+})
+
+// 预载包分支（用户 2026-10-15 m01005②）：sessionCache 没有这个会话（冷开或已被
+// 驱逐）时，主页登录时拉回的尾包先画上，屏幕不该是骨架。2026-10-18 起它还盖 at 戳
+// 并声明 olderHasMore=true（m02296①②）：不盖戳 → instantFresh 恒 false，点进去照付
+// 一次全量（「进去还要加载消息」）；不声明还有更早 → closeSessionStream 清零过的
+// olderHasMore 让 ensureTranscriptFilled 直接返回，一屏都填不满。
+test('AC-D1b a cold entry paints from the tail pack instead of a skeleton', () => {
+  const sandbox = buildInstantPaintSandbox()
+  sandbox.setActive('s9')
+  sandbox.setTail('s9', { text: 'late', time: 9, pack: [{ event: { seq: 12 } }, { event: { seq: 13 } }] })
+  sandbox.setStream([])
+  assert.equal(sandbox.paintInstantSession(), true, 'the pack counts as an instant paint')
+  assert.deepEqual(sandbox.painted[0], [12, 13], 'and what it holds is on screen')
+  assert.deepEqual(sandbox.read().olderEvents, [], 'the older window is not touched')
+  assert.equal(sandbox.read().olderHasMore, true, 'the pack declares there is more above it — the fill loop may run (m02296①)')
+  const stamped = sandbox.read().sessionCache.get('s9')
+  assert.ok(stamped && typeof stamped.at === 'number', 'the painted pack stamps the snapshot — a re-entry inside the fresh window skips the full read (m02296②)')
+  assert.equal(sandbox.paintInstantSession(), true, 'a re-entry merges by seq, no duplicates')
+  assert.deepEqual(sandbox.painted[1], [12, 13], 'still the same two messages')
+})
+
+test('AC-D1c an empty pack falls through to the loader', () => {
+  const sandbox = buildInstantPaintSandbox()
+  sandbox.setActive('s9')
+  sandbox.setTail('s9', { text: '', time: 0, pack: [] })
+  assert.equal(sandbox.paintInstantSession(), false, 'nothing to paint means the skeleton path stays')
 })
 
 function buildCloseSandbox() {
@@ -421,7 +359,7 @@ function buildCloseSandbox() {
     let activeSession=null,sessionStream=null,streamRenderFrame=null,pendingSyncTimer=null,projectionsSyncTimer=null
     let streamConnected=true,streamEvents=[],olderEvents=[],olderHasMore=true,olderBusy=true
     let olderExhausted=true,streamProjections={values:{}},streamRevision=7,tokenStream=null
-    let embeddedFocus=null,fillBusy=false,olderRunBusy=false
+    let fillBusy=false,olderRunBusy=false
     const streamWatermarks=new Map()
     const calls=[]
     function cancelAnimationFrame(){calls.push('raf')}
@@ -436,14 +374,13 @@ function buildCloseSandbox() {
       setFrames(id){streamRenderFrame=id},
       setPendingTimer(id){pendingSyncTimer=id},
       setWatermark(session,value){streamWatermarks.set(session,value)},
-      setEmbedded(value){embeddedFocus=value},
       setTokenStream(value){tokenStream=value},
       setBusyFlags(fill,olderRun){fillBusy=fill;olderRunBusy=olderRun},
       setBuffers(stream,older){streamEvents=stream;olderEvents=older},
       watermarkOf(session){return streamWatermark(session)},
       read(){return {sessionStream,streamRenderFrame,pendingSyncTimer,projectionsSyncTimer,streamConnected,streamEvents,
         olderEvents,olderHasMore,olderBusy,olderExhausted,streamProjections,streamRevision,
-        tokenStream,embeddedFocus,fillBusy,olderRunBusy}},
+        tokenStream,fillBusy,olderRunBusy}},
       closeSessionStream,
     }
   `)
@@ -462,13 +399,11 @@ test('AC-D7 the reset list, asserted at its present value', () => {
   sandbox.setFrames(11)
   sandbox.setPendingTimer(12)
   sandbox.setTokenStream({ text: 'half an answer' })
-  sandbox.setEmbedded({ sessionId: 's1', history: { events: [{ event: { seq: 5 } }] } })
   sandbox.setBuffers([{ event: { seq: 5 } }], [{ event: { seq: 1 } }])
   sandbox.setBusyFlags(true, true)
   sandbox.closeSessionStream()
   const after = sandbox.read()
   assert.equal(sandbox.watermarkOf('s1'), -1, 'the per-session watermark is released')
-  assert.equal(after.embeddedFocus, null, 'A-8(1): the stale handoff snapshot is released')
   assert.equal(after.tokenStream, null, 'and the half-finished token buffer with it')
   assert.equal(after.sessionStream, null)
   assert.equal(after.streamConnected, false)

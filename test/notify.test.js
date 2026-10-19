@@ -96,10 +96,15 @@ test('notify channels: serverchan query, bark path segments, wxpusher body', asy
   const ok = (text = '{}') => ({ ok: true, text: async () => text })
   const fetchImpl = async (url, init) => {
     seen.push({ url: String(url), init })
-    // WxPusher answers business results in the body: a success is code 1000.
-    return String(url).includes('wxpusher')
-      ? ok('{"code":1000,"msg":"处理成功","data":{}}')
-      : ok()
+    // Business results ride the body for BOTH code-checking channels: WxPusher
+    // success is code 1000, Server酱 success is code 0. An HTTP 200 alone never
+    // counts as delivered (serverchan used to be the exception that lied).
+    const u = String(url)
+    if (u.includes('wxpusher')) return ok('{"code":1000,"msg":"处理成功","data":{}}')
+    if (u.includes('sctapi')) {
+      return ok('{"code":0,"message":"","data":{"pushid":"1","readkey":"r","error":"SUCCESS","errno":0}}')
+    }
+    return ok()
   }
   const log = []
   const logger = (level, message) => log.push(`${level} ${message}`)
@@ -141,33 +146,36 @@ test('notify channels: serverchan query, bark path segments, wxpusher body', asy
 // WxPusher verdict (2026-10-07-fix-pocket-wxpusher-simple-push): the old bug
 // was judging `response.ok` only while WxPusher reports business failures as
 // HTTP 200 with body `{code, msg}` — code 1000 is the only delivered.
-test('notify wxpusher: an spt. key routes to simple-push and summary is capped at 100', async () => {
+test('notify wxpusher: an SPT_ key routes to simple-push and summary is capped at 100', async () => {
   const seen = []
   const fetchImpl = async (url, init) => {
     seen.push({ url: String(url), init })
     return { ok: true, text: async () => '{"code":1000,"msg":"处理成功"}' }
   }
   const longTitle = '长'.repeat(120)
+  // Real-world personal tokens are `SPT_…` with an underscore (live hit
+  // 2026-10-09: a dot-regex misrouted one to the classic API → 1001
+  // `appToken不正确`), so the underscore shape is the primary fixture.
   assert.equal(
-    await notifySend({ channel: 'wxpusher', key: 'spt.ABCDEFGHIJKLMNOPQRSTUVWXYZ' }, longTitle, '正文', { fetchImpl }),
+    await notifySend({ channel: 'wxpusher', key: 'SPT_ABCDEFGHIJKLMNOPQRSTUVWXYZ' }, longTitle, '正文', { fetchImpl }),
     true
   )
   assert.equal(seen[0].url, 'https://wxpusher.zjiecode.com/api/send/message/simple-push')
   const sent = JSON.parse(seen[0].init.body)
-  assert.equal(sent.spt, 'spt.ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+  assert.equal(sent.spt, 'SPT_ABCDEFGHIJKLMNOPQRSTUVWXYZ')
   assert.equal(sent.appToken, undefined, 'spt mode never sends the classic appToken field')
   assert.equal(sent.summary.length, 100, 'summary is truncated to the banner cap')
   assert.equal(sent.content, '正文')
   assert.equal(sent.contentType, 1)
-  // The documented prefix is lowercase `spt.`; the uppercase shape routes the
-  // same way (case-insensitive on purpose).
-  await notifySend({ channel: 'wxpusher', key: 'SPT.abcdefghijklmnop' }, 't', 'b', { fetchImpl })
-  assert.ok(seen[1].url.endsWith('/simple-push'), 'an SPT.-prefixed key is still a personal token')
+  // The docs' prose once showed a lowercase `spt.` (dot) shape; both prefixes
+  // reach the same simple-push API, so the dot shape routes the same way.
+  await notifySend({ channel: 'wxpusher', key: 'spt.abcdefghijklmnop' }, 't', 'b', { fetchImpl })
+  assert.ok(seen[1].url.endsWith('/simple-push'), 'an spt.-prefixed key is still a personal token')
 })
 
 test('notify wxpusher: HTTP 200 with a business failure answers false, peer msg logged with the key masked', async () => {
   const log = []
-  const key = 'spt.TOPSECRET123456'
+  const key = 'SPT_TOPSECRET123456'
   const delivered = await notifySend(
     { channel: 'wxpusher', key },
     't',
@@ -207,12 +215,12 @@ test('notify wxpusher: HTTP 200 with a business failure answers false, peer msg 
 test('notify wxpusher: a network-level failure keeps the class-name-only note', async () => {
   const log = []
   const delivered = await notifySend(
-    { channel: 'wxpusher', key: 'spt.ABCDEFGHIJK' },
+    { channel: 'wxpusher', key: 'SPT_ABCDEFGHIJK' },
     't',
     'b',
     {
       fetchImpl: async () => {
-        const error = new Error('connect EHOSTUNREACH spt.ABCDEFGHIJK')
+        const error = new Error('connect EHOSTUNREACH SPT_ABCDEFGHIJK')
         error.name = 'TypeError'
         throw error
       },
@@ -326,12 +334,15 @@ test('notify trigger: a running→done edge pushes exactly one completion notice
     // tick observes the flipped flag instead of the baseline's answer.
     t.bridge._sessionListCache = undefined
     await t.bridge.pollNotifyRunning()
-    assert.equal(sent.length, 1)
+    // 0.4.31：完成通知当场就发，不攒、不等车、不看时间。0.4.12–0.4.30 那套邮包
+    // （完成攒进信封、提问挂号当场投、等入站续期顺路带走）已按用户裁定整条作废：
+    // 「有消息就推……不要搞什么搭车不搭车、什么时间、什么信封」。
+    assert.equal(sent.length, 1, 'the settle goes straight to the wire')
     assert.ok(sent[0].startsWith('https://api.day.app/'))
     assert.ok(sent[0].includes(encodeURIComponent('写周报')), 'the session title names the notice')
     // A session that stays done does not notify twice.
     await t.bridge.pollNotifyRunning()
-    assert.equal(sent.length, 1)
+    assert.equal(sent.length, 1, 'the same settle never pushes twice')
     assert.equal(
       t.logs.some(({ message }) => message.includes(REAL_KEY)),
       false,
@@ -385,7 +396,13 @@ test('desktop notify endpoints: masked readback, guarded writes, delivered flag'
     const desktop = await t.pairDesktop()
     // Fresh state: off, nothing masked.
     const fresh = await httpFetch(`${t.base}/desktop/notify`, { headers: { Cookie: desktop } })
-    assert.deepEqual(await fresh.json(), { ok: true, channel: 'off', enabled: false, keyMasked: '' })
+    assert.deepEqual(await fresh.json(), {
+      ok: true,
+      channel: 'off',
+      enabled: false,
+      keyMasked: '',
+      clawbot: { bound: false, hasContext: false, userIdMasked: '' }
+    })
     // Save a real channel; the readback is masked and only the mask.
     const save = await httpFetch(`${t.base}/desktop/notify`, {
       method: 'POST',
@@ -393,7 +410,10 @@ test('desktop notify endpoints: masked readback, guarded writes, delivered flag'
       body: JSON.stringify({ channel: 'bark', key: REAL_KEY, enabled: true }),
     })
     assert.equal(save.status, 200)
-    assert.deepEqual(await save.json(), { ok: true, channel: 'bark', enabled: true, keyMasked: 'SE…90AB' })
+    const savedView = await save.json()
+    assert.equal(savedView.channel, 'bark')
+    assert.equal(savedView.enabled, true)
+    assert.equal(savedView.keyMasked, 'SE…90AB')
     const readback = await httpFetch(`${t.base}/desktop/notify`, { headers: { Cookie: desktop } })
     const readbackBody = await readback.json()
     assert.equal(readbackBody.keyMasked.includes(REAL_KEY), false)
@@ -422,11 +442,13 @@ test('desktop notify endpoints: masked readback, guarded writes, delivered flag'
     )
     // The test endpoint goes out through the injected channel and answers a
     // delivered flag; failure stays a 200 with delivered:false.
+    // quotaSpent is what lets the desktop tell "this channel is dead" apart
+    // from "WeChat is not accepting any more pushes this round".
     const test = await httpFetch(`${t.base}/desktop/notify/test`, {
       method: 'POST',
       headers: { Cookie: desktop },
     })
-    assert.deepEqual(await test.json(), { ok: true, delivered: true })
+    assert.deepEqual(await test.json(), { ok: true, delivered: true, quotaSpent: false })
     assert.equal(sent.length, 1, 'the test notice went through the injected fetch')
     assert.equal(
       t.logs.some(({ message }) => message.includes(REAL_KEY)),
@@ -468,4 +490,43 @@ test('the key leaks to no surface: status, boot, phone page, desktop page', asyn
     await t.stop()
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// The WeChat push is ONE line (user 2026-10-12: 「消息提示就是只显示一行」): the
+// status leads, the session name follows, the quota tail lands last so banner
+// truncation — which always eats from the tail — takes the least important
+// text first.
+test('notify clawbot: the push is one line — status, name, quota tail, in that order', async () => {
+  const seen = []
+  const fetchImpl = async (url, init) => {
+    seen.push({ url: String(url), init })
+    return { ok: true, status: 200, text: async () => '{"ret":0,"message_id":"7514407535056518664"}' }
+  }
+  let tailCalls = 0
+  const clawbotConfig = { channel: 'clawbot', key: 'bot_token_line', clawbot: { contextToken: 'ctx_line', userId: 'u1' } }
+  assert.equal(
+    await notifySend(clawbotConfig, '部署周报', '已完成', {
+      fetchImpl,
+      quotaTail: () => {
+        tailCalls += 1
+        return '（第 3/10 条）'
+      }
+    }),
+    true
+  )
+  assert.equal(tailCalls, 1, 'the quota tail hook fires exactly once per send')
+  const body = JSON.parse(seen[0].init.body)
+  const text = body.msg.item_list[0].text_item.text
+  assert.equal(text, '已完成｜部署周报（第 3/10 条）')
+  assert.ok(!text.includes('\n'), 'one line — the banner shows exactly this')
+
+  // No quotaTail hook (other call sites): the line just ends at the name, and
+  // no serial number is spent.
+  seen.length = 0
+  assert.equal(
+    await notifySend(clawbotConfig, '部署周报', '待回答', { fetchImpl }),
+    true
+  )
+  const bare = JSON.parse(seen[0].init.body).msg.item_list[0].text_item.text
+  assert.equal(bare, '待回答｜部署周报')
 })

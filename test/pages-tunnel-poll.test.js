@@ -128,6 +128,7 @@ function buildPollSandbox(state = {}) {
     function reopenSessionStream(){world.reruns.push('reopenSessionStream')}
     function armStreamSnapshot(){}
     function settleStreamSnapshot(ok){world.settled=ok}
+    function subagentQuery(){return ''}
     ${organs}
     return {
       openRealtime, openEventPolling, pollSessionEvents, setConnectionMode, reopenRealtime, pauseEventPolling, stopEventPolling,
@@ -283,6 +284,22 @@ test('event frames land in the stream window, bump the revision and hold the wat
   assert.equal(sandbox.world.projectionsSyncs, 1, 'turn-relevant frames schedule a projections sync')
 })
 
+test('a held empty answer restarts the poll at once instead of climbing the ladder', async () => {
+  // The bridge only sets `held` when it actually waited for something to happen.
+  // Backing off from that would fight the long-poll: the point of holding is that
+  // one request is essentially always open, so the phone must come straight back.
+  const sandbox = buildPollSandbox({ mode: 'tunnel', activeSession: 's1' })
+  sandbox.openEventPolling('s1')
+  await sandbox.fireNext()
+  await sandbox.fireNext()
+  sandbox.world.fetchQueue.push(eventsReply({ held: true }))
+  await sandbox.fireNext()
+
+  assert.equal(sandbox.eventPollEmpty, 0, 'a waited-on empty is not a quiet spell')
+  const next = sandbox.world.timers.filter((t) => !t.done && !t.cleared).at(-1)
+  assert.equal(next.ms, 1500, 'and the next poll goes out at the base cadence, not at the doubled one')
+})
+
 // ------------------------------------------------------------------ 重同步三触发
 
 test('a new collector generation forces a history resync before cursors are trusted', async () => {
@@ -429,7 +446,7 @@ test('the page is wired: openSession goes through openRealtime and the SSE liste
   assert.ok(streamSlice.includes('applyTokenFrame(sessionId,frame)'), 'and so does the token listener')
   const closing = js.slice(js.indexOf('function closeSessionStream()'), js.indexOf('function applyHistory('))
   assert.ok(closing.includes("if(typeof stopEventPolling==='function')stopEventPolling()"), 'leaving a session stops the poller too')
-  assert.ok(js.includes('pauseEventPolling();return}'), 'hidden pauses the poll')
+  assert.ok(js.includes('pauseEventPolling();stopListPoll();return}'), 'hidden pauses the polls (events + the landing list clock)')
   assert.ok(js.includes('reopenRealtime();'), 'foreground goes through the dispatcher')
   const checking = 'async ' + extractFunction(js, 'checkConnection')
   const live = extractFunction(js, 'applyLiveStatus')

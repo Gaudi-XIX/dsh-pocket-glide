@@ -169,15 +169,52 @@ test('#4c reconcileProvisionalSession replaces in place and dedupes a known real
   assert.deepEqual(reconcileProvisionalSession(['pending:1'], 'pending:1', 'real'), ['real'])
 })
 
-test('#4c createSessionIn consumes the two pure organs, inlined into the page script', () => {
+// 0.4.31: tapping "+" no longer creates a Host session. It used to, so a tap
+// followed by no message and a walk back left an untitled row that would not
+// go away. The two pure organs above stay inlined (the ghost-row fallback still
+// reads them) but the tap must not consume them: ensureSession is the page's
+// only session.create caller.
+test('draft creation: "+" mints nothing; ensureSession is the only session.create caller', () => {
   const js = mobilePageAssets({ locale: 'zh' }).js
-  assert.match(js, /function spliceProvisionalSession\(sessionIds, localId\)/, 'the organ must be inlined verbatim')
-  assert.match(js, /function reconcileProvisionalSession\(sessionIds, localId, realId\)/)
-  const create = extractFunction(js, 'createSessionIn')
-  assert.match(create, /spliceProvisionalSession\(/)
-  assert.match(create, /reconcileProvisionalSession\(/)
-  assert.match(create, /provisional:true/)
-  assert.match(create, /pending:/, 'the local provisional id carries the pending: prefix')
+  const draft = extractFunction(js, 'startDraftChat')
+  assert.doesNotMatch(draft, /session\.create/, 'opening a draft must not reach the Host')
+  assert.match(draft, /draftWorkspaceId=workspaceId/, 'the draft remembers its workspace')
+  const ensure = extractFunction(js, 'ensureSession')
+  assert.match(ensure, /rpc\('session\.create'/, 'the session is minted on first real use')
+  assert.match(ensure, /if\(activeSession\)return activeSession/, 'a materialized draft never re-creates')
+  assert.match(js, /startDraftChat\(wsId\)/, 'the + button is wired to the draft, not to a create')
+  // 2026-10-16（首次发送延迟）：send() 的材质化不再走早退分支，而是把它当作失败
+  // 的一条路径，由外层 catch 统一回滚乐观气泡、解锁运行态并把正文放回输入框。
+  // 2026-10-19（空会话）：材质化仍在 send 内、无会话仍走 throw+回滚，但 owner 只从
+  // 这次 await 取：`const owner=activeSession||await ensureSession();if(!owner)throw`。
+  // 旧写法在 await 之后回读 activeSession，返回手势能把 owner 读成 null 并发出
+  // sessionId:null 的 session.prompt（宿主 gateway/input-invalid，会话盘上留空壳）。
+  const sendBody = extractFunction(js, 'send')
+  assert.match(sendBody, /const owner=activeSession\|\|await ensureSession\(\)/,
+    'a draft send materializes the session inside the rollback path')
+  assert.match(sendBody, /if\(!owner\)throw/,
+    'and still fails the send when no session could be minted')
+  assert.match(sendBody, /await ensureSession\(\)/)
+  assert.match(extractFunction(js, 'uploadGenericFile'), /await ensureSession\(\)/)
+  assert.match(extractFunction(js, 'retryDraft'), /await ensureSession\(\)/)
+  // 2026-10-15 反转：打开设置面板**不再**建会话。旧断言要求这里出现
+  // `const sessionId=await ensureSession()`，而那正是幽灵会话的入口——用户在草稿里
+  // 只改设置就返回，宿主盘上留下一个永远没有消息的空会话（实证 session-10f1f2b6-…d3d，
+  // 822B 只有 permission/preset 与 agent-preset/selected，零条消息），主页于是多一个
+  // 「未命名对话」占位。模型/预设目录本就是宿主全局的，草稿态问得到；选中项先进
+  // draftPending，由 ensureSession 成功返回前统一补发。
+  const settings = extractFunction(js, 'openSessionSettings')
+  assert.doesNotMatch(settings, /ensureSession/, 'opening the settings panel must not mint a session')
+  assert.match(settings, /const sessionId=activeSession\|\|null/, 'a draft settings open works without an id')
+  assert.match(extractFunction(js, 'ensureSession'), /await applyDraftPending\(created\.sessionId\)/,
+    'the buffered draft choices are flushed onto the session the instant it exists')
+  // send() 不再另发一次 flush：flush 已织进 ensureSession 的创建链里（同一条 promise），
+  // 而 send/upload/retry 全部先 await ensureSession()。再等一次会给同步段多拍一帧，
+  // B-5 的「发送一开始输入框即清空」正是靠这一帧时序钉住的（2026-10-15）。
+  // 2026-10-15 的反面同样成立：send() 的同步段必须留在 await 之前——它现在是
+  // 「发送中」的全部可见证据（清空输入框、画乐观气泡、翻转发送钮/停止钮），
+  // 见 test/pages-send-latency.test.js。
+  assert.doesNotMatch(sendBody, /applyDraftPending/)
 })
 
 test('#4c renderWorkspaces paints a provisional row with the spin state and a title fallback', () => {

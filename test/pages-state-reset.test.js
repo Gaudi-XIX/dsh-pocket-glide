@@ -204,33 +204,51 @@ test('B-3 a second arm does not strand the first await on the fallback timer', a
 
 // ---------------------------------------------------------------------------- B-4
 
-test('B-4 provisionalSession is declared before the boot IIFE reads it', () => {
-  const declared = js.indexOf('provisionalSession=false')
-  const boot = js.indexOf('const boot=takeHandoffBoot()')
-  assert.notEqual(declared, -1, 'the flag must be initialised in the page-wide declaration chain')
-  assert.notEqual(boot, -1, 'the boot IIFE must still read a handoff boot')
-  assert.ok(declared < boot, 'a later declaration would leave the boot IIFE in its temporal dead zone')
-  assert.equal(
-    (js.match(/let provisionalSession/g) || []).length,
-    0,
-    'the flag must not be re-declared below the boot IIFE',
-  )
-  assert.ok(js.includes('provisionalSession=true'), 'the handoff path still marks the visit provisional')
-  assert.ok(js.includes('if(!provisionalSession)return;'), 'and the first real gesture still drops the provisional claim')
-})
 
 // ---------------------------------------------------------------------------- B-5
 
 test('B-5 send() re-checks the session it started for', () => {
-  const body = between(js, 'async function send(){', 'function formatBytes(')
-  assert.ok(body.includes('const owner=activeSession'), 'the send captures whose session it is')
-  const guards = (body.match(/if\(activeSession!==owner\)return/g) || []).length
-  assert.equal(guards, 2, 'both the success and the failure branch must re-check the session')
+  const body = between(js, 'async function send(', 'function formatBytes(')
+  // 2026-10-16: the owner capture moved BELOW the ensureSession await. Capturing
+  // it first meant a draft send (activeSession still null at capture time) pinned
+  // owner=null and both guards below could never match — the send-into-a-new-chat
+  // path would read as "the reader left". The capture has to sit after the await,
+  // next to the markRowRunning that now needs the real id.
+  //
+  // 2026-10-19: "after the await" became "from the await" — the id is the one the
+  // create returned, never a re-read of the shared variable. Re-reading it was its
+  // own defect: a back-tap landing inside the buffered draft RPCs in ensureSession
+  // ran showSessionList(), which nulls activeSession, and the send then went out
+  // with sessionId:null (host gateway/input-invalid) while the created session
+  // stayed on disk as a completely empty conversation. The sibling pin lives in
+  // test/pages-status-light.test.js.
+  const awaitedAt = body.indexOf('await ensureSession()')
+  const capturedAt = body.indexOf('const owner=activeSession||await ensureSession()')
+  assert.notEqual(awaitedAt, -1, 'send() still mints the draft session itself')
+  assert.notEqual(
+    capturedAt,
+    -1,
+    'owner is taken from the create, or a first-message send pins a null owner',
+  )
+  assert.equal(
+    (body.match(/const owner=activeSession;/g) || []).length,
+    0,
+    'no bare re-read of activeSession after the await — that is what sent sessionId:null',
+  )
+  // Both guards still have to be there, but they no longer sit side by side: the
+  // success branch checks `activeSession!==owner`, and the reply branch checks
+  // `activeSession===owner` before it touches the bubble, the composer or the
+  // running lock. Pin the pair by role, not by raw text — a refactor that drops
+  // either one leaves a send touching a session the reader already left.
+  const leftGuards = (body.match(/activeSession!==owner/g) || []).length
+  const ownerGuards = (body.match(/activeSession===owner/g) || []).length
+  assert.equal(leftGuards, 1, 'the success branch must re-check the session')
+  assert.equal(ownerGuards, 1, 'and the reply branch must confirm it is still the same one')
   // A whole-file lookup would be false-green: loadHistory() opens with the same line.
   assert.equal(
     (js.match(/const owner=activeSession/g) || []).length,
-    3,
-    'the trick here is that this line is not unique in the file, hence the slice above — loadHistory and queueAction own the other two captures',
+    4,
+    'the trick here is that this line is not unique in the file, hence the slice above — loadHistory, queueAction and goalAction own the other three captures',
   )
 })
 
@@ -240,6 +258,18 @@ function buildSendSandbox() {
   const make = new Function('box', `
     let activeSession='s1',agentRunning=false,busyEnter='queue',lastHistoryKey='chat:s1'
     let optimisticPrompts=[],sessionBlank=true
+    // 2026-10-16 (first-message latency): send() now raises the optimistic turn,
+    // empties the composer and closes the double-tap window BEFORE it awaits the
+    // session create. The sandbox runs the real body, so it has to carry that
+    // state too — otherwise sendBusy is an undeclared read and the first run() in
+    // every test throws instead of exercising the guards.
+    let sendBusy=false
+    // 2026-10-15: send() flushes whatever the draft settings panel buffered, right
+    // after the session is guaranteed to exist. B-5 pins the flight guards, not the
+    // flush — the buffer stays empty and the flush is a no-op stub here.
+    let draftPending=null
+    async function ensureSession(){return activeSession}
+    async function applyDraftPending(){}
     const composerDrafts=[]
     let flight=null,sentCleared=0
     const rpcCalls=[]
@@ -257,16 +287,25 @@ function buildSendSandbox() {
     function durableUserPromptText(message){return String(message.text||'')}
     function armAwaitingTurn(){}
     function clearAwaitingTurn(){}
+    // 2026-10-13: send() now stamps an optimistic running mark on the list row
+    // for the session it sends into. The row projection is its own sandbox
+    // (test/optimistic-running.test.js) — here the send machine only needs to
+    // know the call exists, so the stub keeps this file about composer state.
+    function markRowRunning(){}
+    function stopPendingSend(){}
     function syncSettingsControls(){}
     function syncPromptUi(){}
     function paintMessages(list){painted.push(list.length)}
     function messagesWithOptimistic(list){return list}
     function clearSentDrafts(){sentCleared+=1}
     function showError(id,error){errors.push({id,error})}
+    function showToast(message){errors.push({id:'toast',error:{message}})}
+    function encodedPromptBytes(){return 1}
+    function rpcBodyCeilingFor(){return 1024}
     async function loadHistory(){}
     async function refreshActiveSessionSummary(){}
     async function rpc(method,payload){rpcCalls.push({method,payload});await new Promise((resolve,reject)=>{flight={resolve,reject}})}
-    const L={draftUploading:'uploading',draftFailed:'failed',attachNotAccepted:'no {command}'}
+    const L={draftUploading:'uploading',draftFailed:'failed',attachNotAccepted:'no {command}',attachTooLarge:'too large'}
     // 2026-10-07-fix-pocket-r3-audit-batch: send()'s catch now maps too-large
     // failures through the page's single helper — splice the real one in so the
     // sandbox keeps running the page's own words (L.attachTooLarge/failed are not
@@ -335,23 +374,12 @@ test('B-6 the cancel button cannot reject unhandled', () => {
 
 // ---------------------------------------------------------------------------- B-7
 
-test('B-7 a re-entry into the session already on screen drops the handoff claim', () => {
-  // Anchored on the guard itself rather than on the function that follows it: the
-  // next declaration is not a stable anchor, but this exact condition only occurs here.
-  const start = js.indexOf('if(activeSession===id&&streamConnected&&!fromHistory)')
-  assert.notEqual(start, -1, 'the re-entry guard must exist')
-  const body = js.slice(start, start + 120)
+test('B-7 a re-entry into the session already on screen stays a no-op', () => {
+  const body = extractFunction(js, 'openSession')
+  assertSpliceable(body, 'openSession')
   assert.ok(
-    body.startsWith('if(activeSession===id&&streamConnected&&!fromHistory){handoffPainted=false;return}'),
-    'the early exit must clear the handoff paint flag, or the fetch path stays vetoed for the rest of the visit',
-  )
-  assert.ok(
-    !js.includes('&&!fromHistory)return;'),
-    'the unconditional form of that early exit must be gone',
-  )
-  assert.ok(
-    js.includes('if(activeSession===id&&streamConnected&&!fromHistory)'),
-    'and the guard it belongs to is unchanged',
+    body.includes('if(activeSession===id&&streamConnected&&!fromHistory)return;'),
+    'the same-session early exit survives — the handoff flag it used to clear retired with the handoff (0.4.36)',
   )
 })
 
@@ -365,7 +393,7 @@ test('B-8 closing a session empties the per-session state the next visit would i
     let tokenStream=null,streamConnected=false,streamEvents=[],olderEvents=[]
     let olderHasMore=false,olderBusy=false,olderExhausted=false
     let streamProjections=null,streamNeedsFullPaint=false,streamRevision=0
-    let activeSession='s1',embeddedFocus={sessionId:'s1',history:{events:[]}}
+    let activeSession='s1'
     const turnOpenState=new Map(),streamWatermarks=new Map()
     function clearSkeletonWatchdog(){}
     function clearStreamStaleWatch(){}
@@ -387,7 +415,7 @@ test('B-8 closing a session empties the per-session state the next visit would i
         streamWatermarks.set('s1',42)
       },
       state:()=>({ tokenStream,streamConnected,streamEvents,olderEvents,olderHasMore,olderBusy,olderExhausted,
-        streamProjections,streamNeedsFullPaint,streamRevision,turnOpenState,streamWatermarks,embeddedFocus }),
+        streamProjections,streamNeedsFullPaint,streamRevision,turnOpenState,streamWatermarks }),
     }
   `)
   const sandbox = make()
@@ -407,7 +435,6 @@ test('B-8 closing a session empties the per-session state the next visit would i
   assert.equal(state.streamRevision, 0)
   assert.equal(state.turnOpenState.size, 0, 'the open/closed turn map is per session')
   assert.equal(state.streamWatermarks.has('s1'), false, 'and so is the watermark of the session being left')
-  assert.equal(state.embeddedFocus, null, 'the handoff focus must not outlive the session it names')
 })
 
 test('B-8 the two fill locks release themselves instead of being cleared from outside', () => {
@@ -454,6 +481,26 @@ test('B-8 the cache is touched on a warm open and trimmed when the list comes ba
 
 // ------------------------------------------------------------------------ PB-poll
 
+test('S-1 opening the settings panel no longer resets the catalog (stale-while-revalidate)', () => {
+  const open = extractFunction(js, 'openSessionSettings')
+  const refresh = extractFunction(js, 'refreshSessionSettings')
+  assertSpliceable(open, 'openSessionSettings')
+  assert.ok(!open.includes('modelCatalog=null'), 'the tap must not wipe the catalog: the panel paints the cached one and the refresh lands behind it (0.4.36 walk-through: two tunnel round trips before anything appeared)')
+  assert.ok(open.includes('void refreshSessionSettings(sessionId)'), 'the refresh rides behind the paint, never in front of it')
+  assert.ok(refresh.includes('if(activeSession!==sessionId||modelCatalog)return'), 'a failed refresh keeps the stale catalog on screen; only the cache-less first open takes the error path')
+})
+test('S-2 entering a session or a draft must not wipe the settings catalog either', () => {
+  // The catalog is host-global — session/modelCatalog takes no session argument —
+  // so wiping it on every chat entry put each visit's first settings open back
+  // behind the loading shell while the host answered (~1.4s per call measured,
+  // pocket.log 2026-10-13 01:22). The 0.4.36 fix only ever helped repeat toggles
+  // inside one visit; the entry paths are where the every-time lag lived.
+  for (const name of ['openSession', 'startDraftChat']) {
+    const fn = extractFunction(js, name)
+    assertSpliceable(fn, name)
+    assert.ok(!fn.includes('modelCatalog=null'), `${name} must leave the catalog standing: the panel paints it cached and refreshSessionSettings revalidates behind the open`)
+  }
+})
 test('PB the pairing page poll cannot stack and skips a hidden tab', () => {
   const start = source.indexOf('function renderDesktopPairingPage(')
   const end = source.indexOf('export function renderPairingPinPage(', start)

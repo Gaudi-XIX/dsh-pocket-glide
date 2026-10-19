@@ -52,7 +52,9 @@ test('the stream asks for what only THIS session has already shown', () => {
 
 test('mobile page folds one whole turn into a single turn-process container', () => {
   const html = renderMobilePage({ locale: 'zh' })
-  // Closed turns render one <details class="turn-process">; live turns render .turn-process-live.
+  // Closed AND live turns render the same <details class="turn-process"> fold
+  // (0.4.40: the live phase speaks the desktop's shape — one container from the
+  // moment it appears; the flat .turn-process-live stack is retired).
   assert.ok(html.includes('turnProcess:true'), 'closed and live process messages must be flagged turnProcess')
   // Anchor rewritten by 2026-10-07-feat-pocket-smart-scroll-anchors (W3-卡6): the
   // details class now concatenates an optional msg-hist virtualization mark, so the
@@ -60,9 +62,24 @@ test('mobile page folds one whole turn into a single turn-process container', ()
   // intent — a closed turn renders a foldable details prefixed turn-process — is
   // kept by matching the emission prefix instead.
   assert.ok(html.includes('<details class="turn-process'), 'closed turn renders a foldable details')
-  assert.ok(html.includes("class=\"message assistant turn-process-live\""), 'live turn renders without folding')
+  assert.ok(html.includes('data-live="1" data-state="running"'), 'live turn renders the same fold, marked live with the running state')
+  assert.ok(!html.includes('turn-process-live'), 'the flat live stack is retired')
   // Only verbose opens the fold.
   assert.ok(html.includes("transcriptView==='verbose'"), 'fold opens only in verbose view')
+})
+
+test('fold headers drive the flip by hand, not through the native webview toggle', () => {
+  const html = renderMobilePage({ locale: 'zh' })
+  // Older WebKit webviews refuse to toggle a <details> whose <summary> is
+  // display:flex — the phone symptom "点开没反应" (live report 2026-10-09). The
+  // desktop client drives its process-group header with an onClick for the same
+  // reason, so the page installs a delegated tap driver in bindOpenState.
+  assert.ok(html.includes("box.dataset.summaryTapBound='1'"), 'the summary tap driver is installed once per #messages')
+  assert.ok(html.includes("event.preventDefault();details.open=!details.open"), 'a summary tap preventDefaults the native action and flips .open by hand')
+  assert.ok(html.includes("rememberOpenState(details.dataset.openKey,details.open)"), 'the manual flip is recorded, so it survives the next repaint')
+  // The driver must only own summary taps inside #messages: sheets and the
+  // pairing funnel keep their own native <details> semantics.
+  assert.ok(html.includes("root.closest('#messages')"), 'the driver is scoped to the transcript, not the whole document')
 })
 
 test('mobile reconnect page is importable and returns non-empty markup', () => {

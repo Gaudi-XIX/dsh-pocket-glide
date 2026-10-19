@@ -11,7 +11,7 @@
 //   * the control that makes the busy assertion mean anything — an ordinary failure
 //     MUST still paint the retry row. Without it, "no writes" would also be what a
 //     broken render path produces, and the busy test would pass for the wrong reason;
-//   * renderWorkspaces()/pickFocusSession() run against synthetic state, so the blank-row
+//   * renderWorkspaces() runs against synthetic state, so the blank-row
 //     fallback that keeps a filtered id from ghosting is observed rather than described;
 //   * a mutation case: feed the UNPROJECTED rows and watch the rule break. That is the
 //     discriminating-power receipt for this whole file — see the R1.3 comment.
@@ -65,6 +65,18 @@ function pageLabels(source) {
 
 const L = pageLabels(js);
 const HISTORY_IDLE_CAP = Number(js.match(/HISTORY_POLL_IDLE_CAP_MS=(\d+)/)[1]);
+// renderWorkspaces caps the rows it builds per expanded workspace; the sandbox must
+// carry the same ceiling or the cap under test is the test's own, not the page's.
+const LIST_ROWS_MAX = Number(js.match(/LIST_ROWS_MAX=(\d+)/)[1]);
+// The 12h default cap the expanded card applies (0.4.36); ROWS-RECENT pins it,
+// everything else here passes Infinity so fixture age cannot hide rows.
+const RECENT_WINDOW_MS = Number(js.match(/RECENT_WINDOW_MS=(\d+)/)[1]);
+// How many rows one tap of「更多」discloses (2026-10-17: it pages instead of
+// expanding the whole table in one synchronous paint).
+const MORE_ROWS = Number(js.match(/MORE_ROWS=(\d+)/)[1]);
+// The workspace head builds its notices through wsFlagsOf/wsFlagHtml (0.4.31), which
+// read this same ceiling out of page scope — the sandbox has to declare it too.
+const WS_FLAGS_MAX = Number(js.match(/WS_FLAGS_MAX=(\d+)/)[1]);
 
 // loadHistory's catch reads the errorCode off whatever its rpc rejected with, so the
 // sandbox below hands it a hand-written `rpc` stub that throws the Error this file
@@ -109,7 +121,7 @@ function buildHistorySandbox({ rpcThrows = null, streamConnected = false } = {})
     let activeSession='s1',historyBusy=false,streamRevision=0,streamConnected=${streamConnected}
     let agentRunning=false,pendingQuestion=null,idlePollMs=750
     let streamEvents=[],olderEvents=[],olderHasMore=false
-    let importantErrorActive=false
+    let importantErrorActive=false,openPrefetch=null,subagentView=null
     const HISTORY_POLL_IDLE_CAP_MS=${HISTORY_IDLE_CAP}
     const L=${JSON.stringify(L)}
     const $=(id)=>containers[id]
@@ -178,37 +190,88 @@ test('R1.1 the control: an ordinary failure still paints the retry row', async (
 // per-workspace shell, each carrying sessionIds) and `sessionSummaries` (the PROJECTED
 // rows). The whole no-ghost-row guarantee lives in the mismatch between them, so the
 // sandbox owns both and lets the real render run.
-function buildRenderSandbox({ workspaces = [], summaries = [], expanded = [] } = {}) {
+// `expanded` defaults to EVERY workspace: these tests are about which sessions
+// become rows, and since 2026-10-10 the page builds rows only for expanded
+// workspaces (a collapsed card renders its rows on the next tap, so 469 hidden
+// rows stop costing a phone 300 KB of markup per refresh). A test that wants the
+// collapsed behaviour must say so — `expanded: []`.
+function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, revealed = null, recentWindowMs = Infinity } = {}) {
   const host = fakeElement();
   const make = new Function(
     'workspaces',
     'sessionSummaries',
     'expandedWsIds',
+    'revealedLists',
     'container',
+    'RECENT_WINDOW_MS',
     `
     const L=${JSON.stringify(L)}
     const BLANK_ROW_VISIBLE_MS=${BLANK_ROW_VISIBLE_MS}
+    const LIST_ROWS_MAX=${LIST_ROWS_MAX}
+    const WS_FLAGS_MAX=${WS_FLAGS_MAX}
+    // These tests pin projection/row/pill behavior, not the unread census: recency 0
+    // keeps never-opened rows quiet exactly as they were before 0.4.33 (every fixture
+    // here is fresh + the ledger is empty). The census itself is pinned in
+    // test/landing-attention.test.js and test/pages-scroll-anchors.test.js.
+    const UNREAD_RECENCY_MS=0
+    // 0.4.35 的台账就绪位：这些沙箱不测「拉回前的悬置」，直接置就绪。
+    let openedAtLedgerReady=true
+    let bootAttention=0
+    // The head notices need the focused-session id (a focused row never reads as
+    // unread); these sandboxes render with nothing open.
+    let activeSession=null
+    const readOpenedMap=()=>({})
+    ${extractFunction(js, 'normalizeSelection')}
+    ${extractFunction(js, 'fieldText')}
+    ${extractFunction(js, 'sessionModelLabel')}
+    ${extractFunction(js, 'isSessionUnread')}
+    ${extractFunction(js, 'readLastMessageMap')}
+    ${extractFunction(js, 'lastMessageAtOf')}
+    ${extractFunction(js, 'lastMessageTimeOf')}
+    ${extractFunction(js, 'sortAtOf')}
+    ${extractFunction(js, 'pinRank')}
+    // 2026-10-13 置顶透传：渲染器按置顶分区，沙箱带同样的页面级数组（空＝无置顶）。
+    let pinnedSessionIds=[]
+    let pinBusy=new Set()
+    const PIN_SVG=''
+    const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
+    let lastMessageAt=readLastMessageMap()
     const $=(id)=>container
+    // T5 tails: the renderer paints a tail line from the prefetch cache and hands
+    // the visible rows to requestVisibleTails. This sandbox never fetches — an
+    // empty cache and a no-op pull match a landing with nothing prefetched yet.
+    const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
+    function requestVisibleTails(){}
+    ${extractFunction(js, 'tailTextOf')}
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'visibleSessions')}
     ${extractFunction(js, 'blankRowVisible')}
     ${extractFunction(js, 'taskState')}
     ${extractFunction(js, 'taskGlyph')}
-    ${extractFunction(js, 'relativeTime')}
+    ${extractFunction(js, 'pad2')}
+    ${extractFunction(js, 'formatMessageClock')}
     ${extractFunction(js, 'timeFor')}
     ${extractFunction(js, 'titleFor')}
+    ${extractFunction(js, 'wsFlagOf')}
+    ${extractFunction(js, 'wsFlagClass')}
+    ${extractFunction(js, 'wsFlagRank')}
+    ${extractFunction(js, 'wsFlagsOf')}
+    ${extractFunction(js, 'wsFlagHtml')}
+    ${extractFunction(js, 'wsRunning')}
+    ${extractFunction(js, 'wsGlyphOf')}
     ${extractFunction(js, 'renderWorkspaces')}
-    ${extractFunction(js, 'pickFocusSession')}
     return {
       renderWorkspaces,
-      pickFocusSession,
       visibleSessions,
+      taskState,
+      taskGlyph,
       get markup(){return container.innerHTML},
       rowIds(){return [...container.innerHTML.matchAll(/data-id="([^"]*)"/g)].map((m)=>m[1])},
     }
   `,
   );
-  const sandbox = make(workspaces, summaries, new Set(expanded), host);
+  // revealedLists is a Map now: workspaceId -> how many rows「更多」has disclosed.
+  const sandbox = make(workspaces, summaries, new Set(expanded ?? workspaces.map((w) => w.workspaceId)), new Map(revealed ?? []), host, recentWindowMs);
   sandbox.host = host;
   return sandbox;
 }
@@ -230,17 +293,13 @@ test('R1.2 focus is picked from the projected rows only', () => {
   const sandbox = buildRenderSandbox({ summaries: projected });
 
   assert.deepEqual(projected.map((s) => s.sessionId), ['s2', 's1'], 'the subagent row never reaches sessionSummaries');
-  assert.equal(sandbox.pickFocusSession(), running, 'a subagent asking a question cannot steal focus');
-
-  // With nothing but blanks and missing summaries left there is no focus to pin — null,
-  // not a stale row. (pickFocusSession filters !missingSummary && !blank before counting.)
-  const empty = buildRenderSandbox({ summaries: [{ sessionId: 'x', blank: true }, { sessionId: 'y', missingSummary: true }] });
-  assert.equal(empty.pickFocusSession(), null, 'no usable row means no pinned session');
+  // The focus picker itself retired with the landing jump (0.4.36); what is pinned
+  // here is that the projection the list renders is the one visibleSessions keeps.
 });
 
 test('R1.2 the workspace list paints the projected row and nothing else', () => {
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: '/projects/dsh', sessionIds: ['sub1', 's1'] }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['sub1', 's1'] }],
     summaries: buildRenderSandbox().visibleSessions([
       WS_ROW('sub1', { origin: 'subagent', projections: { values: { title: 'CHILD-SECRET' } } }),
       WS_ROW('s1'),
@@ -252,7 +311,10 @@ test('R1.2 the workspace list paints the projected row and nothing else', () => 
   assert.ok(!sandbox.markup.includes('CHILD-SECRET'), 'and its transcript title never leaks into the markup');
   assert.ok(!sandbox.markup.includes('data-id="sub1"'), 'nor as an attribute value');
   assert.ok(sandbox.markup.includes('data-ws="w1"'), 'the workspace itself is still rendered');
-  assert.ok(sandbox.markup.includes('ws-count">1'), 'the count reports only the visible row');
+  // The per-workspace task count was retired by user decision (2026-10-10: 「我要这个
+  // 数量干啥呢？直接不传吧」) — the row list above IS the answer, and it already
+  // excludes subagent children, projected-away ids and stale blank shells.
+  assert.ok(!sandbox.markup.includes('ws-count'), 'no task count is painted any more');
 });
 
 test('R1.2 a projected-away id lands on the empty state, not on a ghost row', () => {
@@ -260,7 +322,7 @@ test('R1.2 a projected-away id lands on the empty state, not on a ghost row', ()
   // renderWorkspaces must synthesise a blank entry, filter it, and show the empty hint —
   // that filter is the only thing standing between a stale id and a dead row.
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: '/projects/dsh', sessionIds: ['sub1'] }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['sub1'] }],
     summaries: buildRenderSandbox().visibleSessions([]),
   });
   sandbox.renderWorkspaces();
@@ -269,20 +331,18 @@ test('R1.2 a projected-away id lands on the empty state, not on a ghost row', ()
   assert.ok(!sandbox.markup.includes('sub1'), 'the id appears nowhere');
   assert.ok(sandbox.markup.includes('class="ws-empty"'), 'the empty hint is what the user sees');
   assert.ok(sandbox.markup.includes(L.noTasksHint), 'carrying the page own copy');
-  assert.ok(sandbox.markup.includes('ws-count">0'), 'the count reads zero, not one');
   assert.ok(!sandbox.markup.includes('ws-last'), 'no status glyph is invented for a row that does not exist');
 });
 
 // ------------------------------------------------------------------ R1.3 mutation
 
-test('R1.3 mutation: unprojected rows ghost, leak and steal focus — the projection is load-bearing', () => {
+test('R1.3 mutation: unprojected rows ghost and leak — the projection is load-bearing', () => {
   // This is the discriminating-power receipt for the whole file. It feeds the SAME
-  // renderWorkspaces()/pickFocusSession() the three tests above used, with the ONE
-  // difference that the rows skipped visibleSessions(). Every guarantee above inverts:
+  // renderWorkspaces() the tests above used, with the ONE difference that the rows
+  // skipped visibleSessions(). Every guarantee above inverts:
   //
   //   * the subagent becomes a clickable row twice (once per workspace),
-  //   * its transcript title leaks into the markup,
-  //   * pickFocusSession() pins the child session.
+  //   * its transcript title leaks into the markup.
   //
   // If any assertion in this file were "rewritten until true" instead of observed, this
   // case would have to go red with it — it runs the page's real render, so a fake
@@ -298,8 +358,8 @@ test('R1.3 mutation: unprojected rows ghost, leak and steal focus — the projec
   ];
   const sandbox = buildRenderSandbox({
     workspaces: [
-      { workspaceId: 'w1', title: 'DSH', path: '/projects/dsh', sessionIds: ['sub1', 's1'] },
-      { workspaceId: 'w2', title: 'other', path: '/projects/dsh/tmp', sessionIds: ['sub1'] },
+      { workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['sub1', 's1'] },
+      { workspaceId: 'w2', title: 'other', path: 'F:/defws/tmp', sessionIds: ['sub1'] },
     ],
     summaries: rawRows, // NOT passed through visibleSessions()
   });
@@ -307,9 +367,6 @@ test('R1.3 mutation: unprojected rows ghost, leak and steal focus — the projec
 
   assert.deepEqual(sandbox.rowIds(), ['sub1', 's1', 'sub1'], 'the child is a row in both workspaces');
   assert.ok(sandbox.markup.includes('CHILD-SECRET'), 'and its title is on screen');
-  const focused = sandbox.pickFocusSession();
-  assert.equal(focused.sessionId, 'sub1', 'focus follows the child asking the question');
-  assert.equal(focused.projections.values.title, 'CHILD-SECRET', 'and the pinned row is the leaking one');
 });
 
 // --------------------------------- R1-audit item 4 (change 2026-10-04-fix-pocket-r1-audit-batch)
@@ -329,24 +386,22 @@ test('R1.3 mutation: unprojected rows ghost, leak and steal focus — the projec
 
 test('R1-audit a locally created blank session is a visible row, not a ghost', () => {
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: '/projects/dsh', sessionIds: ['new1'] }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['new1'] }],
     summaries: [{ sessionId: 'new1', updatedAt: Date.now(), running: false, blank: true, awaitingQuestion: false }],
   });
   sandbox.renderWorkspaces();
 
   assert.deepEqual(sandbox.rowIds(), ['new1'], 'the new session is a clickable row');
-  assert.ok(sandbox.markup.includes('ws-count">1'), 'and the workspace count includes it');
 });
 
 test('R1-audit follow-up a days-old blank shell is not a row again', () => {
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: '/projects/dsh', sessionIds: ['old1'] }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['old1'] }],
     summaries: [{ sessionId: 'old1', updatedAt: Date.now() - 3 * BLANK_ROW_VISIBLE_MS, running: false, blank: true, awaitingQuestion: false }],
   });
   sandbox.renderWorkspaces();
 
   assert.deepEqual(sandbox.rowIds(), [], 'a stale empty shell is not a clickable row');
-  assert.ok(sandbox.markup.includes('ws-count">0'), 'the count reads zero, not one');
   assert.ok(sandbox.markup.includes('class="ws-empty"'), 'the empty hint is what the user sees');
 });
 
@@ -363,6 +418,101 @@ test('R1-audit follow-up blankRowVisible owns the freshness boundary', () => {
 });
 
 // ------------------------------------------------- R1.4 default-entry drift guard
+
+// ---- Status honesty (change 2026-10-08-feat-pocket-subagent-status-visibility, item 1) ----
+// The old taskState fell through to 'done' — a green check — for every row that was
+// merely not running. Two false signals came out of that: a lead whose child works on
+// (running:false on the parent row) and a row whose writer is held elsewhere
+// (agentAvailable:false, the wire's only "not routable" signal). The new chain shows
+// both explicitly, and the green check survives only where nothing says otherwise.
+
+test('STATUS-1 a held writer (agentAvailable:false) reads done like the desktop', () => {
+  const sandbox = buildRenderSandbox();
+  assert.equal(sandbox.taskState({ running: false, agentAvailable: false }), 'done', 'agentAvailable is not a state signal — a restart lights nothing');
+  assert.ok(!sandbox.taskState({ running: false, agentAvailable: false }).match(/unknown/), 'the unknown state is gone entirely');
+});
+
+test('STATUS-2 a frozen parent with a running child (descendantRunning) reads running', () => {
+  const sandbox = buildRenderSandbox();
+  assert.equal(sandbox.taskState({ running: false, descendantRunning: true }), 'running', 'the aggregation from the projection decides');
+  assert.ok(sandbox.taskGlyph('running').includes('spin'), 'and paints the spinner');
+});
+
+test('STATUS-3 a settled row with no adverse signal keeps the green check', () => {
+  const sandbox = buildRenderSandbox();
+  assert.equal(sandbox.taskState({ running: false }), 'done');
+  const glyph = sandbox.taskGlyph('done');
+  assert.ok(glyph.includes('m5.7 9.2 2.2 2.2 4.4-4.7'), 'the check-mark path is unchanged (green comes from CSS is-done)');
+  assert.ok(!glyph.includes('spin') && !glyph.includes('?'), 'and it is neither the spinner nor the unknown mark');
+});
+
+test('STATUS-4 priority: awaiting and error outrank the rest; no signal means done', () => {
+  const sandbox = buildRenderSandbox();
+  assert.equal(sandbox.taskState({ awaitingQuestion: true, agentAvailable: false }), 'awaiting');
+  assert.equal(sandbox.taskState({ lastError: 'x', agentAvailable: false }), 'error');
+  assert.equal(sandbox.taskState({ running: true, descendantRunning: true }), 'running');
+  assert.equal(sandbox.taskState({ running: false, agentAvailable: undefined }), 'done', 'missing agentAvailable is done');
+  assert.equal(sandbox.taskState({ running: false, agentAvailable: false }), 'done', 'false is not a state either (desktop parity)');
+  assert.equal(sandbox.taskState({ blank: true }), 'blank');
+});
+
+test('STATUS-4b a failed turn is not disguised by a question still on screen (2026-10-13)', () => {
+  // User report: 「会话的错误信息没有传到工作区页面…显示的还是绿色的打勾已完成」. Once the bridge
+  // projects the error onto the row, an older unanswered prompt must not demote it: a question is
+  // something the phone can answer, an error is something it has to see. So error reads first.
+  const sandbox = buildRenderSandbox();
+  assert.equal(sandbox.taskState({ awaitingQuestion: true, lastError: '400 Range of max_tokens' }), 'error', 'error beats the question flag');
+  assert.equal(sandbox.taskState({ awaitingQuestion: true, error: 'boom' }), 'error');
+  assert.equal(sandbox.taskState({ awaitingQuestion: true, status: 'error' }), 'error');
+  assert.equal(sandbox.taskState({ awaitingQuestion: true, running: true }), 'awaiting', 'the question still outranks a running row');
+});
+
+test('STATUS-5 a held writer paints done end to end (the unknown pill is retired)', () => {
+  const sandbox = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['held1'] }],
+    summaries: [{ sessionId: 'held1', updatedAt: Date.now(), running: false, agentAvailable: false }],
+  });
+  sandbox.renderWorkspaces();
+
+  assert.ok(sandbox.markup.includes('ws-last is-done'), 'the pill class carries done');
+  assert.ok(sandbox.markup.includes('task-row is-done'), 'and the row class does too');
+  assert.ok(!sandbox.markup.includes('is-unknown'), 'no unknown anywhere');
+});
+
+// ------------------------------------------------- BUG-2 agentPreset reads the projection, never the summary
+
+test('PRESET-1 agentPresetOf reads the projection map with three states', () => {
+  const make = new Function(
+    `
+    ${extractFunction(js, 'agentPresetOf')}
+    return agentPresetOf;
+  `,
+  )();
+
+  // undefined: the row carries no projection values at all (list rows without
+  // the agentPreset key) — the caller must keep its current preset.
+  assert.equal(make(undefined), undefined, 'no projections at all reads undefined');
+  assert.equal(make({}), undefined, 'empty projections read undefined');
+  assert.equal(make({ values: {} }), undefined, 'values without agentPreset read undefined');
+  // null: the host projected an explicit "no preset".
+  assert.equal(make({ values: { agentPreset: null } }), null, 'a projected null is a real null, not undefined');
+  // string: the projected id wins.
+  assert.equal(make({ values: { agentPreset: 'balanced' } }), 'balanced', 'a projected id passes through');
+  // A non-string value (defensive) never leaks through.
+  assert.equal(make({ values: { agentPreset: 5 } }), undefined, 'non-string values read undefined');
+});
+
+test('PRESET-2 the settings row feeds the projection into the preset state', () => {
+  const sandbox = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['s1'] }],
+    summaries: [{ sessionId: 's1', updatedAt: Date.now(), running: false, projections: { values: { agentPreset: 'codex-plan' } } }],
+  });
+  // taskState must not be confused by a projections-bearing row (the state chain
+  // reads only signal booleans; a values map is not a completion signal).
+  assert.equal(sandbox.taskState({ sessionId: 's1', running: false, projections: { values: { agentPreset: 'codex-plan' } } }), 'done', 'a preset row with no other signal stays done');
+});
+
+// ------------------------------------------------- R1.4 default-entry drift guard (layout lock)
 
 test('R1.4 the default entry cannot pick up the DOM script — one-level glob, resolved by node:fs', () => {
   // WP-2 (test/dom/subagent-session-dom.mjs) needs a browser and must stay out of the
@@ -447,4 +597,138 @@ test('R1.4 the default entry cannot pick up the DOM script — one-level glob, r
     !deep.some((name) => name.startsWith('dom/') && name.endsWith('.test.js')),
     'and no .test.js hides under test/dom/, which is what would pull the browser in',
   );
+});
+
+// ---------------------------------------------------------------------------
+// ROWS (2026-10-10) — the list builds rows only for what the reader can see.
+//
+// A collapsed card used to emit its entire session list into hidden markup and a
+// busy workspace emitted all ~436 rows: measured at the live scale (436 + 266
+// sessions), one refresh produced 319 KB of HTML and 712 inline <svg> nodes for a
+// phone that shows a dozen rows — and it did that on cold open, on back-nav, on
+// every expand/collapse, and on every return from the background.
+// ---------------------------------------------------------------------------
+
+const manyRows = (n, prefix = 's') => Array.from({ length: n }, (_, i) => WS_ROW(`${prefix}${i}`));
+
+test('ROWS-1 a collapsed workspace builds no rows at all', () => {
+  const rows = manyRows(3, 'a');
+  const sandbox = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: rows.map((r) => r.sessionId) }],
+    summaries: rows,
+    expanded: [],
+  });
+  sandbox.renderWorkspaces();
+
+  assert.deepEqual(sandbox.rowIds(), [], 'hidden rows are not built, not merely hidden by CSS');
+  assert.ok(sandbox.markup.includes('data-ws="w1"'), 'the card itself stays on screen');
+  assert.doesNotMatch(sandbox.markup, /ws-empty/, 'and a workspace WITH chats is never labelled empty');
+});
+
+test('ROWS-2 an expanded workspace shows EVERY in-window row — the 25-row ceiling is retired', () => {
+  // 2026-10-14 (card 2026-10-14-feature-pocket-手机八问收敛, user m00001③/m00073):
+  // every non-collapsed conversation inside the 24h window must be visible — the
+  // old LIST_ROWS_MAX=25 cap hid live rows behind「更多」and is gone. The old
+  // rule this test pinned ("exactly the ceiling is built, the remainder counts")
+  // must NOT be restored: the window, not a row count, is the only limit.
+  const rows = manyRows(LIST_ROWS_MAX + 7, 'b');
+  const sandbox = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: rows.map((r) => r.sessionId) }],
+    summaries: rows,
+  });
+  sandbox.renderWorkspaces();
+
+  assert.equal(sandbox.rowIds().length, rows.length, 'every in-window row is built, 25 is no longer a ceiling');
+  assert.doesNotMatch(sandbox.markup, /data-action="more"/, 'nothing waits behind a more row when all of it is fresh');
+});
+
+test('ROWS-3 stale rows wait behind the more row; paging discloses them a page at a time', () => {
+  // The「更多」affordance survives (user m00057: it is the way back through the
+  // window edge). Its meaning changed with ROWS-2: it reveals the OUT-OF-WINDOW
+  // tail, not a fixed 25-row slice. And since 2026-10-17 it PAGES: one tap
+  // discloses MORE_ROWS rows, not the whole table at once (user:「一次全量有可能
+  // 真的会卡住，每次加载10条差不多」). revealedLists therefore stores a running
+  // total per workspace, not a boolean.
+  const fresh = manyRows(3, 'b');
+  const stale = manyRows(2, 'old').map((r) => ({ ...r, updatedAt: Date.now() - RECENT_WINDOW_MS * 2 }));
+  const ids = [...fresh, ...stale].map((r) => r.sessionId);
+  const sandbox = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ids }],
+    summaries: [...fresh, ...stale],
+    recentWindowMs: RECENT_WINDOW_MS,
+  });
+  sandbox.renderWorkspaces();
+  assert.equal(sandbox.rowIds().length, fresh.length, 'by default only the in-window rows paint');
+  assert.ok(sandbox.markup.includes('>' + L.moreRows.replace('{n}', String(stale.length)) + '<'), 'the stale tail is counted, never silently dropped');
+
+  // A page larger than the hidden tail still finishes it in one tap.
+  const revealed = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ids }],
+    summaries: [...fresh, ...stale],
+    revealed: [['w1', fresh.length + MORE_ROWS]],
+    recentWindowMs: RECENT_WINDOW_MS,
+  });
+  revealed.renderWorkspaces();
+  assert.equal(revealed.rowIds().length, fresh.length + stale.length, 'a page covers the whole tail');
+  assert.doesNotMatch(revealed.markup, /data-action="more"/, 'and stops offering more');
+});
+
+test('ROWS-PAGE one tap of「更多」discloses MORE_ROWS rows, never the whole table', () => {
+  // The stall this prevents: a workspace holding hundreds of sessions built every
+  // row in one synchronous innerHTML pass the moment「更多」was tapped.
+  const fresh = manyRows(2, 'n');
+  const stale = manyRows(30, 'old').map((r) => ({ ...r, updatedAt: Date.now() - RECENT_WINDOW_MS * 2 }));
+  const ids = [...fresh, ...stale].map((r) => r.sessionId);
+  const build = (revealed) => buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/x', sessionIds: ids }],
+    summaries: [...fresh, ...stale],
+    revealed,
+    recentWindowMs: RECENT_WINDOW_MS,
+  });
+
+  const base = fresh.length
+  const page1 = build([['w1', base + MORE_ROWS]])
+  page1.renderWorkspaces()
+  assert.equal(page1.rowIds().length, base + MORE_ROWS, 'the first tap adds exactly one page')
+  assert.ok(
+    page1.markup.includes('>' + L.moreRows.replace('{n}', String(stale.length - MORE_ROWS)) + '<'),
+    'the rest is still counted behind another more row',
+  )
+
+  const page2 = build([['w1', base + MORE_ROWS * 2]])
+  page2.renderWorkspaces()
+  assert.equal(page2.rowIds().length, base + MORE_ROWS * 2, 'the second tap adds one more page')
+
+  const all = build([['w1', base + MORE_ROWS * 3]])
+  all.renderWorkspaces()
+  assert.equal(all.rowIds().length, ids.length, 'the third tap lands exactly on the end')
+  assert.doesNotMatch(all.markup, /data-action="more"/, 'and the more row retires once nothing is hidden')
+});
+
+test('ROWS-RECENT the default view follows the 24h window, floored at one row', () => {
+  const stale = manyRows(3, 'old').map((r) => ({ ...r, updatedAt: Date.now() - RECENT_WINDOW_MS * 2 }));
+  const fresh = manyRows(2, 'new');
+  const workspaces = [{ workspaceId: 'w1', title: 'DSH', path: 'F:/x', sessionIds: [...fresh, ...stale].map((r) => r.sessionId) }];
+  const summaries = [...fresh, ...stale];
+  const sandbox = buildRenderSandbox({ workspaces, summaries, recentWindowMs: RECENT_WINDOW_MS });
+  sandbox.renderWorkspaces();
+  assert.deepEqual(sandbox.rowIds(), fresh.map((r) => r.sessionId), 'only rows touched inside the window paint by default');
+  assert.ok(
+    sandbox.markup.includes('>' + L.moreRows.replace('{n}', String(stale.length)) + '<'),
+    'the stale rows wait behind the more row',
+  );
+
+  // Floor: a workspace whose every conversation is old still shows its newest one.
+  const allOld = buildRenderSandbox({
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/x', sessionIds: stale.map((r) => r.sessionId) }],
+    summaries: stale,
+    recentWindowMs: RECENT_WINDOW_MS,
+  });
+  allOld.renderWorkspaces();
+  assert.equal(allOld.rowIds().length, 1, 'one row is always visible');
+
+  // Revealing lifts the window entirely — in pages now, so ask for enough.
+  const revealed = buildRenderSandbox({ workspaces, summaries, revealed: [['w1', 5 + MORE_ROWS]], recentWindowMs: RECENT_WINDOW_MS });
+  revealed.renderWorkspaces();
+  assert.equal(revealed.rowIds().length, 5, 'the more row pages past the window regardless of age');
 });

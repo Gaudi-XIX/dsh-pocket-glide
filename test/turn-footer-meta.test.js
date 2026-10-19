@@ -66,7 +66,7 @@ function pageLabels(locale) {
 // between is the same anchor-pair slice used by test/transcript-order.test.js,
 // renamed here because this file owns both call sites. Leaf assertions are all
 // scoped through it: a whole-page `includes` would pass on a match somewhere
-// else entirely (the §6.4 acceptance item).
+// else entirely (tasks.md §6.4).
 function between(startAnchor, endAnchor, source = assets.zh.js) {
   const start = source.indexOf(startAnchor)
   const end = source.indexOf(endAnchor, start)
@@ -537,12 +537,17 @@ test('A15 renderMessage stays one line and appends the footer inside the message
   assert.ok(line.includes("role==='turn-error'"), 'the error bubble must still branch out first')
 })
 
-test('A19c the clock is gated by the running flag, not always stamped', () => {
+test('A19c the clock is gated per bubble, not by the whole-turn running flag', () => {
   const tail = between('function renderMessageTail(', 'function syncPromptUi(')
-  assert.ok(tail.includes('!agentRunning&&message.messageTime'),
-    'the clock must be suppressed while the session is running')
+  // 2026-10-10, user: 「AI 发出来的每一条消息下面不是一块一块的吗，每一块都该放一个时间」.
+  // The old rule hid every clock while the session ran; the bubble that is still being
+  // streamed is the only one that should not have one yet.
+  assert.ok(tail.includes('message.messageTime&&!message.streaming'),
+    'a bubble owns its clock, and only a still-streaming one waits')
+  assert.ok(!tail.includes('!agentRunning&&message.messageTime'),
+    'the whole-turn suppression must stay gone')
   assert.ok(!tail.includes('message.messageTime?formatMessageClock'),
-    'the unguarded clock form must stay gone')
+    'and the unguarded clock form must stay gone too')
 })
 
 test('A15 the projection keeps eventTime and normalizeUsage nested, not top level', () => {
@@ -584,10 +589,13 @@ test('A16 a turn whose records carry no seq still shows exactly one usage pill',
   const html = renderAll(project(events)).join('')
   const pills = html.match(/<span class="usage-pill"/g) || []
   assert.equal(pills.length, 1, `only the turn's last text message carries the pill, saw ${pills.length}`)
-  // one clock exactly: only the turn-final text item rides the last-item gate,
-  // and the unstamped user event grows no clock.
+  // FLIPPED 2026-10-10, user's 甲 ruling (「AI 发出来的每一条消息下面不是一块一块的吗，
+  // 每一块都应该放一个时间」): every landed assistant bubble stamps itself. The old
+  // contract stamped exactly one clock per turn, on the turn-final text item. The
+  // usage pill deliberately stays ONE per turn — it is a turn number, not a block one,
+  // and is the part of this test that must NOT be "fixed" alongside the clocks.
   const clocks = html.match(/<span class="msg-clock">/g) || []
-  assert.equal(clocks.length, 1, `exactly one clock on the turn-final text item, saw ${clocks.length}`)
+  assert.equal(clocks.length, 2, `one clock per landed bubble, saw ${clocks.length}`)
 })
 
 // ---------------------------------------------- A18 one pill per message, not per block
@@ -620,11 +628,11 @@ test('A18 one assistant message with several text blocks shows exactly one usage
     const html = renderAll(project(events)).join('')
     const pills = html.match(/<span class="usage-pill"/g) || []
     assert.equal(pills.length, 1, `${count} text blocks in one message must still print one pill, saw ${pills.length}`)
-    // one clock on the single user bubble + one on the turn-final assistant
-    // bubble; the per-block clocks are retired — the clock rides the same
-    // last-item gate as the pill.
+    // 甲 ruling 2026-10-10: one clock on the user bubble plus one on EVERY assistant
+    // text bubble (the phone draws one bubble per text block, so a message of `count`
+    // blocks carries `count` clocks). The pill stays at one.
     const clocks = html.match(/<span class="msg-clock">/g) || []
-    assert.equal(clocks.length, 2, '用户气泡 1 枚 + 回合末 assistant 气泡 1 枚，每块一钟已废（时钟与药丸同门）')
+    assert.equal(clocks.length, 1 + count, `用户气泡 1 枚 + 每个 assistant 气泡各 1 枚（每块一钟，见 2026-10-10 甲案）`)
   }
 })
 
@@ -655,17 +663,17 @@ test('A18 the pill rides the LAST text block when an earlier step had text too',
 
 // The mechanism, pinned so the node-identity shape cannot come back. Both the old
 // F-1 sentinel and the half-fix are named here: a regression to either would make
-// the projections above print one pill per block again.
-test('A19 the pill winner is the last text item index, not a node or a seq comparison', () => {
+// the projections above print one pill per block again. Under interleaved segments
+// the winner is the final reply block in rendered order, backfilled after the walk.
+test('A19 the pill winner is the last reply block emitted, backfilled on the rendered tail', () => {
   const projection = between('function visibleMessages(events)', 'function inlineMarkdown(')
-  assert.ok(projection.includes('const lastTextIdx=textItems.length-1'),
-    'the winner must be derived from the text item count')
-  assert.ok(projection.includes('usage:textIdx===lastTextIdx?normalizeUsage(turn.usage):undefined'),
-    'the pill predicate must compare the item index')
-  assert.ok(projection.includes('messageTime:textIdx===lastTextIdx?item.messageTime:undefined'),
-    'the clock must ride the same last-item gate as the pill')
+  assert.ok(projection.includes('let group=[],segment=0,lastText=-1,lastTime=undefined'),
+    'the emitter must track the last reply position in rendered order')
+  assert.ok(projection.includes('if(lastText>=0){rendered[lastText].messageTime=lastTime;rendered[lastText].usage=normalizeUsage(turn.usage)}'),
+    'the pill and the clock must be backfilled onto the final reply block')
   assert.ok(!projection.includes('lastTextSeq'), 'the _seq sentinel must stay gone')
   assert.ok(!projection.includes('item.node==='), 'the half-fixed node comparison must stay gone')
+  assert.ok(!projection.includes('textItems'), 'the old text-item queue must stay gone (segments emit in arrival order)')
 })
 
 // --------------------------------------------------------- A17 exact prompt parity
@@ -684,12 +692,14 @@ test('A17 a total that contradicts both declared cache buckets shows no pill', (
 // The footer clock must not be stamped while the session is still running, or the
 // phone shows "finish time" on a message the user has not finished reading yet.
 // `renderMessageTail` reads the closure `agentRunning` (set by `updateRunning`).
-test('A20 no clock is stamped while the assistant is still running', () => {
+test('A20 a finished bubble keeps its clock while the assistant is still running', () => {
   const sandbox = messageSandbox('zh')
   sandbox.setAgentRunning(true)
   const html = assistantHtml({ time: LOCAL(26, 3, 12, 9, 5) })
-  // a clock would normally be present; the running guard must suppress it
-  assert.equal(clockText(html), null, 'no clock while agentRunning')
+  // Flipped 2026-10-10 by the user's per-bubble rule: the clock used to disappear for the
+  // whole session during a turn, which read as "the times are gone again". The fixture
+  // stamps a past date, so the formatter prefixes it — assert the clock, not its width.
+  assert.match(clockText(html) || '', /\d{1,2}:\d{2}/, 'each landed bubble stamps itself, running turn or not')
   sandbox.setAgentRunning(false)
 })
 
@@ -754,14 +764,14 @@ test('A21 the clock returns once the session is idle', () => {
 // 四轮变异跑完后再次全量运行本档：pass 35 / fail 0；
 // 源码 sha256 与备份 `pages-backup-mock-wp8.js` 完全相同（17F2D089…A2E4B），
 // 确认变异没有留下任何残留。
-// 说明：这轮变异在仓库外的一份副本上进行 —— 写这份测试
+// 说明：这轮变异在仓库外的副本 `F:\defws\tmp\mock-pocket\` 上进行 —— 写这份测试
 // 时 `lib/pages.js` 里还没有 WP-1..WP-5 的产品码（grep renderMessageTail /
 // formatMessageClock / usage-pill / msg-tail / eventTime / normalizeUsage 全无命中），
 // 而本执行者的权限只允许新增测试档、不许改产品码。故先用按卡片设计稿实现的副本
 // 验证本档断言确实能钉住行为，产品码落地后本档即可直接在仓库内运行。
 
 // ===== 变异实证（补：仓内原地复跑，2026-10-04）=====
-// 产品码落地后，在本仓内又跑了一轮：五个变异，全部打红、全部字节级还原。
+// 产品码落地后，LEAD 在本仓内又跑了一轮，五个变异，全部打红、全部字节级还原。
 // 与上面四轮的关系：上面四轮是仓外副本上的先验验证，本轮是真实工作树上的确认；
 // 本轮多出 M5 —— 它正是上面那份设计稿里 `eventTime` 读 `entry.event.time`、
 // 而调用点传的是已解包的 `e` 的那个真缺陷，若不修，整条特性会以「所有消息都没有
@@ -793,4 +803,4 @@ test('A21 the clock returns once the session is idle', () => {
 
 // ── 轮次分隔：以上至「已还原。」为 M6 条目终点（2026-10-06 clock 卡变异实证）；以下两行是 2026-10-04 复跑轮（M1-M5）的轮尾注，hash/脚本均非 M6 真值。
 // 还原后：源码 sha256 回到基线 9283ffe72e0ca278，档内 pass 35 / fail 0。
-// 变异脚本不在仓内，全程不经 git（工作树带着未提交改动）。
+// 变异脚本 `F:\defws\tmp\mutate-footer.mjs`，全程不经 git（工作树带着未提交改动）。

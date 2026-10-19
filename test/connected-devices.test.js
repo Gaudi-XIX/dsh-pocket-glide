@@ -55,6 +55,32 @@ test('desktop tunnel payload endpoint also includes connectedDevices', async () 
   }
 })
 
+// The pairing page polls ONE route per tick (2026-10-17). That only works while
+// this payload keeps carrying what /desktop/status carried, so the contract is
+// pinned here rather than left to the page to discover at runtime.
+test('the tunnel payload is a superset of /desktop/status: the pairing page polls once', async () => {
+  const t = await startBridge()
+  try {
+    const desktopCookie = await t.pairDesktop()
+    const status = await (await httpFetch(`${t.base}/desktop/status`, { headers: { Cookie: desktopCookie } })).json()
+    const tunnel = await (await httpFetch(`${t.base}/desktop/tunnel/status`, { headers: { Cookie: desktopCookie } })).json()
+    for (const key of ['connected', 'connectedDevices', 'pendingPairings']) {
+      assert.ok(key in tunnel, `the one-request poll needs ${key} on the tunnel payload`)
+      assert.deepEqual(tunnel[key], status[key], `${key} must agree between the two routes`)
+    }
+  } finally {
+    await t.stop()
+  }
+})
+
+test('the pairing page issues one poll request per tick, and the tick is 2s', () => {
+  const page = renderDesktopPairingPage({ locale: 'zh', pairingUrl: 'http://127.0.0.1:1/pair?token=x', pairingPin: '12345678' })
+  const pollBody = page.slice(page.indexOf('async function poll()'), page.indexOf('setInterval(poll,'))
+  assert.match(pollBody, /fetch\('\/desktop\/tunnel\/status'\)/, 'it asks for the merged payload')
+  assert.ok(!pollBody.includes("fetch('/desktop/status')"), 'and it no longer pays a second round trip for the same tick')
+  assert.match(page, /setInterval\(poll,2000\)/, 'an 800ms tick was 2.5 polls a second for a page nobody watches that closely')
+})
+
 test('HTML inside a device card label is escaped', () => {
   const malicious = '<img src=x onerror=alert(1)>'
   const { deviceCardHtml } = extractDeviceRenderer()
@@ -146,7 +172,7 @@ test('the mode bar carries the third key: a mode-devices handle that stays enabl
     qrSvg: '',
   })
   assert.match(connected, /data-action="mode-devices"/, 'the third mode key ships with the page')
-  assert.match(connected, /连接设备管理/, 'the key copy is the agreed user wording')
+  assert.match(connected, /设备与通知/, 'the key copy is the agreed user wording')
   const btnDevices = connected.match(/<button id="btnDevices"[^>]*>/)
   assert.ok(btnDevices, 'the device key renders as its own button')
   assert.ok(!btnDevices[0].includes('disabled'), 'the device key is not gated on the connection state')
@@ -165,6 +191,47 @@ test('the mode bar carries the third key: a mode-devices handle that stays enabl
   assert.ok(!btnDevicesOff[0].includes('active'), 'it is not the active view before pairing')
   assert.match(disconnected, /class="mode-panel"/, 'the mode panel shell is intact')
   assert.doesNotMatch(disconnected, /body class="[^"]*device-view/, 'only the connected page declares the device view')
+})
+
+// 2026-10-10: the task-notification panel used to be emitted INSIDE
+// `.pairing-content`, which the connected state hid outright — so on a paired
+// desktop (the everyday state) the notification block was in the DOM but never
+// visible. That hiding rule is gone (2026-10-12: a live phone may not lock the
+// page), but the sibling requirement stands on its own: the devices view hides
+// `.pairing-content` as a whole, so anything trapped in it still disappears with it.
+function ancestorChainOf(html, id) {
+  const at = html.indexOf(`id="${id}"`)
+  assert.notEqual(at, -1, `#${id} is rendered`)
+  const stack = []
+  const re = /<(\/?)(div|body)\b([^>]*)>/g
+  let m
+  while ((m = re.exec(html.slice(0, at)))) {
+    const [full, slash, tag, attrs] = m
+    if (full.endsWith('/>')) continue
+    if (!slash) {
+      stack.push(`${tag}${(attrs.match(/class="([^"]*)"/) ?? [, ''])[1] ? '.' + (attrs.match(/class="([^"]*)"/) ?? [, ''])[1].split(' ')[0] : ''}`)
+    } else {
+      for (let i = stack.length - 1; i >= 0; i--) {
+        if (stack[i].startsWith(tag)) { stack.length = i; break }
+      }
+    }
+  }
+  return stack
+}
+
+test('the notification panel is not a descendant of the pairing container', () => {
+  for (const connected of [true, false]) {
+    const page = renderDesktopPairingPage({
+      locale: 'zh',
+      connected,
+      pairingUrl: 'http://127.0.0.1/pair?token=x',
+      qrSvg: '',
+    })
+    const chain = ancestorChainOf(page, 'notifyPanel')
+    assert.ok(!chain.includes('div.pairing-content'),
+      `connected=${connected}: #notifyPanel must not live under .pairing-content (${chain.join(' > ')})`)
+    assert.ok(chain.includes('div.wrap'), `#notifyPanel stays inside .wrap (${chain.join(' > ')})`)
+  }
 })
 
 test('desktop /desktop/status is forbidden without a desktop session', async () => {

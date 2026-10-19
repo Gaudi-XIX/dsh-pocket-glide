@@ -35,9 +35,14 @@ test('a pairing survives a full bridge restart; the phone never re-pairs', async
     // must authorize the phone's own cookie with no pairing funnel.
     const second = await startBridge({ bridgeOptions: { sessionStore: createSessionStore(dataDir) } })
     try {
-      assert.equal(second.bridge.sessions.size, 1, 'the pairing record comes back')
+      // Restart-parked: the record waits in the resumable map and the phone's
+      // next cookie-presenting request silently revives it (asserted below).
+      assert.equal(second.bridge.sessions.size, 0, 'restored sessions stay parked — the live map fills only when the phone calls in')
+      assert.equal(second.bridge.resumableSessions.size, 1, 'the pairing record parks in the resumable map')
+      assert.equal(second.bridge.resumableSessions.values().next().value.parkedByRestart, true, 'marked restart-parked so the cookie may silently revive it')
       const res = await httpFetch(`${second.base}/api/status`, { headers: { cookie } })
       assert.equal(res.status, 200, 'the phone is in, no PIN asked')
+      assert.equal(second.bridge.sessions.size, 1, 'the cookie revived the parked record into the live map')
     } finally {
       await second.stop()
     }
@@ -75,8 +80,13 @@ test('expired records are not resurrected by a restart', async () => {
       resumable: [],
     }))
     t.bridge.restorePersistedSessions()
-    assert.ok(t.bridge.sessions.has('live-token'))
-    assert.equal(t.bridge.sessions.has('dead-token'), false, 'an expired record stays dead')
+    // Restart restore parks instead of going live; an expired record must die
+    // entirely — parked or otherwise.
+    assert.equal(t.bridge.sessions.size, 0, 'live records park on restore')
+    assert.equal(t.bridge.resumableSessions.size, 1, 'the live record parks in the resumable map')
+    assert.equal(t.bridge.resumableSessions.values().next().value.parkedByRestart, true, 'the parked record carries the restart mark')
+    assert.equal(t.bridge.resumableSessions.has('dead-token'), false, 'an expired record stays dead')
+    assert.equal(t.bridge.suspendedSessions.has('dead-token'), false, 'an expired record parks nowhere')
     await t.stop()
   } finally {
     rmSync(dataDir, { recursive: true, force: true })

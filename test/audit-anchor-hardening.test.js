@@ -19,8 +19,8 @@ import { renderMobileReconnectPage, renderDesktopPairingPage } from '../lib/page
 
 test('P-3 the LAN plaintext warning ships on both surfaces in both locales', () => {
   const cases = [
-    ['zh', '局域网模式采用明文 HTTP 传输'],
-    ['en', 'LAN mode uses plaintext HTTP'],
+    ['zh', '局域网走明文传输'],
+    ['en', 'local network is unencrypted'],
   ]
   for (const [locale, phrase] of cases) {
     const reconnect = renderMobileReconnectPage(locale, 'lan')

@@ -96,7 +96,9 @@ test('queuedRowsOf marks which rows carry the Host MessageId', () => {
 // -------------------------------------------------------------- dock render
 
 function buildDockSandbox() {
-  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120 });
+  // querySelector mirrors the sibling sandbox: renderQueueDock looks up its own
+  // list to re-arm it when it overflows, and a headless fake has no layout.
+  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120, querySelector: () => null, classList: { toggle() {}, add() {}, remove() {} } });
   const containers = { goalBar: fake(), queueDock: fake() };
   const classState = {};
   const cssVars = {};
@@ -112,9 +114,10 @@ function buildDockSandbox() {
     `
     const L={
       goalPhaseActive:'进行中',goalPhasePaused:'已暂停',goalPhaseBlocked:'受阻',goalPhaseComplete:'已完成',
-      goalRoundUnit:' 轮',queueCount:'排队消息 {n} 条',queueImage:'图片',queueFile:'文件',queueUnrenderable:'[图片/文件]'
+      goalRoundUnit:' 轮',goalPause:'暂停',goalResume:'恢复',goalEdit:'编辑',goalClear:'清除',goalSave:'保存',goalCancel:'取消',
+      queueCount:'排队消息 {n} 条',queueImage:'图片',queueFile:'文件',queueUnrenderable:'[图片/文件]'
     }
-    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText=''
+    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',goalBusy=false,goalEditing=false,goalEditText=''
     const $=(id)=>containers[id]
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'goalOf')}
@@ -203,7 +206,7 @@ test('the queue dock drives the queue-open class and --queue-h like the todo doc
 // --------------------------------------------------- queue row management
 
 function buildQueueActionSandbox(rpc) {
-  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120, querySelector: () => null });
+  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120, querySelector: () => null, classList: { toggle() {}, add() {}, remove() {} } });
   const containers = { goalBar: fake(), queueDock: fake() };
   const toasts = [];
   const classState = {};
@@ -224,7 +227,7 @@ function buildQueueActionSandbox(rpc) {
     'toasts',
     `
     const L={queueEditFailed:'编辑失败',queueRemoveFailed:'撤回失败',queueSteerFailed:'发送失败',queueCount:'排队消息 {n} 条',queueImage:'图片',queueFile:'文件',queueUnrenderable:'[图片/文件]',queueEdit:'编辑',queueSave:'保存',queueCancel:'取消',queueRemove:'撤回',queueSteer:'立刻发送'}
-    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',activeSession='s1'
+    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',activeSession='s1',streamProjections=null
     const $=(id)=>containers[id]
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'goalOf')}
@@ -293,6 +296,29 @@ test('recall sends remove and refreshes the registry with the answer', async () 
     'the recalled row is gone — a stale pre-action paint would still carry its buttons');
   assert.deepEqual(box.toasts, [], 'no error on the happy path');
 });
+
+test('the remove affordance is the same 13px stroke icon family as steer/edit', () => {
+  const { js } = mobilePageAssets({ locale: 'zh' })
+  // The text × glyph sat on a different baseline, size, and weight than the
+  // 13×13 stroke SVGs next to it (live report 2026-10-09); the red is-danger
+  // stays as the destructive marker, only the glyph unifies.
+  assert.ok(js.includes('REMOVE_SVG=\'<svg width="13" height="13"'), 'remove ships as a 13×13 stroke SVG like its siblings')
+  assert.ok(!js.includes('aria-label="\'+esc(L.queueRemove)+\'">×</button>'), 'the bare × glyph is gone from the remove button')
+  assert.ok(js.includes('+esc(L.queueRemove)+\'">\'+REMOVE_SVG+\'</button>'), 'the remove button renders REMOVE_SVG')
+})
+
+test('the goal bar clear affordance is the same 13px stroke icon family as pause/edit', () => {
+  const { js } = mobilePageAssets({ locale: 'zh' })
+  // Same defect as the queue row's remove button, one surface over: the goal
+  // bar's clear verb shipped as a bare text × while pause/resume/edit beside it
+  // were 13×13 stroke SVGs. Measured at 390×844 the text ×'s ink box was 19px
+  // tall and its centre sat 4.4px below the pause icon's (ink centre 74.5 vs
+  // 70.5); after unifying on the SVG the spread is 0.41px. Red is-danger stays
+  // as the destructive marker — only the glyph unifies.
+  assert.ok(js.includes('GOAL_CLEAR_SVG=\'<svg width="13" height="13"'), 'clear ships as a 13×13 stroke SVG like its siblings')
+  assert.ok(!js.includes('+esc(L.goalClear)+\'"\'+(busy?\' disabled\':\'\')+\'>×</button>'), 'the bare × glyph is gone from the clear button')
+  assert.ok(js.includes('+esc(L.goalClear)+\'"\'+(busy?\' disabled\':\'\')+\'>\'+GOAL_CLEAR_SVG+\'</button>'), 'the clear button renders GOAL_CLEAR_SVG')
+})
 
 test('a refused action toasts the failure and clears the busy flag', async () => {
   const box = buildQueueActionSandbox(async (method) => {
@@ -388,7 +414,7 @@ test('the docks are wired where the page already consumes projections', () => {
     'applyHistory feeds the docks alongside todos');
   assert.match(js, /updateTodos\(projections\);updateGoal\(projections\);updateQueue\(projections\)/,
     'paintInstantHistory feeds the docks too');
-  assert.match(js, /renderTodoDock\(\);currentGoal=null;queuedTurn=\[\];queueBusy=false;queueEditing=null;queueEditText='';stopPending=false;renderGoalBar\(\);renderQueueDock\(\)/,
+  assert.match(js, /renderTodoDock\(\);currentGoal=null;queuedTurn=\[\];queueBusy=false;queueEditing=null;queueEditText='';goalBusy=false;goalEditing=false;goalEditText='';stopPending=false;renderGoalBar\(\);renderQueueDock\(\)/,
     'a session switch clears the docks with the todos');
 
   // Live updates: the stream events that fold into these projections schedule
@@ -426,8 +452,20 @@ test('the queue dock slots into the composer with the todo-dock height protocol'
     'and never precedes the composer again (the flex-flow slot is gone)');
 
   assert.match(css, /--queue-h:0px/, 'the height variable has a root default beside --todo-h');
-  assert.match(css, /\.queue-dock\{[^}]*pointer-events:auto/,
-    'the dock is clickable inside the pointer-events:none composer');
+  // BUG-5 (2026-10-19): the dock boxes sit inside the pointer-events:none composer and
+  // used to claim pointer-events:auto themselves. That turned the whole reserved band
+  // above the input row into a dead zone: a touch there hit the dock, the dock's list had
+  // nothing to scroll, the composer is not an ancestor of #messages, and the chain ends at
+  // body{overflow:hidden} — so the transcript could not be dragged while a message queued.
+  // The containers are transparent now; only the controls that have click semantics opt back in.
+  assert.match(css, /\.queue-dock\{[^}]*pointer-events:none/,
+    'the dock container is transparent so vertical gestures reach the transcript');
+  assert.match(css, /\.queue-list\{[^}]*pointer-events:none/, 'and so is its list wrapper');
+  assert.match(css, /\.queue-act\{[^}]*pointer-events:auto/, 'the row action buttons keep their hit area');
+  assert.match(css, /\.queue-edit-btn\{[^}]*pointer-events:auto/, 'and so do the save/cancel pair');
+  assert.match(css, /\.composer \.queue-edit-box\{[^}]*pointer-events:auto/, 'and the inline edit box stays typeable');
+  assert.match(js, /queueList\.style\.pointerEvents=queueList\.scrollHeight>queueList\.clientHeight\+1\?'auto':'none'/,
+    'the list re-arms its own scrolling only when it actually overflows');
   assert.match(css, /\.queue-list\{[^}]*max-height:180px/,
     'the list is capped so --queue-h stays bounded');
   assert.match(css, /\.chat-open .messages\{[^}]*var\(--todo-h\) \+ var\(--queue-h\)/,
@@ -453,4 +491,37 @@ test('the updateQueue RPC is allowlisted with the request wrap the host declares
   assert.deepEqual(entry.args(payload), { request: payload },
     'the whole call rides a single json param named request');
   assert.ok(RPC_ALLOWLIST.has('session.updateQueue'), 'paired phones may call it');
+});
+
+test('the goals RPCs ride flat agentId+ref args, probed against the host catalog', () => {
+  // Live-probed 2026-10-09 (dsh-goal descriptors + desktop refOf): every goals/*
+  // verb takes a plain agentId plus the CAS ref {id,revision}; edit additionally
+  // carries the json request. Stale refs are the host's guard (GOAL_STALE_REVISION).
+  for (const verb of ['pause', 'resume', 'clear']) {
+    const entry = HARNESS_ENDPOINTS['goals.' + verb];
+    assert.equal(entry.endpoint, 'goals/' + verb, verb + ' hits the goals service');
+    const payload = { sessionId: 's1', ref: { id: 'g1', revision: 3 } };
+    assert.deepEqual(entry.args(payload), { agentId: 's1', ref: { id: 'g1', revision: 3 } },
+      verb + ' passes the ref unwrapped');
+    assert.ok(RPC_ALLOWLIST.has('goals.' + verb), 'paired phones may call ' + verb);
+  }
+  const edit = HARNESS_ENDPOINTS['goals.edit'];
+  assert.equal(edit.endpoint, 'goals/edit');
+  const editPayload = { sessionId: 's1', ref: { id: 'g1', revision: 3 }, request: { objective: 'new objective' } };
+  assert.deepEqual(edit.args(editPayload), { agentId: 's1', ref: { id: 'g1', revision: 3 }, request: { objective: 'new objective' } },
+    'edit carries the json request beside the ref');
+  assert.ok(RPC_ALLOWLIST.has('goals.edit'), 'paired phones may call edit');
+});
+
+test('the goal bar renders verbs that drive the goals service', () => {
+  assert.match(js, /rpc\('goals\.'\+verb,\{sessionId:owner,ref:\{id:inner\.id,revision:inner\.revision\}\}\)/,
+    'pause/resume/clear go through the goals verbs with the projection ref');
+  assert.match(js, /rpc\('goals\.edit',\{sessionId:activeSession,ref:\{id:inner\.id,revision:inner\.revision\},request:\{objective:text\}\}\)/,
+    'edit sends the new objective in the request param');
+  assert.match(js, /\$\('goalBar'\)\.onclick=/, 'the goal bar has a click handler');
+  assert.match(js, /\$\('goalBar'\)\.oninput=/, 'the goal edit box has an input handler');
+  assert.match(js, /if\(phase==='complete'\)\{host\.classList\.remove\('is-editing'\);host\.hidden=true;host\.innerHTML='';return\}/,
+    'a completed goal hides the whole bar');
+  assert.match(css, /\.goal-actions\{/, 'the verb row is styled');
+  assert.match(document, /<div id="goalBar" class="goal-bar" hidden><\/div>/, 'the bar keeps its server-side slot');
 });

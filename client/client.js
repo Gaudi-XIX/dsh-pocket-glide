@@ -18,24 +18,25 @@ window.__ModuleLoader__.load({
      * 语言判定优先宿主 locale 服务（ctx.locale.getLocale().active，与 dsh-memory-river
      * client 半区同机制），服务缺席时退回 <html lang>；判定式 /^zh/i 与 pages 侧统一，
      * 未知语言一律回落 en。
-     * 字面配对齐 lib/pages.js 桌面配对页既有中英：入口名 pocket（手机端页面
-     * 指引里指代本按钮的同一称呼），内嵌页标题 Connect Mobile Device（= text.title）。 */
+     * 字面配对齐 lib/pages.js 桌面配对页既有中英：入口名 Pocket（2026-10-17 用户定
+     * 「名字都统一吧」——原先入口写小写 pocket、手机页指引写「pocket」窗口，两处一并改成
+     * 产品名 Pocket，中英同串不翻译），内嵌页标题 Pocket（= text.title）。 */
     var I18N = {
       zh: {
-        label: 'pocket',
+        label: 'Pocket',
         close: '关闭',
-        opening: '正在打开手机连接…',
-        frameTitle: '连接移动设备',
-        openFailed: '手机连接打开失败，请重启 DSH 后再试。',
+        opening: '正在打开 Pocket…',
+        frameTitle: 'Pocket',
+        openFailed: 'Pocket 打开失败，请重启后再试。',
         reactUnavailable: 'react 不可用：client 半区不注册 UI（请核对 package.json dsh.client.inject）',
         slotsUnavailable: 'slots 服务不可用：UI 未挂载（请核对 package.json dsh.client.inject）',
       },
       en: {
-        label: 'pocket',
+        label: 'Pocket',
         close: 'Close',
-        opening: 'Opening phone connection…',
-        frameTitle: 'Connect Mobile Device',
-        openFailed: 'Failed to open the phone connection. Restart DSH and try again.',
+        opening: 'Opening Pocket…',
+        frameTitle: 'Pocket',
+        openFailed: 'Failed to open Pocket. Restart and try again.',
         reactUnavailable: 'react unavailable: the client half registers no UI (check dsh.client.inject in package.json)',
         slotsUnavailable: 'slots service unavailable: UI not mounted (check dsh.client.inject in package.json)',
       },
@@ -93,15 +94,15 @@ window.__ModuleLoader__.load({
     /* 配对页所在路径：由插件 node 半区注册，转发到桥（dataelement 页面）。 */
     var PAIRING_PATH = '/desktop'
 
-    /* 按钮几何孪生宿主设置入口；模态外壳只做遮罩+居中，卡片内部整页由
-     * dataelement 页面自己负责。 */
+    /* 按钮几何对齐 footer 辅助区基线（参照 dsh-session-manager 的 sm-footerBtn）：
+     * 内容宽自适应、12/18 字号、tertiary 弱化色，hover 提到 secondary。 */
     var CSS = [
-      '.dsh-pocket-btn { box-sizing: border-box; width: 100%; height: 42px; min-width: 0;',
-      '  margin: 4px 0; padding: 0 10px 0 8px; gap: 8px; flex: none;',
+      '.dsh-pocket-btn { box-sizing: border-box; min-width: 0; min-height: 28px;',
+      '  margin: 4px 0; padding: 3px 8px; gap: 6px; flex: none;',
       '  display: inline-flex; align-items: center; justify-content: flex-start;',
-      '  font-family: inherit; font-size: 14px; line-height: 22px; white-space: nowrap;',
-      '  color: var(--dsw-alias-label-primary); background: transparent; border: none;',
-      '  border-radius: var(--dsw-radius-md); cursor: pointer; overflow: hidden; }',
+      '  font-family: inherit; font-size: 12px; line-height: 18px; white-space: nowrap;',
+      '  color: var(--dsw-alias-label-tertiary); background: transparent; border: none;',
+      '  border-radius: 6px; cursor: pointer; overflow: hidden; }',
       '.dsh-pocket-btn:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }',
       '.dsh-pocket-btn:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid',
       '  var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: -2px; }',

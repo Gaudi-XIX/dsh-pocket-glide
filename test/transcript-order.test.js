@@ -152,7 +152,18 @@ test('the history page is merged into the live buffer, never assigned over it', 
 
 test('a send repaints from the live buffer, not from a stale snapshot', () => {
   const { js } = mobilePageAssets({ locale: 'zh' })
-  assert.ok(js.includes('paintMessages(messagesWithOptimistic(currentTranscript()),true)'))
+  // 2026-10-12 P1: the send path used to hard-code stickToBottom=true, so sending
+  // yanked a reader who was parked in the middle down to the bottom. It now repaints
+  // with the reader's own intent (latched before the send), so assert the live buffer
+  // AND that the latch is what is passed — not a bare `true`.
+  // 2026-10-16 首次发送延迟: the first argument grew a second parameter — the echo
+  // sweep now has to run for the optimistic paint too, otherwise the durable copy of
+  // the just-sent prompt arrives later and is drawn as a SECOND bubble beside the
+  // optimistic one. The latch itself is untouched: `readIntent` stays the scroll arg,
+  // and a bare `true` in that position is still the regression this test was written for.
+  assert.ok(js.includes('const readIntent=typeof followStream===\'undefined\'?true:followStream'), 'the send must latch the reader intent before it mutates state')
+  assert.ok(js.includes('paintMessages(messagesWithOptimistic(currentTranscript(),true),readIntent)'))
+  assert.ok(!js.includes('paintMessages(messagesWithOptimistic(currentTranscript()),true)'), 'a send must not force a scroll to the bottom')
   assert.ok(!js.includes('paintMessages([...lastDurableMessages,...optimisticPrompts.map('))
 })
 
@@ -185,14 +196,9 @@ test('short transcripts keep pulling older pages until the viewport is filled', 
   assert.ok(js.includes('pages<8'), 'the fill loop must be bounded')
   assert.ok(js.includes('const deadline=Date.now()+6000'), 'the fill loop needs a time budget')
   assert.ok(js.includes('void ensureTranscriptFilled()'), 'a finished page triggers the next fill')
-  // 2026-10-02: the handoff path (paintInstantHistory) deliberately skips the
-  // history RPC, and openSession's own call ran before the handoff had set
-  // olderHasMore, so the fill loop was never armed on the normal phone boot
-  // path: a short handoff left the chat half empty on a tall screen.
-  assert.ok(js.includes('void ensureTranscriptFilled();return true}'), 'the embedded handoff must arm the fill loop')
   assert.ok(
-    js.split('void ensureTranscriptFilled()').length - 1 >= 3,
-    'fill must be armed at boot, after every page, and after openSession',
+    js.split('void ensureTranscriptFilled()').length - 1 >= 2,
+    'fill must be armed after every page and from the viewport refiller',
   )
   // The page size belongs to the transport, not to the layout: raising it to
   // "show more messages" is the treadmill the fix exists to avoid.
@@ -270,10 +276,6 @@ test('AC-PERF the exhausted latch follows its session and never blocks an empty 
     js.includes('olderHasMore=cached.olderHasMore;olderExhausted=cached.olderExhausted===true;'),
     'the cached latch comes back with its own session',
   )
-  assert.ok(
-    js.includes('olderHasMore=embeddedFocus.history.hasMore===true;olderExhausted=false;'),
-    'a fresh handoff snapshot clears it',
-  )
 
   // The latch only ever closes the row for a session that has real content; an
   // empty buffer keeps all three gates open, which is the bootstrap A-7③④ relies on.
@@ -313,67 +315,124 @@ test('the list follows the finger and springs back without the old ring', () => 
   assert.ok(js.includes("if(!active)box.classList.remove('animating')},320)"), 'the resting class is dropped even when no transition frame arrives')
   assert.ok(!js.includes('pullIndicator'), 'the second spinner stays deleted')
   assert.ok(!js.includes('pull-ring'), 'the ring stays deleted')
+  // The replacement for the ring is a sentence, not an animation: it names what
+  // releasing will do, so the gesture is acknowledged before the finger leaves.
+  assert.ok(html.includes('id="pullHint" class="pull-hint" role="status" aria-live="polite"'), 'the hint is a live region above the list')
+  assert.ok(html.includes('#chatView{position:relative}'), 'the hint has a positioning ancestor')
+  assert.ok(js.includes("hint=$('pullHint')"), 'the drag IIFE owns the hint')
+  assert.ok(js.includes("hintText(ready?'armed':'idle')"), 'the hint flips at the threshold, not before')
+  assert.ok(js.includes("hintText('loading');void loadOlder()"), 'and it stays talking while the page is in flight')
+  assert.ok(html.includes('#pullHint.visible{opacity:1'), 'the hint only paints while the drag owns it')
+  assert.ok(html.includes('#pullHint.armed{color:var(--brand)}'), 'armed reads as armed, not as the idle sentence')
+  // One indicator per event (live report 2026-10-10): while the drag owns the hint, the
+  // row inside the list must go quiet — it followed the finger while the sentence above
+  // it did not, so the reader saw the same line twice, one moving and one still.
+  assert.ok(html.includes('#pullHint.visible+#messages>.older-row{display:none}'), 'the row yields to the hint it duplicates')
+  // The arming distance is short and one-way: 26px damped (~52px of finger), and only
+  // pushing back above the drag start cancels it.
+  assert.ok(js.includes('THRESHOLD=26'), 'the pull arms on a short drag, not on a measured one')
+  assert.ok(js.includes('if(pulled>=THRESHOLD)ready=true'), 'arming is a latch, never a re-decision each frame')
+})
+
+// The hint must never promise a release that fetches nothing: once the host has
+// refused an older page, the same row names that end state instead.
+test('the pull hint names the end state instead of arming a dead release', () => {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  const hint = betweenA3('function hintText(state)', 'function setPull(px)', js)
+  assert.ok(
+    hint.includes('const inert=!olderHasMore&&(transcriptHasContent()||olderExhausted)'),
+    'inert is the same question the older row asks, not a copy of one branch of it',
+  )
+  assert.ok(
+    hint.includes('inert?transcriptHasContent()?L.olderStart:L.olderExhausted'),
+    'and it splits the two endings the row splits',
+  )
+  assert.ok(
+    hint.includes('busy=state===\'loading\'&&!inert,armed=!inert&&state===\'armed\''),
+    'so neither the armed colour nor the spinner can claim work that will not happen',
+  )
 })
 
 test('one back action always leaves the chat view', () => {
   const { js } = mobilePageAssets({ locale: 'zh' })
-  assert.ok(js.includes('async function openSession(id,title,fromHistory=false,pushHistory=true)'), 'the opener knows who pushed the entry')
+  assert.ok(js.includes('async function openSession(id,title,fromHistory=false,pushHistory=true,opts=null)'), 'the opener knows who pushed the entry (opts carries the subagent address)')
   assert.ok(
     js.includes("if(pushHistory)history.pushState(entry,'');else history.replaceState(entry,'')"),
     'an automatic jump rewrites the current entry instead of stacking a second chat entry',
   )
   assert.ok(
-    js.includes("if(document.body.classList.contains('chat-open')){history.replaceState({view:'sessions'},'');showSessionList();return}"),
-    'a stale duplicate chat entry collapses to the session list instead of reopening the same chat',
+    js.includes("if(state.sessionId===activeSession&&entrySub===hereSub&&document.body.classList.contains('chat-open')){history.replaceState({view:'sessions'},'');showSessionList();return}"),
+    'a stale duplicate chat entry (same session, same subagent address) collapses to the session list instead of reopening the same chat',
   )
   assert.ok(js.includes("history.state?.view==='chat'&&history.length>1"), 'a single-entry stack does not press a dead back button')
-  assert.ok(js.includes('await openSession(target.sessionId,titleFor(target),false,false)'), 'the resume jump does not push history')
   assert.ok(
-    js.includes('await openSession(nextFocus.sessionId,titleFor(nextFocus),false,false)'),
-    'the boot reconcile jump does not push history',
+    !js.includes('await openSession(target.sessionId'),
+    'the landing opens nothing at all (0.4.36「默认点链接就进主页面」): the retired resume jump pushed a chat entry the reader never asked for',
   )
-  assert.ok(js.includes("openSession(created.sessionId).catch((e)=>showError('listError',e))"), 'creating a session stays user-initiated, so it still pushes history (and a failed open shows the error)')
+  assert.ok(
+    !js.includes('openSession(nextFocus.sessionId'),
+    'the boot reconcile opens nothing at all: a reconcile jump inside a chat the reader never chose is what put them one entry away from the exit (live report 2026-10-12, back button left the app)',
+  )
+  assert.ok(js.includes('await ensureSession()'), 'creating a session stays user-initiated: the draft mints it at the first real action, so that open still pushes history')
   assert.ok(js.includes('void openSession(btn.dataset.id)'), 'opening a session row stays user-initiated, so it still pushes history')
 })
 
-test('handleHistory leaves the chat when a stale chat entry arrives while it is already open', () => {
+test('handleHistory collapses only the identical entry — a back into a DIFFERENT session reopens it', () => {
   const { js } = mobilePageAssets({ locale: 'zh' })
   const source = extractFunction(js, 'handleHistory')
 
-  const harness = chatOpen => {
+  const harness = ({ chatOpen, activeSession, view }) => {
     const calls = { opened: [], replaced: [], listed: 0 }
     const document = { body: { classList: { contains: name => chatOpen && name === 'chat-open' } } }
     const history = { replaceState: (state, url) => { calls.replaced.push([state, url]) } }
-    const openSession = (id, title, fromHistory) => { calls.opened.push([id, title, fromHistory]) }
+    const openSession = (id, title, fromHistory, pushHistory, opts) => { calls.opened.push([id, title, fromHistory, opts || null]) }
     const showSessionList = () => { calls.listed += 1 }
     const handleHistory = new Function(
       'document',
       'history',
       'openSession',
       'showSessionList',
+      'activeSession',
+      'subagentView',
       `${source}; return handleHistory;`,
-    )(document, history, openSession, showSessionList)
+    )(document, history, openSession, showSessionList, activeSession, view)
     return { calls, handleHistory }
   }
 
-  // The reported dead gesture: a stale {view:'chat'} entry pops while the chat is already on
-  // screen. Reopening the same session repainted an identical view, so back looked like a no-op.
-  const open = harness(true)
+  // The reported dead gesture: a stale {view:'chat'} entry pops while the same chat is
+  // already on screen. Reopening it repaints an identical view, so back looked dead.
+  const open = harness({ chatOpen: true, activeSession: 's1', view: null })
   open.handleHistory({ view: 'chat', sessionId: 's1', title: 'T' })
   assert.deepEqual(open.calls.opened, [], 'the same chat must not be reopened')
   assert.equal(open.calls.listed, 1, 'the session list is shown instead')
   assert.deepEqual(open.calls.replaced, [[{ view: 'sessions' }, '']], 'the stale entry is rewritten so the next back still works')
 
+  // 卡 2026-10-14-feature-pocket-手机八问收敛 工序6（m00001②）：返回该回到父会话而不是主页。
+  // 从子代理会话按返回，弹出的父会话条目与当前会话不同，是真实跳转——旧实现把它当陈旧副本
+  // 直接丢到主页，这就是「返回后落到主页」的根因。
+  const back = harness({ chatOpen: true, activeSession: 'child9', view: { parentSessionId: 'parent1', mode: 'one-shot' } })
+  back.handleHistory({ view: 'chat', sessionId: 'parent1', title: 'Parent' })
+  assert.deepEqual(back.calls.opened, [['parent1', 'Parent', true, null]], 'a back into the parent session reopens the parent')
+  assert.equal(back.calls.listed, 0, 'the list is NOT shown')
+  assert.deepEqual(back.calls.replaced, [], 'no entry is rewritten')
+
+  // Same session id but a different subagent address (child-of-a-different-parent
+  // is a different session in the Host's eyes): still a real navigation.
+  const otherChild = harness({ chatOpen: true, activeSession: 'c1', view: { parentSessionId: 'pA', mode: 'one-shot' } })
+  otherChild.handleHistory({ view: 'chat', sessionId: 'c1', title: 'C', subagent: { parentSessionId: 'pB', mode: 'one-shot' } })
+  assert.deepEqual(otherChild.calls.opened, [['c1', 'C', true, { subagent: { parentSessionId: 'pB', mode: 'one-shot' } }]], 'a different subagent address reopens with the new address')
+  assert.equal(otherChild.calls.listed, 0)
+
   // A genuine forward navigation into a chat, arriving while the list is on screen.
-  const listed = harness(false)
+  const listed = harness({ chatOpen: false, activeSession: null, view: null })
   listed.handleHistory({ view: 'chat', sessionId: 's1', title: 'T' })
-  assert.deepEqual(listed.calls.opened, [['s1', 'T', true]], 'a real back into a chat still opens it')
+  assert.deepEqual(listed.calls.opened, [['s1', 'T', true, null]], 'a real back into a chat still opens it')
   assert.equal(listed.calls.listed, 0)
   assert.deepEqual(listed.calls.replaced, [])
 
   // The sessions entry, and a missing state, both land on the list.
   for (const state of [{ view: 'sessions' }, null]) {
-    const plain = harness(true)
+    const plain = harness({ chatOpen: true, activeSession: 's1', view: null })
     plain.handleHistory(state)
     assert.equal(plain.calls.listed, 1, 'the sessions entry shows the list')
     assert.deepEqual(plain.calls.opened, [])
@@ -381,18 +440,6 @@ test('handleHistory leaves the chat when a stale chat entry arrives while it is 
   }
 })
 
-// 2026-10-02 live report: from a freshly reconnected chat, the browser's own edge
-// swipe left the app instead of returning to the workspace list. The in-app back
-// button can compensate with history.length>1, the edge swipe cannot — so a boot
-// that adopts the conversation must already have a list entry underneath it.
-test('a boot straight into the conversation keeps a workspace entry under it', () => {
-  const { js } = mobilePageAssets({ locale: 'zh' })
-  assert.ok(js.includes("history.replaceState({view:'sessions'},'')"), 'the landing entry is a sessions entry')
-  assert.ok(
-    js.includes("if(document.body.classList.contains('chat-open'))history.pushState({view:'sessions'},'')"),
-    'the adopted chat view needs a second sessions entry below it, or a swipe leaves the app',
-  )
-})
 
 // 2026-10-02 live report: reconnecting to an already-paired phone lands on a chat
 // whose transcript arrives one tunnel round trip later (the desktop deliberately
@@ -445,18 +492,20 @@ function buildRunningSandbox() {
   assert(bound > 0, 'the page declares its fallback bound')
   const idle = Number((js.match(/TURN_RUNNING_IDLE_MAX_MS=(\d+)/) || [])[1])
   assert(idle > 0, 'the page declares the idle bound the run state retires on')
-  const names = ['eventSeq', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning', 'clearTurnRunningWatch', 'expireTurnRunning', 'watchTurnRunning']
+  const names = ['eventSeq', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning', 'clearTurnRunningWatch', 'expireTurnRunning', 'confirmTurnRunning', 'finishTurnConfirm', 'watchTurnRunning']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(`
     const AWAITING_TURN_MAX_MS=${bound}
     const TURN_RUNNING_IDLE_MAX_MS=${idle},idle=TURN_RUNNING_IDLE_MAX_MS
-    let awaitingTurnSeq=null,awaitingTurnTimer=null,agentRunning=false,lastHistoryKey='',activeSession='s1',turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1,turnRunningTimer=null,pendingQuestion=null
+    let awaitingTurnSeq=null,awaitingTurnTimer=null,agentRunning=false,lastHistoryKey='',activeSession='s1',turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1,turnRunningTimer=null,turnRunningConfirming=false,pendingQuestion=null
+    let hostRows=[],rpcRejects=false
     const calls=[]
     const setTimeout=(fn,ms)=>{calls.push(['timeout',ms]);return 1}
     const clearTimeout=handle=>{calls.push(['clear',handle])}
     function syncPromptUi(){calls.push(['prompt'])}
     function syncTurnStatus(){calls.push(['status'])}
     function schedulePoll(){calls.push(['poll'])}
+    function rpc(method){calls.push(['rpc',method]);return rpcRejects?Promise.reject(new Error('bridge down')):Promise.resolve({items:hostRows})}
     ${body}
     return {
       arm(value){armAwaitingTurn(value)},
@@ -464,8 +513,10 @@ function buildRunningSandbox() {
       expire(){expireAwaitingTurn()},
       expireTurn(){expireTurnRunning()},
       setQuestion(value){pendingQuestion=value},
+      setRows(sessionId,running,descendantRunning){hostRows=[{sessionId,running:running===true,descendantRunning:descendantRunning===true}]},
+      setHostError(value){rpcRejects=value},
       idle,
-      state:()=>({awaitingTurnSeq,awaitingTurnTimer,agentRunning,lastHistoryKey,turnRunningSeq,turnRunningOpen,turnRunningSeenSeq,turnRunningTimer,pendingQuestion}),
+      state:()=>({awaitingTurnSeq,awaitingTurnTimer,agentRunning,lastHistoryKey,turnRunningSeq,turnRunningOpen,turnRunningSeenSeq,turnRunningTimer,turnRunningConfirming,pendingQuestion}),
       calls,
     }
   `)()
@@ -565,28 +616,99 @@ test('BUG1 the run state reads a high-water mark, not the visible window', () =>
 
 // ------------------------------------------------------------- WD the run watchdog
 
-test('WD1 an idle log retires the run state and raises the mark to what it saw', () => {
+// The consult is a promise round trip, so a test that wants the verdict has to let it land.
+async function settleConsult() {
+  await new Promise((resolve) => setImmediate(resolve))
+}
+
+test('WD1 an idle log consults the host, and only a host that says "not running" retires it', async () => {
   const sandbox = buildRunningSandbox()
   sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
   sandbox.update([{ event: { seq: 35, type: 'assistant/chunk' } }])
   assert.equal(sandbox.state().turnRunningOpen, true, 'the log is still moving, so the turn is still open')
   sandbox.calls.length = 0
   sandbox.expireTurn()
+  const during = sandbox.state()
+  assert.equal(during.turnRunningOpen, true, 'silence alone does not close the turn — the stop button stays up while the host is asked')
+  assert.equal(during.agentRunning, true, 'and nothing flickers during the round trip')
+  sandbox.setRows('s1', false)
+  await settleConsult()
   const after = sandbox.state()
-  assert.equal(after.turnRunningOpen, false, 'an idle log closes the turn instead of pinning the thinking status')
+  assert.equal(after.turnRunningOpen, false, 'a host that says nothing is running closes the turn instead of pinning the thinking status')
   assert.equal(after.agentRunning, false, 'and the status itself leaves with it')
   assert.equal(after.turnRunningSeq, 35, 'the mark is raised to the newest seq the log ever showed')
   assert.equal(after.lastHistoryKey, '', 'so the next poll repaints instead of skipping it')
+  assert.ok(sandbox.calls.some((call) => call[0] === 'rpc' && call[1] === 'session.list'), 'the verdict comes from the host row, not the silent log')
   assert.ok(sandbox.calls.some((call) => call[0] === 'status'), 'the status node comes off screen')
   assert.ok(sandbox.calls.some((call) => call[0] === 'prompt'), 'and the send/cancel pair is put back')
   assert.ok(sandbox.calls.some((call) => call[0] === 'poll'), 'the poll is re-armed at the idle rate')
 })
 
-test('WD2 the raised mark is sticky: a replayed window cannot reopen the turn', () => {
+test('WD1b the host still running keeps the turn open — the stop button survives a quiet minute', async () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
+  sandbox.update([{ event: { seq: 35, type: 'assistant/chunk' } }])
+  sandbox.calls.length = 0
+  sandbox.setRows('s1', true)
+  sandbox.expireTurn()
+  await settleConsult()
+  const after = sandbox.state()
+  assert.equal(after.turnRunningOpen, true, 'a long tool call that goes quiet is not a finished turn')
+  assert.equal(after.agentRunning, true, 'so the phone can still stop it')
+  assert.equal(after.turnRunningConfirming, false, 'the consult is closed, so the next bound can ask again')
+  assert.ok(!sandbox.calls.some((call) => call[0] === 'prompt'), 'no repaint of the send/cancel pair')
+  assert.ok(sandbox.calls.some((call) => call[0] === 'poll'), 'and the log is polled again')
+})
+
+test('WD1c a busy subagent counts as the host still working', async () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
+  sandbox.calls.length = 0
+  // The child row itself is filtered out of the phone list; the bridge marks the parent
+  // with descendantRunning, which is the whole reason a parent turn can look idle.
+  sandbox.setRows('s1', false, true)
+  sandbox.expireTurn()
+  await settleConsult()
+  assert.equal(sandbox.state().turnRunningOpen, true, 'work running under this session is still this session working')
+})
+
+test('WD1d a consult the bridge cannot answer still retires — a dead link must not pin the status forever', async () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
+  sandbox.calls.length = 0
+  sandbox.setHostError(true)
+  sandbox.expireTurn()
+  await settleConsult()
+  const after = sandbox.state()
+  assert.equal(after.turnRunningOpen, false, 'the failure path falls back to the old retirement')
+  assert.equal(after.agentRunning, false, 'and the send box comes back')
+  assert.equal(after.turnRunningConfirming, false, 'the consult flag is cleared on the failure path too')
+})
+
+test('WD1e one consult at a time, and fresh progress outranks a stale answer', async () => {
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
+  sandbox.calls.length = 0
+  sandbox.setRows('s1', false)
+  sandbox.expireTurn()
+  sandbox.expireTurn()
+  assert.equal(sandbox.calls.filter((call) => call[0] === 'rpc').length, 1, 'a second bound while the first is in flight asks nobody twice')
+  // The log wakes up with a newer event before the host answers. The answer describes the
+  // old silence, so it must not retire the turn the log has already re-opened evidence for.
+  sandbox.update([{ event: { seq: 40, type: 'assistant/chunk' } }])
+  await settleConsult()
+  const after = sandbox.state()
+  assert.equal(after.turnRunningOpen, true, 'progress seen during the consult voids the verdict')
+  assert.equal(after.agentRunning, true, 'and the stop button stays')
+  assert.ok(after.turnRunningTimer !== null, 'the watch is re-armed for the next bound')
+})
+
+test('WD2 the raised mark is sticky: a replayed window cannot reopen the turn', async () => {
   const sandbox = buildRunningSandbox()
   sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
   sandbox.update([{ event: { seq: 35, type: 'assistant/chunk' } }])
   sandbox.expireTurn()
+  await settleConsult()
   // The same window as before, replayed by the history poll. Its turn/start now sits
   // below the mark the expiry left behind, so it is not a new turn and must not count.
   sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
@@ -645,7 +767,7 @@ test('WD4 the watch stays off while a wait or a question owns the turn', () => {
   )
 })
 
-test('WD5 a question that owns the turn keeps the status up, and the bound keeps watching', () => {
+test('WD5 a question that owns the turn keeps the status up, and the bound keeps watching', async () => {
   const sandbox = buildRunningSandbox()
   sandbox.update([{ event: { seq: 10, type: 'turn/start' } }])
   sandbox.calls.length = 0
@@ -655,12 +777,14 @@ test('WD5 a question that owns the turn keeps the status up, and the bound keeps
   assert.equal(held.turnRunningOpen, true, 'a question that owns the turn is not an idle turn, so the thinking status stays up')
   assert.equal(held.agentRunning, true, 'and the run status stays with it')
   assert.ok(held.turnRunningTimer !== null, 'the watch is re-armed rather than dropped, so the mark stays bounded')
+  assert.ok(!sandbox.calls.some((call) => call[0] === 'rpc'), 'a question owns the turn, so there is nothing to ask the host about')
   // The other half of the same promise: holding the mark must not mean holding it
   // forever. Once the question is answered and no fresh event re-arms the watch,
-  // the very next expiry still retires the idle turn.
+  // the very next bound still retires the idle turn — through the host consult.
   sandbox.calls.length = 0
   sandbox.setQuestion(null)
   sandbox.expireTurn()
+  await settleConsult()
   const closed = sandbox.state()
   assert.equal(closed.turnRunningOpen, false, 'an answered question hands the turn back to the bound')
   assert.equal(closed.agentRunning, false, 'so nothing is left pinned')
@@ -728,7 +852,11 @@ test('M17 the send records what retirement needs', () => {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const send = betweenA3('async function send()', 'function formatBytes(n)', js)
   assert.ok(send.includes('sameTextAtSend=currentTranscript().reduce('), 'the same-text count is taken at send time')
-  assert.ok(send.includes('sameTextAtSend,afterSeq}'), 'and travels with the echo')
+  // 2026-10-19 BUG-3: the queued flag rides along with the retirement record, so
+  // the literal moved from `sameTextAtSend,afterSeq}` to
+  // `sameTextAtSend,afterSeq,queued:agentRunning}`. Pin the fields by name, not
+  // by the closing brace — otherwise every new field turns this red.
+  assert.ok(send.includes('sameTextAtSend,afterSeq'), 'and travels with the echo')
   const echo = betweenA3('function messagesWithOptimistic(durable)', 'function latestEventSeq()', js)
   assert.ok(echo.includes('return!(matches===1&&(floor>=0||item.sameTextAtSend===0))'), 'retirement is the narrow rule, not the first match')
   assert.ok(echo.includes('const floor=item.afterSeq'), 'the gate reads the watermark as it was before this paint')
@@ -742,7 +870,7 @@ function buildPullSandbox(opts) {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const source = 'async ' + extractFunction(js, 'loadOlder')
   return new Function('opts', `
-    let olderRunBusy=false,olderHasMore=${String(opts.olderHasMore ?? false)},activeSession='s1'
+    let olderRunBusy=false,olderHasMore=${String(opts.olderHasMore ?? false)},activeSession='s1',subagentView=null
     let streamEvents=[],olderEvents=[]
     const calls=[]
     function transcriptHasContent(){return Boolean(streamEvents.length||olderEvents.length)}
@@ -752,6 +880,9 @@ function buildPullSandbox(opts) {
     async function fetchOlderPage(){calls.push('page');return opts.pageReturnsTrue===true}
     async function ensureTranscriptFilled(){calls.push('fill')}
     function showError(){calls.push('error')}
+    let transcriptAnchor=null,skipAnchorOnce=false
+    function readTranscriptAnchor(){return null}
+    function restoreTranscriptAnchor(){return false}
     ${source}
     return { run: loadOlder, calls, state: () => ({ olderRunBusy }) }
   `)(opts)
@@ -761,7 +892,7 @@ function buildPageFetchSandbox(opts) {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const source = 'async ' + extractFunction(js, 'fetchOlderPage')
   return new Function('opts', `
-    let olderBusy=false,olderHasMore=${String(opts.olderHasMore ?? false)},olderExhausted=false,activeSession='s1'
+    let olderBusy=false,olderHasMore=${String(opts.olderHasMore ?? false)},olderExhausted=false,activeSession='s1',subagentView=null
     let streamEvents=[],olderEvents=[]
     const calls=[],rpcCalls=[]
     const box={scrollHeight:120,clientHeight:80,scrollTop:0,insertAdjacentHTML(){},querySelector(){return null}}
@@ -775,6 +906,12 @@ function buildPageFetchSandbox(opts) {
     function messagesWithOptimistic(list){return list}
     function paintMessages(){}
     function showError(){calls.push('error')}
+    let transcriptAnchor=null,skipAnchorOnce=false
+    function readTranscriptAnchor(){return null}
+    function restoreTranscriptAnchor(){return false}
+    // the pull re-aims the anchor once the page lands (older rows swap their 120px
+    // estimate for real height); the sandbox paints nothing, so it is a no-op
+    function settleOlderShift(){}
     async function rpc(method,payload){rpcCalls.push({method,payload});return {events:[],hasMore:false}}
     ${source}
     return { run: fetchOlderPage, calls, rpcCalls, state: () => ({ olderBusy, olderHasMore, olderExhausted }) }
@@ -786,7 +923,7 @@ function buildRowSandbox(state) {
   const body = ['olderButtonHtml', 'transcriptHasContent'].map((name) => extractFunction(js, name)).join('\n')
   return new Function('L', `
     const esc=v=>String(v==null?'':v)
-    let activeSession='s1',olderHasMore=${String(state.olderHasMore ?? false)},olderBusy=false,olderRunBusy=false
+    let activeSession='s1',olderHasMore=${String(state.olderHasMore ?? false)},olderBusy=false,olderRunBusy=false,olderExhausted=${String(state.olderExhausted ?? false)}
     let streamEvents=${JSON.stringify(state.streamEvents ?? [])},olderEvents=${JSON.stringify(state.olderEvents ?? [])}
     ${body}
     return olderButtonHtml
@@ -842,6 +979,18 @@ test('J-1 an exhausted conversation with pages already pulled goes back to being
   const html = buildRowSandbox({ olderHasMore: false, streamEvents: [{ event: { seq: 4 } }], olderEvents: [{ event: { seq: 1 } }] })()
   assert.ok(html.includes('disabled'), 'nothing older is left to ask for')
   assert.ok(html.includes(pageLabels('zh').olderStart), 'and the row says so')
+})
+
+// The other ending, which used to borrow the promise above: the host refused an
+// older page and nothing was ever painted, so there is no first message to be at
+// and no tap left to make. Saying "load more" here was the dead button.
+test('J-1 a refused page over an empty transcript says there is nothing more, not more', () => {
+  const html = buildRowSandbox({ olderHasMore: false, olderExhausted: true })()
+  assert.match(html, /data-older="1"/, 'the row still reports itself')
+  assert.ok(html.includes('disabled'), 'and it is not a tappable promise any more')
+  assert.ok(html.includes(pageLabels('zh').olderExhausted), 'it says nothing more, in its own words')
+  assert.ok(!html.includes(pageLabels('zh').olderMore), 'and never the wording that promised more')
+  assert.ok(!html.includes(pageLabels('zh').olderStart), 'nor a start of a conversation nothing was painted of')
 })
 
 test('J-1 every layer of the pull agrees on the same emptiness test', () => {

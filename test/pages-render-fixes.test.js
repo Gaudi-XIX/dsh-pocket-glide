@@ -10,6 +10,7 @@
 // fix landing. Geometry layer (the part a string can never prove) lives in
 // test/dom/pages-geometry.mjs — gated, real browser, 390x844.
 import { test } from 'node:test'
+import { execFileSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import {
   mobilePageAssets,
@@ -67,6 +68,14 @@ function extractFunction(source, name) {
     }
   }
   throw new Error(`unbalanced braces after ${name}`)
+}
+
+function betweenA3(start, end, source) {
+  const a = source.indexOf(start)
+  assert.notEqual(a, -1, `${start} must exist`)
+  const b = source.indexOf(end, a + start.length)
+  assert.notEqual(b, -1, `${end} must follow ${start}`)
+  return source.slice(a, b)
 }
 
 // --------------------------------------------------------------- T1 chatError
@@ -128,7 +137,15 @@ test('T1 the shared .error class is untouched (listError keeps document flow)', 
 test('T1 showError/clearTransientError chatError call sites unchanged (zero JS drift)', () => {
   const shown = (js.match(/showError\('chatError'/g) || []).length
   const cleared = (js.match(/clearTransientError\('chatError'/g) || []).length
-  assert.equal(shown, 12, 'showError chatError call count must equal the baseline')
+  // 12 baseline + ensureSession()'s create-failure report (2026-10-12 draft new-chat):
+  // a "+" draft whose session cannot be minted must say so on the chat error line —
+  // the list banner it used to hit is no longer where the tap happens. Not drift.
+  // 2026-10-16 (首次发送延迟): send() reports two more failures on the same line.
+  // The create window closed BEFORE the first await, so the pre-flight checks that
+  // used to return silently — an attachment still uploading, an image whose draft
+  // never finished — now have to speak, or the tap looks swallowed; and the create
+  // itself unwinds through send()'s own catch instead of ensureSession()'s.
+  assert.equal(shown, 23, 'showError chatError call count: 21 + the two new send() failure reports (2026-10-16: the pre-flight rejection and the materialize-and-send rollback)')
   // 3 baseline sites + the banner dismiss (2026-10-07-fix-pocket-banner-dismiss-and-ttl):
   // the tap-the-right-end exit must leave through the same guard as the frame exit, so it
   // is a fourth call site by construction, not a drift.
@@ -223,11 +240,22 @@ test('NF-1 (r2) the fallback permission presets still describe themselves when r
   // NF-1 was the fallback array speaking `desc:` while the rowHtml contract reads
   // `o.description` — every description came out empty on the failure path.
   const rowHtml = extractFunction(js, 'rowHtml')
+  const currentRead = extractFunction(js, 'permissionCurrent')
+  const sheet = extractFunction(js, 'renderPermissionSheet')
   const render = extractFunction(js, 'renderPlusPermission')
   const host = { innerHTML: '' }
   const src = `
     let plusView = 'permission'
-    const L = ${JSON.stringify({ plusBack: '返回', plusPermission: '权限', plusPermissionLoading: '正在读取权限预设…' })}
+    let streamProjections = null, sessionSummaries = [], activeSession = 's1'
+    // 2026-10-15: permissionCurrent() reads the draft buffer first, and the sheet now
+    // trims the dangerous preset out of a draft (no session). This splice is the
+    // in-chat path, so the buffer stays null and all four options render.
+    let draftPending = null
+    // 2026-10-16: both stay empty while rpc is down — permissionCurrent() then falls
+    // through to the host default, which is exactly the unreadable case under test.
+    let permissionDefault = ''
+    let permissionOptions = []
+    const L = ${JSON.stringify({ plusBack: '返回', plusPermission: '权限', plusPermissionLoading: '正在读取权限预设…', plusRowCurrent: '使用中', plusCurrentPermission: '查看当前权限' })}
     const PLUS_ICONS = { permission: '<svg></svg>' }
     const PLUS_BACK_SVG = '<svg></svg>'
     const esc = (v) => String(v == null ? '' : v)
@@ -235,6 +263,8 @@ test('NF-1 (r2) the fallback permission presets still describe themselves when r
     const plusSetSearch = () => {}
     const rpc = async () => { throw new Error('rpc down') }
     ${rowHtml}
+    ${currentRead}
+    ${sheet}
     ${render}
     return renderPlusPermission().then(() => host.innerHTML)
   `
@@ -244,11 +274,48 @@ test('NF-1 (r2) the fallback permission presets still describe themselves when r
     }
     assert.equal((html.match(/class="plus-row-desc"/g) || []).length, 4,
       'three fallback rows + the current-permission row render a desc slot')
-    // negative guard: exactly one empty desc slot is legal (permission-current's
-    // desc:'' contract); the three fallback rows must never be empty again.
-    assert.equal((html.match(/<span class="plus-row-desc"><\/span>/g) || []).length, 1,
-      'only the current-permission row ships an empty description')
+    // negative guard: no desc slot is empty any more — the current-permission row
+    // used to ship `desc:''` and now reports the active preset, so an unreadable
+    // sheet cannot look blank (2026-10-14).
+    assert.equal((html.match(/<span class="plus-row-desc"><\/span>/g) || []).length, 0,
+      'no row ships an empty description — the current-permission slot always speaks')
+    // 2026-10-16: the dash is gone from that slot. With rpc down there is no host
+    // default either, so the row says it is still loading — the honest state. A dash
+    // read as "you have no permission preset", which is what the live report saw.
+    assert.equal((html.match(/—/g) || []).length, 0,
+      'the current-permission row no longer renders a bare em dash')
+    assert.ok(html.includes('<span class="plus-row-desc">' + '正在读取权限预设…' + '</span>'),
+      'with nothing readable the current-permission row says it is still loading')
   })
+})
+
+test('NF-1b (2026-10-16) the permission sheet falls back to the HOST default, not a dash', () => {
+  // The live report: 「模式和权限…显示的都是个横杠…点开权限后，没有任何高亮」.
+  // Root cause: permissionPresets.catalog also answers defaultPreset, and the sheet
+  // dropped it — so a session whose permission projection had not landed yet had no
+  // current value at all, and no row could match. permissionCurrent() now ends at the
+  // host default, which is the truth for "nothing pinned yet".
+  const currentRead = extractFunction(js, 'permissionCurrent')
+  const src = `
+    let streamProjections = null, sessionSummaries = [], activeSession = 's1'
+    let draftPending = null
+    let permissionDefault = 'workspace-write'
+    ${currentRead}
+    return permissionCurrent()
+  `
+  assert.equal(new Function(src)(), 'workspace-write',
+    'with no projection anywhere the host defaultPreset is what the sheet reports')
+
+  // and the catalog call must actually keep it
+  const render = extractFunction(js, 'renderPlusPermission')
+  assert.match(render, /permissionDefault\s*=\s*typeof value\?\.defaultPreset==='string'\?value\.defaultPreset:''/,
+    'renderPlusPermission stores defaultPreset from the catalog answer')
+
+  // the loading/dash contract is shared with NF-1 above: renderPermissionSheet must
+  // speak when current is empty rather than paint '—'
+  const sheet = extractFunction(js, 'renderPermissionSheet')
+  assert.doesNotMatch(sheet, /current\|\|'—'/,
+    'renderPermissionSheet never ships the bare dash for the current row')
 })
 
 test('C5 (r2) the L table carries no dead unit/effort keys', () => {
@@ -302,6 +369,14 @@ test('T5 a tunnel failure offers the way back, a lan failure keeps its retry but
   // retry button's presence: lan gets one, tunnel never does.
   assert.doesNotMatch(tunnelHtml, /id="retryBtn"/, 'tunnel mode ships no retry button')
   assert.match(lanHtml, /id="retryBtn"/, 'lan mode keeps its retry button')
+})
+
+test('T5b a first-time phone is not told its connection was lost', () => {
+  const fresh = renderMobileReconnectPage('zh', 'tunnel', { fresh: true })
+  const returning = renderMobileReconnectPage('zh', 'tunnel', {})
+  assert.match(fresh, /<h1 id="heading">连接 Pocket<\/h1>/, 'the landing page of a never-paired phone names the action')
+  assert.doesNotMatch(fresh, /连接已断开/, 'no false alarm on the very first visit')
+  assert.match(returning, /<h1 id="heading">连接已断开<\/h1>/, 'a phone that did lose its session still gets the loss wording')
 })
 
 test('T5 fail() paints the /disconnected exit only in tunnel mode', () => {
@@ -469,19 +544,286 @@ test('T6 the permission row description speaks plain language', () => {
 test('T6 the named-tunnel panel hints where ingress must point', () => {
   const zhHtml = renderDesktopPairingPage({ locale: 'zh', pairingUrl: 'http://x', qrSvg: '' })
   const enHtml = renderDesktopPairingPage({ locale: 'en', pairingUrl: 'http://x', qrSvg: '' })
+  // 2026-10-12: the tunnel panel was lifted out of #deviceExtras (nested there, its
+  // .show asked for the tunnel view while its parent only ever opened in the devices
+  // view, so it was unreachable in every state). It is now a top-level block, and
+  // #deviceExtras is the next sibling — slice on that instead of on <script>, or the
+  // slice would swallow the notify/diag panels and grade the wrong block.
   const panelStart = zhHtml.indexOf('<div id="tunnelConfigPanel"')
-  const panelEnd = zhHtml.indexOf('<div id="pendingPairings"', panelStart)
+  const panelEnd = zhHtml.indexOf('<div id="deviceExtras"', panelStart)
   assert.notEqual(panelStart, -1)
   assert.notEqual(panelEnd, -1)
   const panel = zhHtml.slice(panelStart, panelEnd)
   const hostAt = panel.indexOf('id="tunnelHostname"')
   const saveAt = panel.indexOf('data-action="tunnel-config-save"')
   assert.notEqual(hostAt, -1)
-  const hintAt = panel.indexOf('Zero Trust 面板 ingress 须指向 http://127.0.0.1:&lt;桥端口&gt;')
-  assert.notEqual(hintAt, -1, 'the zh hint renders inside the tunnel panel (escaped placeholder)')
+  // The hint ships the Cloudflare console as a real link (2026-10-10): the
+  // operator should click through, not copy a URL out of a sentence. The
+  // bridge port stays a placeholder because it is only known at runtime.
+  const hintAt = panel.indexOf('one.dash.cloudflare.com')
+  assert.notEqual(hintAt, -1, 'the zh hint links into the Cloudflare console')
   assert.ok(hintAt > hostAt, 'the hint sits after the hostname input')
   assert.ok(hintAt < saveAt, 'and before the save actions')
-  const enPanel = enHtml.slice(enHtml.indexOf('<div id="tunnelConfigPanel"'), enHtml.indexOf('<div id="pendingPairings"'))
-  assert.match(enPanel, /ingress must point at http:\/\/127\.0\.0\.1:&lt;bridge-port&gt;/, 'en hint ships too')
+  assert.match(panel, /<a href="https:\/\/one\.dash\.cloudflare\.com\/"[^>]*>Cloudflare Zero Trust<\/a>/, 'the link is an anchor, not escaped text')
+  assert.match(panel, /127\.0\.0\.1/, 'the loopback target is still named')
+  const enStart = enHtml.indexOf('<div id="tunnelConfigPanel"')
+  const enPanel = enHtml.slice(enStart, enHtml.indexOf('<div id="deviceExtras"', enStart))
+  assert.match(enPanel, /<a href="https:\/\/one\.dash\.cloudflare\.com\/"[^>]*>Cloudflare Zero Trust<\/a>/, 'en hint links too')
   assert.doesNotMatch(zhHtml, /127\.0\.0\.1:\d{2,5}</, 'no hardcoded bridge port in the rendered page')
+})
+
+// 2026-10-16 用户裁定：「在手机 pocket 推理强度的那一面打个括号，写上"桌面端指定"，
+// 然后就不给选择的空间得了」。理由（取证，别把这段当历史账删掉）：宿主 selectionFor()
+// 每次 system-prompt/assemble 都用 model/selection 事件重算 picked，而桌面端模型菜单
+// 关闭时会提交一次（selectionOf 用本地快照 / 目录 defaultEffort 补值），于是手机上选的
+// 档约 2 秒后被盖回去——session-191fcc40 seq=22 15:30:00 medium → seq=23 15:30:02 high，
+// qoder 线 session-8226f15b seq=6338→6339 同形。给一个注定被覆盖的按钮比不给更糟。
+test('E1 the effort row is a read-only value that names the desktop as its source', () => {
+  assert.equal(L.reasoningEffortFixed, '由桌面端指定')
+  assert.equal(LEN.reasoningEffortFixed, 'Set by the desktop app')
+
+  // 只读行不带任何可点的东西：没有 setting-pick 按钮、没有 setting-list 容器。
+  const row = extractFunction(js, 'settingReadonlyHtml')
+  assert.match(row, /class="setting-value"/, 'the value ships in its own span')
+  assert.doesNotMatch(row, /data-pick|data-field|setting-list|setting-opt|button/,
+    'a read-only row must not ship a button or a picker list')
+
+  // effort 行现在走只读渲染，并且标签带来源说明。
+  const render = extractFunction(js, 'renderSessionSettings')
+  assert.match(render, /settingReadonlyHtml\(L\.reasoningEffort,L\.reasoningEffortFixed/,
+    'the effort row is rendered read-only, labelled with its source')
+  assert.doesNotMatch(render, /settingFieldHtml\('effort'/,
+    'the effort row must not be a picker any more')
+
+  // 选择器与提交路径整体退场：列表分支、草稿覆盖参数、RPC 里的 effort 全都不在了。
+  const pick = extractFunction(js, 'pickRows')
+  assert.doesNotMatch(pick, /field==='effort'/, 'pickRows no longer builds an effort list')
+  assert.doesNotMatch(pick, /effortValue|effortsOf/, 'and no longer reads the effort value')
+  const apply = extractFunction(js, 'applyPick')
+  assert.doesNotMatch(apply, /effort/, 'applyPick has no effort arm left')
+  const select = extractFunction(js, 'selectModel')
+  assert.doesNotMatch(select, /effort/i, 'selectModel never submits a reasoning effort')
+  assert.match(select, /rpc\('session\.selectModel',\{sessionId:activeSession,provider,model\}\)/,
+    'the model RPC carries provider+model only')
+  assert.doesNotMatch(extractFunction(js, 'draftSetModel'), /effort/i,
+    'the draft buffer carries no effort either')
+  assert.doesNotMatch(js, /effortPick/, 'the effortPick state is gone')
+})
+
+test('E2 the read-only effort row still tells the truth about the current value', () => {
+  // 值仍照实显示（另一端改了档就显示新档）；解析顺序保持：会话选择 → 目录默认 → 首档。
+  const value = extractFunction(js, 'effortValue')
+  assert.match(value, /currentSelection\(\)\.reasoningEffort/, 'an explicit selection wins')
+  assert.match(value, /reasoning\?\.defaultEffort/, 'the catalogue default is the next tier')
+  assert.match(value, /ids\[0\]/, 'the first listed effort is the last resort')
+  const label = extractFunction(js, 'effortLabel')
+  assert.match(label, /effortsOf\(entry\)\.find\(item=>item\.id===id\)\?\.name/, 'the label is the catalogue name')
+  assert.match(label, /fieldText\(/, 'a blank catalogue name falls back to the id')
+  // 只读不等于不刷新：流事件仍会重画面板，值跟着走。
+  const show = extractFunction(js, 'showSessionModel')
+  assert.match(show, /renderSessionSettings\(\)/, 'the live model/selection event still repaints')
+})
+
+test('DM-1 dark mode protects night vision: primary/send buttons, cancel, settings and dialogs avoid glaring white', () => {
+  // 1. 深色模式媒体查询覆盖，消除夜间纯白发光
+  const darkBlockStart = css.indexOf('@media(prefers-color-scheme:dark)')
+  assert.ok(darkBlockStart >= 0, 'mobile CSS owns a dark-mode media query')
+  const darkContent = css.slice(darkBlockStart)
+
+  // 发送按钮启用时走品牌蓝，禁用时走默认 surface，彻底消除白炽光
+  assert.match(darkContent, /\.composer \.primary:not\(:disabled\)\{background:var\(--brand\);border-color:var\(--brand\);color:#fff\}/,
+    'dark-mode send button uses brand accent with white arrow, not glaring ink')
+  assert.match(darkContent, /\.composer \.primary:disabled\{background:var\(--surface\);border-color:var\(--line\);color:var\(--muted\);box-shadow:none\}/,
+    'dark-mode disabled send button avoids white glare with muted surface')
+  // 停止生成按钮走暗底危险色
+  assert.match(darkContent, /\.primary\.cancel\{background:color-mix\(in srgb,var\(--danger\) 16%,var\(--card\)\)/,
+    'dark-mode cancel/stop button uses dark card tinted with danger red')
+  // 会话设置展开态避免白球
+  assert.match(darkContent, /\.settings-trigger\[aria-expanded=true\]\{border-color:var\(--brand\);background:var\(--hover\);color:var\(--brand\)\}/,
+    'dark-mode settings trigger expanded state avoids solid white')
+  // 提问弹窗主提交按钮
+  assert.match(darkContent, /\.question-actions \.submit-answer\{border-color:var\(--brand\);background:var\(--brand\);color:#fff\}/,
+    'dark-mode question submit button uses brand accent')
+  // 提问选项选中态
+  assert.match(darkContent, /\.question-option\.selected \.option-control\{border-color:var\(--brand\);background:var\(--brand\);color:#fff\}/,
+    'dark-mode question option selected control uses brand accent')
+  // 浮层提示 toast 走深灰微光
+  assert.match(darkContent, /\.toast\{background:#232428;color:var\(--ink\);border:1px solid var\(--line\)/,
+    'dark-mode toast uses dark elevated pill instead of stark white capsule')
+
+  // 2. 白天模式基准保持不变，保证白天高对比度与易读性
+  assert.ok(css.includes('button.primary{display:flex;align-items:center;justify-content:center;gap:6px;flex:none;min-width:68px;height:44px;border:1px solid var(--ink);border-radius:13px;padding:0 11px 0 13px;background:var(--ink);color:var(--paper);'),
+    'daytime light mode retains black button with white text for maximum readability')
+  assert.ok(css.includes('.composer .primary,.primary.cancel{width:44px;min-width:44px;border-radius:50%;padding:0;background:var(--ink);border-color:var(--ink)}'),
+    'daytime composer send button retains crisp black background')
+
+  // 3. 移动端重连页面在深色模式下同样消除全屏大白块
+  const reconnectZh = renderMobileReconnectPage('zh', 'lan')
+  assert.ok(
+    reconnectZh.includes('.primary,#pinSubmit{background:var(--brand);border-color:var(--brand);color:#fff}'),
+    'reconnect page primary and pinSubmit buttons use brand accent under dark mode',
+  )
+})
+
+test('E3 model and preset selections write through to session row projections immediately', () => {
+  // selectModel 成功后就地写入 sessionSummaries 该行 projections.values.modelSelection.next，
+  // 杜绝 10s 缓存窗口内 reopen 设置面板时被旧 summary 盖回。
+  const select = extractFunction(js, 'selectModel')
+  assert.match(select, /sessionRowValues\(activeSession\)/, 'selectModel writes through to row values')
+  assert.match(select, /modelSelection\s*=\s*\{.*next:\s*\{/, 'modelSelection.next is updated with the new selection')
+
+  // selectPreset 不再就地回写：行回写只服务 model 选择（本次报障范围），
+  // preset 的行更新由桥侧 invalidateSessionList() 负责，页面侧保持既有形状。
+  const preset = extractFunction(js, 'selectPreset')
+  assert.doesNotMatch(preset, /sessionRowValues/, 'the page no longer writes the preset row; the bridge drops the cache instead')
+
+  // sessionRowValues helper 存在且返回 values 容器
+  const helper = extractFunction(js, 'sessionRowValues')
+  assert.match(helper, /sessionSummaries\.find/, 'looks up the session in sessionSummaries')
+  assert.match(helper, /r\.projections.*p\.values/, 'navigates or builds projections.values')
+})
+
+// B2 (user m00788): after a switch the settings panel must not snap back to the
+// previous model. The Host answer is pushed into the row the page already holds,
+// because session.list is served from the bridge's 10s window and rows are never
+// re-read while a chat is open (the page-side poll bails when activeSession is set).
+test('B2 a successful model switch writes the selection into the held row', () => {
+  const select = extractFunction(js, 'selectModel')
+  assert.match(select, /v\.modelSelection=\{?\.\.\.v\.modelSelection,next:\{\.\.\.selected\}\}?/,
+    'the Host answer lands on modelSelection.next, the field the page actually reads')
+  const rowValues = extractFunction(js, 'sessionRowValues')
+  assert.match(rowValues, /sessionSummaries\.unshift\(/, 'a row that is not held yet is created, like markRowRunning does')
+  assert.match(rowValues, /r\.projections=\(/, 'the row gets a projections object before its values are written')
+  assert.match(rowValues, /return p\.values=/, 'the write targets the row values the projection reader walks')
+  assert.doesNotMatch(select, /effort/i, 'the switch still never submits a reasoning effort')
+})
+
+// BUG-2 (user m00002 第 2 条「在正在进行的会话里面，更新切换模型好像不行」)：
+// 草稿缓冲（draftPending）原本对任何状态都优先：只要缓冲里有 model/preset，运行中会话的
+// 设置面板显示的就是草稿里选过的那个（openSessionSettings 还会把它写进 modelCatalog.current），
+// 而草稿态点选只进缓冲、当场不发 RPC，却弹与真切换同一条「会话设置已更新」⇒ 看着切了、实际没动。
+// 修法：缓冲只在没有活动会话（真正的草稿态）时说话；缓冲命中弹「待生效」文案，不再冒充实况。
+test('BUG2 the draft buffer never speaks for a live session and never claims a live update', () => {
+  const model = extractFunction(js, 'draftModelSelection')
+  assert.match(model, /!activeSession&&draftPending&&draftPending\.model/,
+    'the buffered model only wins while no session is active')
+  assert.match(extractFunction(js, 'draftAgentPreset'), /!activeSession&&draftPending&&draftPending\.preset/,
+    'the buffered preset is draft-scoped too')
+  assert.match(extractFunction(js, 'renderSessionSettings'), /!activeSession&&draftPending&&draftPending\.preset/,
+    'the preset row falls back to the buffer only in a draft')
+  assert.match(extractFunction(js, 'permissionCurrent'), /!activeSession&&draftPending&&draftPending\.permission/,
+    'the permission sheet marks the buffered preset as current only in a draft')
+  for (const name of ['draftSetModel', 'draftSetPreset', 'draftSetPermission']) {
+    const setter = extractFunction(js, name)
+    assert.match(setter, /showToast\(L\.settingsPending\)/, `${name} announces a pending pick`)
+    assert.doesNotMatch(setter, /showToast\(L\.settingsUpdated\)/, `${name} must not reuse the applied copy`)
+  }
+  assert.doesNotMatch(extractFunction(js, 'draftSetPreset'), /currentPreset=next/,
+    'a draft pick must not overwrite the current-session preset variable')
+  assert.ok(L.settingsPending && LEN.settingsPending, 'both locales carry the pending copy')
+  assert.notEqual(L.settingsPending, L.settingsUpdated, 'the pending copy is distinct from the applied one')
+})
+
+// BUG-3 / BUG-4 (user m01210「乐观加载碰到排队消息时明显有问题」「发送按钮没有把停止按钮顶掉……」)：
+// send() 在 RPC 之前就乐观入列，而 agentRunning 时 session.prompt 的 mode 是 busyEnter（"queue"）——
+// 这条消息在宿主侧只进 inbox，不是 transcript 事件，却同时被画成会话气泡（messagesWithOptimistic
+// 只看文本相似度、完全不看 inbox 投影）⇒ 同一句话在气泡和队列坞各出现一次，看着像已投递。
+// 修法：乐观气泡只在真正空闲的发送里画（item.queued 跳过），队列坞本来就是它的呈现位。
+// 按钮同源：syncPromptUi 只按 canSend 决定 send 显隐，cancel 只看 agentRunning ⇒ 打字时两个都在，
+// 输入框长高把 send 挤到中间/左边、cancel 在右，一滑就误触停止。修法：有待发内容即只显发送。
+test('BUG3 a prompt queued behind a running turn is not painted as a transcript bubble', () => {
+  const echo = extractFunction(js, 'messagesWithOptimistic')
+  assert.match(echo, /if\(item\.queued\)continue;/,
+    'the queued echo is not spliced into the transcript')
+  const send = betweenA3('async function send()', 'function formatBytes(n)', js)
+  assert.match(send, /queued:agentRunning\}/,
+    'a send into a running turn records that it went to the inbox, not the transcript')
+})
+
+test('BUG4 a typed draft takes the stop button\'s place instead of sitting beside it', () => {
+  const ui = extractFunction(js, 'syncPromptUi')
+  assert.match(ui, /cancel\.hidden=!agentRunning\|\|canSend/,
+    'while there is something to send, the stop button must yield to the send button')
+  assert.match(ui, /\$\('send'\)\.hidden=agentRunning&&!canSend/,
+    'the send button still only shows when it actually has something to send')
+})
+
+// Red-first: these three assertions must hold on the pre-fix baseline page source,
+// where the queued echo and the always-on stop button are exactly what the user
+// reported. This keeps the two tests below honest — if the guard strings ever
+// disappear again, this fails before they can silently pass.
+//
+// 基线钉在不可变的前置提交上，而不是 HEAD：本批六 bug 修复＝8de3463，其父 f8e1669
+// 是「修复落地之前那一次提交」。红先证据必须钉在这一个 sha 上——钉 HEAD 会随
+// 每次提交腐烂（修复一落进 HEAD 断言就自相矛盾），钉 HEAD~1 会随新提交漂移。
+test('RED (against f8e1669) the BUG3/BUG4 guards are absent on the committed page source', () => {
+  const preFix = execFileSync('git', ['show', 'f8e1669:lib/pages.js'], { cwd: 'F:/defws/dsh-pocket', maxBuffer: 1e8 }).toString()
+  assert.ok(preFix.includes('cancel.hidden=!agentRunning;'), 'the pre-fix baseline lets the stop button sit beside a typed draft')
+  assert.ok(!preFix.includes('queued:agentRunning'), 'the pre-fix baseline cannot tell a queued send from a plain one')
+  assert.ok(!preFix.includes('if(item.queued)continue'), 'the pre-fix baseline splices every echo into the transcript')
+})
+
+// The two tests above pin the source words; these run the REAL functions out of
+// the rendered page against synthetic state, so a refactor that keeps the words
+// but breaks the guard fails here. Precedent: test/pages-state-reset.test.js
+// buildSendSandbox().
+function buildQueueSendSandbox(opts) {
+  const body = 'async ' + extractFunction(js, 'send').replace(/^async\s+/, '')
+  const echo = extractFunction(js, 'messagesWithOptimistic').replace(/^async\s+/, '')
+  const make = new Function('box', `
+    let activeSession='s1',agentRunning=${String(opts && opts.agentRunning === true)},busyEnter='queue',sendBusy=false,sessionBlank=false
+    let optimisticPrompts=[],lastHistoryKey='',composerDrafts=[]
+    const rpcCalls=[],toasts=[],errors=[]
+    let flight=null
+    async function ensureSession(){return activeSession}
+    async function applyDraftPending(){}
+    function $(id){return id==='prompt'?box:{value:'',hidden:false,disabled:false,style:{},innerHTML:''}}
+    function readyDrafts(){return []}
+    function validateImagesReady(){}
+    function slashExecuteName(){return ''}
+    function attachmentParts(){return []}
+    function submittedAttachmentParts(){return []}
+    function draftSummary(){return ''}
+    function latestEventSeq(){return 5}
+    function durableUserPromptText(message){return String((message.blocks&&message.blocks[0]&&message.blocks[0].text)||message.text||'')}
+    function armAwaitingTurn(){}
+    function clearAwaitingTurn(){}
+    function markRowRunning(){}
+    function syncSettingsControls(){}
+    function syncPromptUi(){}
+    function paintMessages(){}
+    function clearSentDrafts(){}
+    function showError(id,error){errors.push({id,error})}
+    function showToast(message){toasts.push(message)}
+    function encodedPromptBytes(){return 1}
+    function rpcBodyCeilingFor(){return 1024}
+    async function loadHistory(){}
+    async function refreshActiveSessionSummary(){}
+    async function rpc(method,payload){rpcCalls.push({method,payload});await new Promise((resolve)=>{flight=resolve})}
+    function currentTranscript(){return []}
+    const L={sendFailed:'send failed',draftUploading:'uploading',draftFailed:'failed',attachNotAccepted:'no {command}',attachTooLarge:'too large'}
+    ${extractFunction(js, 'attachFailureCopy')}
+    ${echo}
+    ${body}
+    return {run:send,accept:()=>flight(),rpcCalls,toasts,errors,bubbles:()=>messagesWithOptimistic([]).length}
+  `)
+  return make({ value: 'hello', style: {}, scrollHeight: 40 })
+}
+
+test('BUG3 a send into a running turn is queued host-side and never drawn as a bubble', async () => {
+  const sandbox = buildQueueSendSandbox({ agentRunning: true })
+  sandbox.run().catch(() => {})
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(sandbox.rpcCalls.length, 1, 'the send still reaches the host')
+  assert.equal(sandbox.rpcCalls[0].payload.mode, 'queue', 'a turn that is running takes mode=queue')
+  assert.equal(sandbox.bubbles(), 0, 'and the queued text must not appear in the transcript box')
+  sandbox.accept()
+})
+
+test('BUG3 a send into an idle session still paints its own bubble', async () => {
+  const sandbox = buildQueueSendSandbox({ agentRunning: false })
+  sandbox.run().catch(() => {})
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(sandbox.bubbles(), 1, 'the ordinary echo is still drawn while the answer is pending')
+  sandbox.accept()
 })

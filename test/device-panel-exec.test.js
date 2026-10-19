@@ -11,7 +11,7 @@
 //   B-2 drop the is-empty / is-failed class -> the empty/failed branch goes red
 //   B-3 drop the `if(modeView==='devices')loadDevicePanel()` kick -> the
 //       devices-init fetch disappears -> this file goes red
-//   G  add a disabled attribute to the devices key -> G goes red
+//   G  add a disabled attribute to any mode key while a phone is connected -> G goes red
 //   D  let poll() repaint #deviceList -> armed state is wiped -> D goes red
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -328,7 +328,15 @@ function initHarness(modeView) {
   const sandbox = { document: doc, T, fetch: fetchStub, deviceCardHtml: cardHtml.deviceCardHtml,
     loadDevicePanel: cardHtml.loadDevicePanel,
     renderPendingPairings: () => {}, syncModeControls: () => {}, pollBusy: false, modeSwitching: false,
-    pendingPairings: [], modeView, poll: () => {}, setInterval: () => 0, calls }
+    // The init tail now also starts the public tunnel on a fresh pairing page
+    // (user decision 2026-10-10: opening the page IS the intent), so the harness has
+    // to supply the three flags that guard reads and stub the kick it calls.
+    phoneConnected: false, tunnelActive: false, selectedTunnelTab: modeView === 'tunnel',
+    switchMode: async () => { calls.push('/desktop/tunnel/toggle') },
+    pendingPairings: [], modeView, poll: () => {}, setInterval: () => 0, calls,
+    // The init tail also repaints the ClawBot binding panel (lib/pages.js);
+    // this harness only cares about the device-list kick, so it gets a stub.
+    renderClawbotView: () => {} }
   vm.createContext(sandbox)
   // The init snippet is async (it awaits loadDevicePanel), so run it via an
   // async IIFE that assigns the promise to a global we can await.
@@ -337,12 +345,12 @@ function initHarness(modeView) {
 }
 
 // The tail of the page script: `renderPendingPairings(pendingPairings);`
-// `if(modeView==='devices')loadDevicePanel();` `setInterval(poll,800);poll()`.
+// `if(modeView==='devices')loadDevicePanel();` `setInterval(poll,2000);poll()`.
 function extractInit() {
   const start = PAGES_SOURCE.lastIndexOf('renderPendingPairings(pendingPairings);')
-  const end = PAGES_SOURCE.lastIndexOf('setInterval(poll,800);')
+  const end = PAGES_SOURCE.lastIndexOf('setInterval(poll,2000);')
   assert.ok(start >= 0 && end > start, 'the init tail must be findable in pages.js')
-  return PAGES_SOURCE.slice(start, end + 'setInterval(poll,800)'.length)
+  return PAGES_SOURCE.slice(start, end + 'setInterval(poll,2000)'.length)
 }
 
 test('B-3 the init kick fetches /desktop/devices only when the device view is on', async () => {
@@ -355,6 +363,16 @@ test('B-3 the init kick fetches /desktop/devices only when the device view is on
   await lanOff.done
   assert.ok(!lanOff.calls.includes('/desktop/devices'),
     'with modeView=lan the init must NOT fetch the device list')
+
+  // 2026-10-10: the same tail also generates the public link on a fresh pairing page.
+  const onPublic = initHarness('tunnel')
+  await onPublic.done
+  assert.ok(onPublic.calls.includes('/desktop/tunnel/toggle'),
+    'landing on the public tab with the tunnel down starts it — no second click')
+  assert.ok(!lanOff.calls.includes('/desktop/tunnel/toggle'),
+    'but the LAN tab does not start anything (the guard needs the public tab showing)')
+  assert.ok(!devicesOn.calls.includes('/desktop/tunnel/toggle'),
+    'and neither does the device view — there is already a phone on it')
 })
 
 /* ------------------------------------------------------------------ *
@@ -399,10 +417,10 @@ test('D the armed revoke state survives a poll() redraw cycle', async () => {
 })
 
 /* ------------------------------------------------------------------ *
- * G  three mode keys, and the devices key is never disabled
+ * G  three mode keys, and none of them is gated on a live phone
  * ------------------------------------------------------------------ */
 
-test('G the mode switch ships exactly three keys and the devices key is never gated', () => {
+test('G the mode switch ships exactly three keys and only the devices key stays live when connected', () => {
   const page = PAGES_SOURCE.slice(PAGES_SOURCE.lastIndexOf('<div class="mode-panel">'),
     PAGES_SOURCE.lastIndexOf('</style>'))
   // count the mode buttons in the rendered mode bar
@@ -410,12 +428,16 @@ test('G the mode switch ships exactly three keys and the devices key is never ga
   assert.equal(buttons.length, 3, 'the mode switch must render exactly three keys')
   assert.match(page, /<button id="btnDevices"[^>]*data-action="mode-devices"/,
     'the third key is the device management key')
-  // connected=true disables the two connection keys but NOT the devices key.
+  // connected=true disables the two connection keys on purpose (user ruling 2026-10-12 09:3x):
+  // switching modes with a phone on the line really swaps the tunnel and drops that phone.
+  // The bridge still allows the call (M4: "A live phone is not a reason to refuse"); only the
+  // page refuses, so the user does not lose the phone by a stray tap.
   const lan = (page.match(/<button id="btnLan"[^>]*>/) || [''])[0]
   const tunnel = (page.match(/<button id="btnTunnel"[^>]*>/) || [''])[0]
   const devices = (page.match(/<button id="btnDevices"[^>]*>/) || [''])[0]
-  assert.ok(lan.includes('disabled') && tunnel.includes('disabled'),
-    'the two connection keys must be gated on connected')
+  const connectedGate = /\$\{options\.connected \? ' disabled' : ''\}/
+  assert.match(lan, connectedGate, 'the LAN key is gated on the connection state')
+  assert.match(tunnel, connectedGate, 'and so is the tunnel key')
   assert.ok(!devices.includes('disabled'),
     'the devices key must NOT carry disabled even when connected')
   assert.ok(devices.includes('active'),

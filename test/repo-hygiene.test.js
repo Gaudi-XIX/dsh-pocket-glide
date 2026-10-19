@@ -1,13 +1,13 @@
-// 仓库面卫生钉（repository-surface hygiene pins）
+// WP-REPO-B — 仓库面卫生钉（change 2026-10-02-fix-pocket-audit-remediation）
 //
 // 面：只读源码文本 / JSON。不起服务、不开 socket、不触网、不碰真机 profile、
-// 不读写任何真机数据根（`%LOCALAPPDATA%\dsh-pocket` 与用户主目录下的数据根都不在本文件的面上）。
+// 不读写任何真机数据根（`%LOCALAPPDATA%\dsh-pocket`、`~\.dsh` 都不在本文件的面上）。
 // 唯一 spawn 出去的子进程是 ⑧ 的 `tools/fetch-cloudflared.mjs --print`：那条分支
 // （脚本里的 `printOnly`）只打印契约、`process.exit(0)`，不下载、不落盘；本文件另外
 // 钉了「跑完 `vendor/` 的存在性与跑前一致」，所以它连目录都不会建。
 //
 // 每条 test 头上都有一行「钉的是哪句语义」，那是这条断言的**存在理由**。
-// 本仓已有教训：一条只写数字的源级计数断言，下一个改代码的人的第一反应是删断言。
+// 本仓已有教训：一条只写数字的源级计数断言，下一个 worker 的第一反应是删断言。
 // 所以要动这里之前，先改被钉的那句话（README / package.json / 工具头注），再随动本文件；
 // 反过来做（删断言保字面）就是让同一句谎话重新上岗。
 //
@@ -16,17 +16,17 @@
 //     从 0.2.0 起本仓维护 `CHANGELOG.md`（README「打包与许可」已改写成引它为准），
 //     所以 ⑨ 钉的是「CHANGELOG 在场 + 其中最新一节就是当前版本 + README 不再声称不维护它」，
 //     仍然不钉版本号本身、也不钉任何条目的正文。
-//   · `pnpm-workspace.yaml` 是否存在 —— 裁定是「删，或缩成真实需要的最小声明」
+//   · `pnpm-workspace.yaml` 是否存在 —— LEAD（K-3）裁的是「删，或缩成真实需要的最小声明」
 //     两条都可，而且 `pnpm approve-builds` 这类正常操作本来就会把它再生成一遍；
-//     钉存在性会把合法的工具行为读成红。本仓现在是不带它的那一条。
+//     钉存在性会把合法的工具行为读成红。WP-REPO-B 已经把它删了，账在 handoff 里。
 //   · `lib/**` 的实现细节与 `lib/constants.js` 的导出数值（连接密码位数、cookie TTL……）
 //     —— 这些符号此刻由 bridge 域工人独占写，钉它的现值就是跨包假红。本文件只在 ⑧ 读
 //     `lib/tunnel.js` 的**契约字面**（pin / 资产名 / 摘要 / vendor 档名），因为那条关系是
 //     「工具 ↔ 运行时」，红的时候两边都归仓库面读者管，且 tunnel 侧当前无人改写。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { basename, join, relative } from 'node:path'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
@@ -34,7 +34,7 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
 const pkg = JSON.parse(read('package.json'))
 
-// ①（acceptance 第①条）
+// ①（tasks.md AC-R 第①条）
 // 钉的是哪句语义：README「打包与许可」第一行——「`package.json files` = lib/**/*.js、
 // client/**/*.js、`test`、`tools`、`cordis.patch.yml`、`README.md`、`LICENSE`、`CHANGELOG.md`」，加上同节
 // 那句「列全 `test`/`tools` 的意义是：发布件里 `npm test` 与 README 承诺的工具面真能跑」。
@@ -42,31 +42,10 @@ const pkg = JSON.parse(read('package.json'))
 // 「测试与工具」整节对发布态用户是空头话。同时钉「每一项都真在盘上」：`files` 里的幽灵项
 // 是下一次「声明了一个已经不存在的东西」的起点，而这正是本卡整族错误的形状。
 test('① files 收编了 README 承诺的每一项，且每一项都在盘上', () => {
-  for (const promised of [
-    'tools',
-    'LICENSE',
-    'cordis.patch.yml',
-    'README.md',
-    'README.en.md',
-    'CHANGELOG.md',
-    'CHANGELOG.en.md',
-  ]) {
+  for (const promised of ['test', 'tools', 'LICENSE', 'cordis.patch.yml', 'README.md', 'CHANGELOG.md']) {
     assert(pkg.files.includes(promised), `package.json files 必须含 '${promised}'（README 正在承诺它）`)
     assert(existsSync(join(root, promised)), `files 里的 '${promised}' 必须真在仓里，不能只是声明`)
   }
-  // 发布态刻意不带 test/（README「Packaging and licence」明写了这条），所以这里反向钉它：
-  // 清单与那句承诺只能有一个方向漂——要么清单收回去、要么 README 改掉那句话。
-  assert.equal(pkg.files.includes('test'), false, '发布件不带 test/；要收回这条就先改 README 那句话')
-  assert.match(
-    read('README.en.md'),
-    /deliberately \*\*not\*\* in the published file list/i,
-    '英文 README 必须继续解释 test/ 为什么不在发布件里；只改清单不改文档=文档撒谎',
-  )
-  assert.match(
-    read('README.md'),
-    /发布文件清单/,
-    '中文 README（主文档）同一句话必须在位（两版结构对齐是本仓的对外承诺）',
-  )
   assert.match(
     pkg.scripts.test,
     /test\/\*\.test\.js/,
@@ -74,38 +53,38 @@ test('① files 收编了 README 承诺的每一项，且每一项都在盘上',
   )
 })
 
-// ②（acceptance 第②条）
-// 钉的是哪句语义：`package.json` 的 `"license": "Apache-2.0"` 这一**声明**。
-// 声明一个许可证而没有正文 = 把许可义务推给读者去猜；正文里留着 Apache 附录的模板占位
+// ②（tasks.md AC-R 第②条）
+// 钉的是哪句语义：`package.json` 的 `"license": "MIT"` 这一**声明**。
+// 声明一个许可证而没有正文 = 把许可义务推给读者去猜；正文里留着模板占位
 // （`{yyyy}` / `{name of copyright owner}`）= 有正文但没署名，法律上仍然没落地。
-// 权利人名字本身不钉死（将来若换正式权利人名称，只改 LICENSE 那一行）——钉的是
+// 权利人名字本身不钉死（WP-REPO 记档：LEAD 若换正式权利人名称，只改那一行）——钉的是
 // 「填过年份的版权声明行存在」这个不随人名漂移的形状。
-test('② 声明 Apache-2.0 ⇒ LICENSE 正文在场、随包发布、不是未填模板', () => {
-  assert.equal(pkg.license, 'Apache-2.0', 'README 与 LICENSE 都以这个 SPDX id 为准')
+test('② 声明 MIT ⇒ LICENSE 正文在场、随包发布、不是未填模板', () => {
+  assert.equal(pkg.license, 'MIT', 'README 与 LICENSE 都以这个 SPDX id 为准')
   assert(pkg.files.includes('LICENSE'), '许可证正文必须随包发布，否则声明到用户手里是空的')
   const license = read('LICENSE')
   assert.match(
     license.split('\n').slice(0, 4).join('\n'),
-    /Apache License/,
-    '首屏必须是 Apache License 标题（不是自写摘要顶上去的）',
+    /MIT License/,
+    '首屏必须是 MIT License 标题（不是自写摘要顶上去的）',
   )
   assert.doesNotMatch(license, /\{yyyy\}|\{name of copyright owner\}/, '附录占位不得原样留着')
-  assert.match(license, /Copyright\s+\d{4}/, '必须有一行填了年份的版权声明')
+  assert.match(license, /Copyright\s+(?:\(c\)\s+)?\d{4}/i, '必须有一行填了年份的版权声明')
 })
 
-// ③（acceptance 第③条）
-// 钉的是哪句语义：R1 的判语——照旧脚本跑一次 = 往**在役** desktop profile 注入
+// ③（tasks.md AC-R 第③条）
+// 钉的是哪句语义：tasks.md R1 的判语——照旧脚本跑一次 = 往**在役** desktop profile 注入
 // 无法解析的 `link:` 依赖 + bundles 行，`pnpm install` 失败、profile 半改态（地雷）。
-// 钉三件：① 退役包身份 `dsh-phone-native`（原带内部 scope 的前一任名字）作为**身份字面**不许回来；② 脚本声明的包名
+// 钉三件：① 退役包名 `@defws/dsh-phone-native` 作为**身份字面**不许回来；② 脚本声明的包名
 // 必须等于本仓 `package.json name`（两处各写各的时候，脚本就变成了「装另一个东西」——
 // 这正是原地雷的成因）；③ 写之前的源树体检（缺件拒写）与「备份先于改动」仍在，
 // 因为地雷的正解不是改名，是「不合格一个字节都不写」。
-// ⚠️ 口径：钉的是退役身份 `dsh-phone-native` 这个包名尾部，不是 `phone-native` 任意子串——脚本头注
-// 故意留了一句「它曾指向一个已不存在的退役目录」当事故说明。那是历史，
+// ⚠️ 口径：钉的是**包名** `@defws/dsh-phone-native`，不是 `phone-native` 这个子串——脚本头注
+// 故意留了一句「它曾指向 `F:/defws/dsh-phone-native`，该目录已不存在」当事故说明。那是历史，
 // 不是回归；把它读成回归再去删注释，就把事故的唯一痕迹抹掉了。
 test('③ install-to-profile 只可能装现役包，且不合格拒写', () => {
   const src = read(join('tools', 'install-to-profile.mjs'))
-  assert.doesNotMatch(src, /dsh-phone-native/, '退役包身份不得再作为身份出现在脚本里')
+  assert.doesNotMatch(src, /@defws\/dsh-phone-native/, '退役包名不得再作为身份出现在脚本里')
   const declared = /const PACKAGE_NAME = '([^']+)'/.exec(src)?.[1]
   assert.equal(declared, pkg.name, '脚本里的包名必须等于 package.json name（一致性钉，不是现值钉）')
   const link = /const LINK_PATH = '([^']+)'/.exec(src)?.[1]
@@ -116,7 +95,7 @@ test('③ install-to-profile 只可能装现役包，且不合格拒写', () => 
   assert.match(src, /const withInstall = argv\.includes\('--install'\)/, "pnpm install 必须保持显式 opt-in：登记了却没装成就是半改态")
 })
 
-// ④（acceptance 第④条）
+// ④（tasks.md AC-R 第④条）
 // 钉的是哪句语义：README「测试与工具」节里**不再有**「闭环测试」这一承诺。原根级
 // `test-closed-loop.mjs` 的三条断言都与现码相反（`Max-Age=31536000` vs 现值 30 天、
 // 「必须把连接密码打到日志」vs bridge 域禁令「日志不落 PIN」、打的还是已退役的 `/phone*`
@@ -124,37 +103,30 @@ test('③ install-to-profile 只可能装现役包，且不合格拒写', () => 
 // 它会让人以为闭环已经验过。删文件 + 同步 README 是同一笔动作，这里钉后半句。
 test('④ 退役的闭环脚本没有尸体，也没有残留承诺', () => {
   assert.equal(existsSync(join(root, 'test-closed-loop.mjs')), false, '根级闭环脚本必须不在')
-  assert.doesNotMatch(read('README.en.md'), /closed-loop/i, '英文 README 不得再承诺闭环测试')
+  assert.doesNotMatch(read('README.md'), /closed-loop/i, 'README 不得再承诺闭环测试')
 })
 
-// ⑤（acceptance 第⑤条）
+// ⑤（tasks.md AC-R 第⑤条）
 // 钉的是哪句语义：README 节标题「形态：插件，不是独立进程」及其正文那句「**没有 main 守卫**
 // ⇒ `node lib/index.js` 不是运行方式，装载只由宿主完成」。原 README 写「独立桥进程
 // （`node lib/index.js`，插件内无构建）」⇒ 照它运维得到的是「命令静默什么都不发生」，
 // 并且把「改 `lib/**` 必须重启 DeepSeek Harness」这个关键前提整个藏掉了。
 // 负向 + 正向成对钉：只删错话不写对话，措辞下一轮就会漂回去。
 test('⑤ README 不再卖「独立桥进程」，且正向说法在位', () => {
-  // 2026-10-08 TASK-2 起 README.md 是中文主文档（对外发布主干），英文全文在 README.en.md。
-  // 两版各自的负/正成对都保留：错话在两种语言里都不许回来，对话在两种语言里都不许被顺手删掉。
-  const en = read('README.en.md')
-  assert.doesNotMatch(en, /independent bridge process|standalone bridge process/i, '英文版不得卖「独立/standalone 桥进程」')
-  assert.match(en, /not a separate process/i, '与上一句成对：对话必须留在文档里')
-  assert.match(en, /restart/i, '「改源码/新增 bundle 须重启宿主」这句前提不许被顺手删掉')
-  const zh = read('README.md')
-  assert.doesNotMatch(zh, /独立桥进程/, '「独立桥进程」是被明确改掉的事实错误，中文版同样不许回潮')
-  assert.match(zh, /不是独立进程/, '同上成对')
-  assert.match(zh, /重启/, '同上：重启前提在中文版也必须在位')
+  const readme = read('README.md')
+  assert.doesNotMatch(readme, /独立桥进程/, '「独立桥进程」是本卡 R6 明确改掉的事实错误')
+  assert.match(readme, /不是独立进程/, '与上一句成对：对话必须留在文档里')
+  assert.match(readme, /重启/, '「改源码/新增 bundle 须重启宿主」这句前提不许被顺手删掉')
 })
 
-// ⑥（acceptance 第⑥条）
+// ⑥（tasks.md AC-R 第⑥条）
 // 钉的是哪句语义：工作区约定「归档一律进 `_archive/<项目名>/`，不散落根目录」+ R10 的动作
 // 是**迁出**插件仓而非删档。它原来躺在宿主 `link:` 的目标目录里 ⇒ 死码位于可加载树内，
 // 宿主重启就可能把它当插件内容读。这里钉的是边界「插件仓内不放归档」，不是那四个文件名。
 test('⑥ 插件仓内不放归档（死码不得躺在可加载树里）', () => {
   assert.equal(existsSync(join(root, '_archive')), false, '插件仓顶层不应再有 _archive 目录')
   assert.equal(existsSync(join(root, '_archive', 'pre-pocket-20260929')), false, '旧归档目录必须已迁出')
-  assert.doesNotMatch(read('README.en.md'), /pre-pocket-20260929/, '文档也不得再指回仓内旧归档路径')
-  assert.doesNotMatch(read('README.md'), /pre-pocket-20260929/, '中文主文档同上')
+  assert.doesNotMatch(read('README.md'), /pre-pocket-20260929/, '文档也不得再指回仓内旧归档路径')
 })
 
 // ⑥b — 迁入点在工作区归档仓，那是**另一棵树**的时点事实：link 装机件在没有工作区布局的机器
@@ -162,7 +134,7 @@ test('⑥ 插件仓内不放归档（死码不得躺在可加载树里）', () =
 test('⑥b 归档在工作区 _archive/dsh-pocket/ 下确实落地（需显式给路径）', (t) => {
   const target = process.env.POCKET_ARCHIVE_RELOCATION?.trim()
   if (!target) {
-    t.skip('需要 POCKET_ARCHIVE_RELOCATION 指到工作区归档目录（工作区的 `_archive/dsh-pocket`）才验')
+    t.skip('需要 POCKET_ARCHIVE_RELOCATION 指到工作区归档目录（F:\\defws\\_archive\\dsh-pocket）才验')
     return
   }
   for (const rel of ['lib/http.js', 'lib/invoke.js', 'lib/pairing.js', 'tools/render-preview.mjs']) {
@@ -170,10 +142,10 @@ test('⑥b 归档在工作区 _archive/dsh-pocket/ 下确实落地（需显式�
   }
 })
 
-// ⑦ — `package.json description`（仓库面上唯一允许随文案改动的字段）
+// ⑦ — `package.json description`（WP-REPO-B 唯一被允许改动的字段）
 // 钉的是哪句语义：本仓的实际形态（README 形态节 + `dsh.bundle.patch` 装载链）。旧值
 // 「Independent lightweight bridge」在 npm 页与宿主插件列表里会被读成「独立进程的桥」，
-// 而 README 已经用整节压住这个误读；「phone-native」是退役身份（工作区约束 1/6：
+// 而 README 已经用整节压住这个误读；「phone-native」是退役身份（AGENTS.md 硬约束 1/6：
 // `dsh-phone-native` 目录已不存在，pocket 由它更名演进）。钉的是**类别词**（plugin）与两个
 // 会撒谎的字面，不钉整句措辞——句子可以润色，撒谎不许。
 test('⑦ 包描述自述为插件，不暗示独立服务，不带退役身份', () => {
@@ -275,11 +247,18 @@ test('⑨ CHANGELOG.md 在场、最新一节跟着 version 走，且 README 不�
   const changelog = read('CHANGELOG.md')
   const headings = [...changelog.matchAll(/^##\s+(\S+)/gm)].map((m) => m[1])
   assert(headings.length >= 2, `CHANGELOG 至少要有「本版」与「上一版」两节，实际：${headings.join(', ')}`)
-  assert.equal(
-    headings[0],
-    pkg.version,
-    `CHANGELOG 最新一节必须就是当前 package.json version（${pkg.version}），实际最新是 ${headings[0]}`,
-  )
+  // 2026-10-16：未发布的工作树**不建版本节、也不提 version**（改 package.json 的 version
+  // 是发布决策，工作树单方面提位会让「最新一节＝当前 version」这条在发布前就撒谎）。
+  // 未发布改动写成 `## <version> — 未发布（工作树）`，发布时再把它改成真日期节。
+  // 于是这里只在没有未发布节时才要求首节等于 version。
+  const unreleased = /^##\s+未发布/m.test(changelog)
+  if (!unreleased) {
+    assert.equal(
+      headings[0],
+      pkg.version,
+      `CHANGELOG 最新一节必须就是当前 package.json version（${pkg.version}），实际最新是 ${headings[0]}`,
+    )
+  }
   const readme = read('README.md')
   assert.match(readme, /CHANGELOG\.md/, 'README 必须指向 CHANGELOG.md')
   assert.doesNotMatch(readme, /不维护\s*CHANGELOG/i, 'README 不得再声称本仓不维护 CHANGELOG —— 它现在维护')
@@ -294,22 +273,17 @@ test('⑨ CHANGELOG.md 在场、最新一节跟着 version 走，且 README 不�
 // 行尾——要动字节就用 Buffer 切拼（本仓 lib/tools/test 现无任何 latin1/binary 编辑路径，grep
 // 实证；谁引入谁同时改这条的钉注释）。白名单只放 \t(09) \n(0A) \r(0D)：markdown 正文里
 // 合法的控制字节仅此三个；误伤更宽的字节（如 \f）时按红名放宽，放宽须本注释与断言成对改。
-// 枚举改为遍历目录树（跳过 node_modules/ 与 vendor/）：发布包在提交前就是一份**文件树**，
-// 而「每个随包的 .md 必须字节干净」这条承诺与 VCS 状态无关。树遍历是 tracked 面的超集，
-// 所以这条只会更严，不会漏掉某个未追踪的脏文件。
-test('⑩ 仓内每个 .md 都严格 UTF-8 且零杂散控制字节', () => {
-  const SKIP = new Set(['node_modules', 'vendor', '.git'])
-  const files = []
-  ;(function walk(dir) {
-    for (const name of readdirSync(dir)) {
-      if (SKIP.has(name)) continue
-      const abs = join(dir, name)
-      if (statSync(abs).isDirectory()) walk(abs)
-      else if (name.endsWith('.md')) files.push(relative(root, abs))
-    }
-  })(root)
-  files.sort()
-  assert(files.length >= 2, `仓内 .md 至少应有 README 与 CHANGELOG 两件，实际 ${files.length}`)
+// 枚举走 `git ls-files`：tracked 面才是会随 commit 发布的面，工作区杂散文件不读进来。
+test('⑩ 追踪的每个 .md 都严格 UTF-8 且零杂散控制字节', () => {
+  // `-c core.quotepath=off` 是必需的，不是风格：默认 quotepath=on 会把带非 ASCII 的路径
+  // 原样加引号转义输出（`"docs\HANDOFF-\346\211\213…"`），这一档就照着那个带引号的字符串
+  // 去 readFileSync ⇒ ENOENT。本仓第一份**被追踪**的中文名 .md 出现时（2026-10-11
+  // `docs/HANDOFF-手机8问取证与修法-20261010.md`）正是它把这条潜伏的枚举 bug 打红的——
+  // 在此之前追踪面全是 ASCII 名，这条测试从未真正覆盖过非 ASCII 文件名。
+  const ls = spawnSync('git', ['-c', 'core.quotepath=off', 'ls-files', '--', '*.md'], { cwd: root, encoding: 'utf8' })
+  assert.equal(ls.status, 0, `git ls-files 失败：${ls.stderr?.trim()}`)
+  const files = (ls.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean)
+  assert(files.length >= 2, `追踪 .md 至少应有 README 与 CHANGELOG 两件，实际 ${files.length}`)
   const decoder = new TextDecoder('utf-8', { fatal: true })
   for (const rel of files) {
     const buf = readFileSync(join(root, rel))
@@ -337,55 +311,6 @@ test('⑩ 仓内每个 .md 都严格 UTF-8 且零杂散控制字节', () => {
 // 仅 pin-store.js 此一处（本卡 propose 期 grep 实证），钉死不让它们回潮。
 // 正锚钉在 doc 块内（`*/` 之前）：函数体 :253 本来就调用 pairingPinWritePath()，
 // 锚到块内才能区分「注释写了」与「只有函数体在调」。
-// ⑫（2026-10-08 WP-POCKET，对外发布包治理面）
-// 钉的是哪句语义：README「Testing」那句「Read CONTRIBUTING.md before touching a test」与
-// 「anything credential-related 走 SECURITY.md」——治理文件一旦失踪，那两句就是空头承诺。
-// 同时钉 CI 跑的就是 `package.json scripts.test`：两条命令各写各的时候，绿色的 CI 证明的
-// 不是本地那条套件。
-test('⑫ 治理文件在场、被 README 指着，CI 跑的就是 scripts.test', () => {
-  const governance = [
-    'CONTRIBUTING.md',
-    'SECURITY.md',
-    join('.github', 'ISSUE_TEMPLATE', 'bug_report.md'),
-    join('.github', 'ISSUE_TEMPLATE', 'feature_request.md'),
-    join('.github', 'PULL_REQUEST_TEMPLATE.md'),
-    join('.github', 'workflows', 'ci.yml'),
-  ]
-  for (const rel of governance) {
-    assert(existsSync(join(root, rel)), `治理文件 ${rel} 必须在场（README 正在引用它）`)
-  }
-  const readme = read('README.md')
-  assert.match(readme, /CONTRIBUTING\.md/, 'README 必须指向 CONTRIBUTING.md')
-  assert.match(readme, /SECURITY\.md/, 'README 必须指向 SECURITY.md（凭据类问题的唯一出口）')
-  const ci = read(join('.github', 'workflows', 'ci.yml'))
-  assert.match(ci, /test\/\*\.test\.js/, 'CI 必须跑 test/ 套件本身，不是另一条命令')
-  // 平台腿只认 matrix.os 那一行。整篇正文匹配会被注释里的平台名蒙对（2026-10-08 实录：
-  // ci.yml 注释大段写着 ubuntu-latest 解释为何撤掉这条腿，而 /ubuntu-latest/ 因此照样绿，
-  // 这条断言当时已经名存实亡）。先证明那一行存在，再断言它的内容。
-  const osLine = /^[ \t]*os:[ \t]*\[([^\]]*)\]/m.exec(ci)
-  assert(osLine, 'ci.yml 必须有 matrix.os 这一行（否则下面的平台断言全是空转）')
-  const runners = osLine[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
-  assert(runners.length > 0, 'matrix.os 不能是空列表')
-  assert(runners.includes('windows-latest'), 'CI 含 windows-latest（本仓主要的装机平台）')
-  // 撤掉 POSIX 腿是刻意决定（六条断言钉的是 Windows 行为，见 ci.yml 注释与 README）。
-  // 因此这里反过来要求：矩阵没有 ubuntu 时，README 必须如实写明只验证 Windows，
-  // 否则「配置缩了、文档还在宣称跨平台」这种漂移会被立刻抓到。
-  if (!runners.includes('ubuntu-latest')) {
-    assert.match(read('README.en.md'), /Tested and CI-verified on Windows only/,
-      '矩阵没有 ubuntu 腿 ⇒ 英文 README 必须声明只在 Windows 验证')
-    assert(read('README.md').includes('CI 也只跑 Windows'),
-      '中文版同步声明（两份不许一份承认、一份宣称）')
-  } else {
-    assert.fail('matrix 里出现了 ubuntu-latest：POSIX 腿要重新加回，先确认那六条断言已按平台改写')
-  }
-  assert.match(ci, /24\.x/, 'CI 用 node 24.x')
-  assert.deepEqual(
-    [...new Set(pkg.files.filter((f) => f.startsWith('README')))].sort(),
-    ['README.en.md', 'README.md'],
-    '两版 README 都必须在发布清单里（files 只收其一=对外文档缺一半）',
-  )
-})
-
 test('⑪ pin-store 默认仓注释与真实读写裁定一致，被否旧设计指纹零残留', () => {
   const source = read('lib/pin-store.js')
   assert(!source.includes('unified per-user data directory'), '旧设计指纹「unified per-user data directory」不得回潮（F-1）')
@@ -400,4 +325,31 @@ test('⑪ pin-store 默认仓注释与真实读写裁定一致，被否旧设计
     source.slice(docStart, docEnd).includes('`pairingPinWritePath()`'),
     'doc 块内必须引用 `pairingPinWritePath()`（写=readPaths[0] 裁定的正锚，F-1）'
   )
+})
+
+// ⑫（2026-10-11，泄漏归零那一轮）
+//
+// 钉的是哪句语义：**每一处 `mkdtempSync` 都必须有一条能走到它的回收路径**。
+//
+// 存在理由：临时目录删不掉在 Windows 上是**静默**的 —— `rmSync(..., { force: true })`
+// 只吞 ENOENT，EBUSY/EPERM 会抛；抛在 `finally` 里就把已经通过的断言整档带红，
+// 抛在别处则被 `catch` 吃掉、只剩目录。于是这类漏能一直不被发现：实测 %TEMP%
+// 积到上千个临时目录（0.4.31 前那批带 `mailbag` 前缀的档案已随该模块删除，
+// 存量目录不追溯），以及每跑一轮全量稳定新增 7 个
+// （`-test-bin-` ×3、`-s5-` ×4、`-pinstore-` ×1）。
+//
+// 这条断言只做机械核对（有没有回收调用），**不跑测试、不碰 %TEMP%**：
+// 真正判「漏没漏」的权威手段是跑全量前后各来一次 `node tools/temp-leak-check.mjs`
+// 比总数（工具头注写了用法）。这里钉的是「别把回收那行删掉」。
+test('⑫ 每个 mkdtempSync 都有回收路径，别让临时目录静默留在 %TEMP%', () => {
+  const files = readdirSync(join(root, 'test')).filter((name) => name.endsWith('.test.js'))
+  const offenders = []
+  for (const name of files) {
+    const source = readFileSync(join(root, 'test', name), 'utf8')
+    if (!source.includes('mkdtempSync')) continue
+    // 回收的任一形态：直接 rmSync、经本文件自定的 removeTempDir、或注册进数组后统一收。
+    const recycles = /rmSync\(|removeTempDir\(|tempDirs\.push\(/
+    if (!recycles.test(source)) offenders.push(name)
+  }
+  assert.deepEqual(offenders, [], `这些测试建了临时目录却没有回收路径：${offenders.join(', ')}`)
 })

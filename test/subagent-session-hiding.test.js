@@ -50,12 +50,17 @@ test('a missing or malformed answer is an empty list, never a crash', () => {
   assert.deepEqual(visibleSessions({ items: [] }), []);
 });
 
-test('all three session.list loads go through the one projection', () => {
+test('every session.list load goes through the one projection', () => {
+  // projectSessionRows is visibleSessions plus the optimistic send marks (2026-10-13):
+  // a session this phone just wrote to still paints "running" until the host agrees.
   const sites = [
-    ['refreshActiveSessionSummary', 'sessionSummaries=visibleSessions(value.items)'],
-    ['openSessionSettings', 'sessionSummaries=visibleSessions(sessions.items)'],
-    ['applyBootData', 'sessionSummaries=visibleSessions(sessInput.items)'],
+    ['refreshActiveSessionSummary', 'sessionSummaries=projectSessionRows(value.items)'],
+    ['applyBootData', 'sessionSummaries=projectSessionRows(sessInput.items)'],
   ];
+  // openSessionSettings dropped its session.list load (2026-10-10): the settings panel took
+  // 1-2 seconds because it fetched the whole 469-row catalogue for one agentPreset value.
+  assert.ok(!extractFunction(js, 'openSessionSettings').includes("rpc('session.list'"),
+    'the settings panel must not pay for the list to open');
   for (const [name, needle] of sites) {
     assert.ok(extractFunction(js, name).includes(needle), `${name} must project its answer`);
   }
@@ -66,10 +71,10 @@ test('all three session.list loads go through the one projection', () => {
 });
 
 test('a locally created session is not listed when the host says it is a subagent', () => {
-  const body = extractFunction(js, 'createSessionIn');
+  const body = extractFunction(js, 'ensureSession');
   assert.ok(
-    body.includes("if(created.origin!=='subagent'){const summary="),
-    'the local summary is origin-guarded like the loads are (optimistic creation)',
+    body.includes("if(created.origin!=='subagent'&&!sessionSummaries.some("),
+    'the summary a materialized draft leaves behind is origin-guarded like the loads are',
   );
 });
 

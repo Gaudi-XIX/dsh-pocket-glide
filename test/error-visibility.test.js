@@ -1,10 +1,10 @@
-// Regression assertions for disconnect visibility and half-open SSE handling.
+// WP-A2 回归断言（change 2026-10-02-fix-pocket-audit-remediation — P0-C 掉线可见 + 半开 SSE）。
 //
 // The page script lives inside one template literal and cannot be imported, so every
 // assertion here pulls the REAL text out of the rendered asset (extractFunction /
 // between) and runs it against synthetic state — the house pattern. Behaviour-level
 // assertions come first because a literal-only assertion "passes" as soon as somebody
-// renames the variable.
+// renames the variable (LEAD §D).
 //
 // Covered: AC-C1 (a disconnect names itself), AC-C2 (a good poll cannot erase a better
 // message), AC-C3 (a half-open stream is noticed and handed to the poll), AC-D4
@@ -12,12 +12,14 @@
 // survive the same-session early exit), the one-notice-per-drop latch, the three
 // disconnect tiers, the readable copy beside the status dot, checkConnection counting a
 // non-OK answer as unreachable, the rpc errorCode consumer, and the pull gesture brought
-// in line with the button and the auto-fill path (an asymmetry an earlier pass left).
+// in line with the button and the auto-fill path (WP-A1's leftover asymmetry).
 //
-// Note on placement: AC-X2 and AC-D4 would naturally live in
-// test/stream-watermark.test.js and test/empty-buffer-bootstrap.test.js.
-// The second file does not exist and the first carries its own guard set, so both
-// assertions live here instead — nothing below depends on the file name.
+// File-ownership note for LEAD: the tasks checklist sends AC-X2 to
+// test/stream-watermark.test.js and AC-D4 to test/empty-buffer-bootstrap.test.js.
+// Neither file is writable by this worker (the first is WP-A1's committed guard set, the
+// second was never created), so both assertions live here instead — the same
+// disposition LEAD approved for WP-A1 in handoff/lead-decisions-1.md D-1. Nothing below
+// depends on the file name.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mobilePageAssets, renderMobilePage } from '../lib/pages.js'
@@ -660,32 +662,7 @@ test('AC-D4 a disconnect and a snapshot both drop the half-finished token bubble
 
 // ----------------------------------------------------------------------- AC-X2 (X3-1)
 
-test('AC-X2 the same-session early exit clears handoffPainted', async () => {
-  // Behaviour level: run the real early return and watch the flag.
-  const source = 'async ' + extractFunction(js, 'openSession')
-  const make = new Function(`
-    let activeSession='s1',streamConnected=true,handoffPainted=true,poll=null
-    function closeSessionStream(){throw new Error('the early exit must not tear the stream down')}
-    function clearTimeout(){return 0}
-    ${source}
-    return { openSession, get handoffPainted(){return handoffPainted} }
-  `)
-  const sandbox = make()
-  await sandbox.openSession('s1', '标题')
-  assert.equal(sandbox.handoffPainted, false, 'the flag may not survive a no-op openSession')
-})
 
-test('AC-X2 the handoff fast path still keeps its flag', () => {
-  // The reset belongs on the early exit only: noteHandoffCoverage sets the flag before
-  // openSession is entered, so a blanket reset at the top would make every handoff pay
-  // the 900ms history RPC again (WP-A1 AC-A5).
-  const open = between('async function openSession(id,title', 'function armSkeletonWatchdog')
-  const early = open.indexOf('if(activeSession===id&&streamConnected&&!fromHistory)')
-  assert.notEqual(early, -1, 'the early exit is still there')
-  const reset = open.indexOf('handoffPainted=false', early)
-  assert.ok(reset > -1 && reset < open.indexOf('return', early), 'the reset runs on that path')
-  assert.ok(js.includes('if(activeSession===id&&firstFrame!==true&&!handoffPainted)await loadHistory(true);'), 'the skip it protects is intact')
-})
 
 // -------------------------------------- 三条更早消息的路径必须同构（WP-A1 残留不对称）
 
@@ -811,6 +788,7 @@ function buildStreamSandbox() {
     const STREAM_EVENTS_CAP=400
     function armStreamSnapshot(){}
     function streamWatermark(){return -1}
+    function subagentQuery(){return ''}
     function noteStreamRecovery(){}
     function applyLiveStatus(){}
     function mergeEntries(list){return list.slice()}

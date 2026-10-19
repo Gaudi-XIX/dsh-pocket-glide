@@ -6,7 +6,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { renderMobilePage, renderMobileReconnectPage, renderPairingPinPage } from '../lib/pages.js'
+import vm from 'node:vm'
+import {
+  mobilePageAssets,
+  renderConsentPage,
+  renderDesktopPairingPage,
+  renderMobilePage,
+  renderMobileReconnectPage,
+  renderPairingPinPage
+} from '../lib/pages.js'
 
 // The reconnect handoff and the pairing page used to carry their own copy of the
 // same five stage functions. They now pull one block from `sharedStageScript()`,
@@ -16,7 +24,7 @@ const SHARED_ORGANS = [
   'function withTimeout(promise,ms){',
   'function pinError(message){',
   'const rpc=async(method,payload={})=>{',
-  'const stageRunner=(setStep)=>async(index,work)=>{',
+  'const stageRunner=(setStep)=>{',
   'async function verifyPin(pin){',
   'async function showPinOnDesktop(){'
 ]
@@ -109,4 +117,45 @@ test('both bootstrap pages carry the shared block exactly once', () => {
   }
   assert.equal(occurrences(reconnect, 'const stage=stageRunner(setStep);'), 1)
   assert.equal(occurrences(pairing, 'const stage=stageRunner(setStep);'), 1)
+})
+
+// Every page script here is a JS template literal that EMITS JavaScript, so an edit
+// can leave lib/pages.js itself perfectly valid while the phone gets a page that
+// parses to nothing — and no byte-level or string-level assertion notices. Caught
+// live 2026-10-10: a `Promise.all([...])` batch of handoff stages shipped one
+// unbalanced paren on the PIN page only, with the whole suite green.
+test('PARSE: every inline script of every phone page actually parses', () => {
+  const pages = {
+    'app document': renderMobilePage({ locale: 'zh', boot: JSON.stringify({ ws: { items: [] }, sess: { items: [] } }), initialChat: true }),
+    'app document (en)': renderMobilePage({ locale: 'en', boot: null, initialChat: false }),
+    'pairing pin page': renderPairingPinPage('zh', null, {}),
+    'pairing pin page (en)': renderPairingPinPage('en', null, {}),
+    'reconnect (tunnel)': renderMobileReconnectPage('zh', 'tunnel', {}),
+    'reconnect (lan)': renderMobileReconnectPage('en', 'lan', {}),
+    'desktop pairing': renderDesktopPairingPage({ locale: 'zh', pairingUrl: 'https://x', pairingPin: '12345678' }),
+    'consent': renderConsentPage('zh', { next: '/?x=1' })
+  }
+  let blocks = 0
+  for (const [name, html] of Object.entries(pages)) {
+    for (const body of scriptBodies(html)) {
+      if (!body.trim()) continue
+      blocks += 1
+      try {
+        new vm.Script(body, { filename: `${name} block ${blocks}` })
+      } catch (error) {
+        assert.fail(`${name} ships a script the browser cannot parse: ${error.message}`)
+      }
+    }
+  }
+  assert.ok(blocks >= 8, `the guard must cover the real page set, saw ${blocks} blocks`)
+
+  // The cached shell is the same hazard one layer down: it is a template too.
+  for (const locale of ['zh', 'en']) {
+    const { js } = mobilePageAssets({ locale })
+    try {
+      new vm.Script(js, { filename: `app.js ${locale}` })
+    } catch (error) {
+      assert.fail(`the ${locale} shell asset does not parse: ${error.message}`)
+    }
+  }
 })

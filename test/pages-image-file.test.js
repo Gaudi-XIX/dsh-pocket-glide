@@ -562,3 +562,68 @@ test('session-file: the gates — pairing, origin, and required params', async (
     await t.stop()
   }
 })
+
+// ---------------------------------------------------------------------------
+// ensureSession: concurrent first actions share ONE in-flight create.
+// The old draftBusy flag answered every follower with null and their work was
+// dropped silently — a draft-state multi-select upload kept only the first
+// file, with no draft row, no error and no log (found 2026-10-12).
+// ---------------------------------------------------------------------------
+
+/** Build the page's ensureSession over injectable surroundings. The shared
+ * extractor starts at `function ensureSession(` and eats the `async` keyword,
+ * so it is put back here — the body awaits. */
+function ensureSessionSandbox() {
+  const ensure = extractFunction(assets.zh.js, 'ensureSession')
+  return new Function('rpc', 'showError', `
+    let activeSession=null, draftWorkspaceId='ws-1', draftEnsurePromise=null
+    let sessionBlank=true, followStream=true
+    const workspaces=[{workspaceId:'ws-1',sessionIds:[]}]
+    const pendingCreatedSessions=[], sessionSummaries=[]
+    // 2026-10-15: ensureSession now flushes the draft settings buffer onto the new
+    // session before returning. This file pins the fan-out (one create, no dropped
+    // files) — the buffer stays empty here, so the flush is a no-op stub.
+    let draftPending=null
+    async function applyDraftPending(){}
+    const history={replaceState(){}}
+    const L={untitled:'untitled'}
+    const openRealtime=()=>{}
+    async ${ensure}
+    return { ensureSession, state: () => ({ activeSession, draftWorkspaceId }) }
+  `)
+}
+
+test('draft fan-out: racing first actions mint ONE session — multi-select no longer drops files', async () => {
+  let creates = 0
+  const rpc = async (method) => {
+    assert.equal(method, 'session.create')
+    creates += 1
+    await new Promise(resolve => setTimeout(resolve, 20))
+    return { sessionId: 'sess-new', origin: 'user' }
+  }
+  const ctx = ensureSessionSandbox()(rpc, () => {})
+  const [a, b, c] = await Promise.all([ctx.ensureSession(), ctx.ensureSession(), ctx.ensureSession()])
+  assert.equal(creates, 1, 'three racing callers must reach the Host once')
+  assert.equal(a, 'sess-new')
+  assert.equal(b, a, 'a follower awaits the shared create instead of getting null')
+  assert.equal(c, a, 'the third caller is served by the same in-flight create')
+  assert.equal(ctx.state().activeSession, a, 'the materialized session sticks')
+  assert.equal(ctx.state().draftWorkspaceId, null, 'the draft is consumed')
+})
+
+test('draft fan-out: one failing create surfaces one error and stays retryable', async () => {
+  let attempts = 0
+  let errors = 0
+  const failingRpc = async () => {
+    attempts += 1
+    await new Promise(resolve => setTimeout(resolve, 5))
+    throw new Error('host down')
+  }
+  const ctx = ensureSessionSandbox()(failingRpc, () => { errors += 1 })
+  const results = await Promise.all([ctx.ensureSession(), ctx.ensureSession()])
+  assert.deepEqual(results, [null, null], 'every caller of a failed create is told')
+  assert.equal(attempts, 1, 'the failing create is not duplicated per caller')
+  assert.equal(errors, 1, 'one failure surfaces one error, not one per caller')
+  assert.equal(await ctx.ensureSession(), null, 'it still fails while the Host is down')
+  assert.equal(attempts, 2, 'a consumed failure is retried on the next call, not cached forever')
+})

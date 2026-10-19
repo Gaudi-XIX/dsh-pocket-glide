@@ -5,6 +5,7 @@
 // return strings.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   renderConsentPage,
   renderDesktopPairingPage,
@@ -43,13 +44,13 @@ test('renderManifestJson returns a parseable manifest with the pinned fields', (
 test('renderConsentPage renders the risk checkbox, the submit form and passes next through', () => {
   const zh = renderConsentPage('zh', { next: '/?x=1' })
   assert.match(zh, /公网访问确认/)
-  assert.match(zh, /我理解此页面经公网暴露/)
+  assert.match(zh, /我明白这条链接别人也能打开/)
   assert.match(zh, /<form[^>]*action="\/consent\/accept"/)
   assert.match(zh, /<input type="hidden" name="next" value="\/\?x=1">/)
   assert.match(zh, /type="checkbox"[^>]*required/)
   const en = renderConsentPage('en', { next: '/sessions' })
   assert.match(en, /Public Access Confirmation/)
-  assert.match(en, /exposed publicly/)
+  assert.match(en, /anyone with this link can open it/)
   assert.match(en, /<input type="hidden" name="next" value="\/sessions">/)
 })
 
@@ -128,7 +129,7 @@ test('the desktop page renders the named-tunnel section from the tunnelConfig co
     tunnelConfig: { tokenMasked: 'cf…token', hostname: 'pocket.example.com' },
   })
   assert.match(html, /data-action="tunnel-config-save"/)
-  assert.match(html, /固定域名（命名隧道）/)
+  assert.match(html, /固定域名/)
   assert.match(html, /placeholder="cf…token"/, 'the token is injected as a masked placeholder only')
   assert.match(html, /id="tunnelHostname"[^>]*value="pocket\.example\.com"/)
 })
@@ -205,4 +206,57 @@ test('the new panel i18n keys exist in both locales side by side', () => {
   assert.match(en, /Allow/)
   assert.match(zh, /吊销/)
   assert.match(en, /Revoke/)
+})
+
+// ---------------------------------------------------------------------------
+// 「进页面就把内容预先加载好」 (2026-10-10). The phone lands on a connection page
+// (PIN or reconnect) and then waits. Everything that can start without the
+// PIN must start at page load instead, and the reads that cannot must go out
+// together rather than one tunnel round trip at a time.
+// ---------------------------------------------------------------------------
+
+test('both connection pages warm the shell the moment they load', () => {
+  const pin = renderPairingPinPage('zh', null)
+  const reconnect = renderMobileReconnectPage('zh', 'tunnel')
+  for (const [name, html] of [['pairing', pin], ['reconnect', reconnect]]) {
+    assert.match(html, /const shellReady=\(async\(\)=>/, `${name} starts the shell download at page level`)
+    assert.ok(!html.includes('const prefetch='), `${name} no longer defers the warm-up into the handoff`)
+    assert.match(html, /Promise\.all\(\[shellReady/, `${name} waits on that page-level warm-up, not a second copy`)
+  }
+})
+
+test('the handoff reads go out in one batch, and the ladder only ever climbs', () => {
+  const pin = renderPairingPinPage('zh', null)
+  const reconnect = renderMobileReconnectPage('zh', 'tunnel')
+  // workspace + session list + boot are independent, and the bridge dedupes the
+  // catalogue itself: three serial round trips become one.
+  assert.match(pin, /await Promise\.all\(\[stage\(1,\(\)=>rpc\('workspace\.list'\)\),stage\(2,\(\)=>rpc\('session\.list'/, 'the PIN page batches its three reads')
+  assert.match(reconnect, /await Promise\.all\(\[stage\(0,\(\)=>rpc\('workspace\.list'\)\),stage\(1,\(\)=>rpc\('session\.list'/, 'and so does the reconnect page')
+  // Rows may now finish out of order, so a late answer for an earlier row must
+  // never rewind the ladder.
+  for (const [name, html] of [['pairing', pin], ['reconnect', reconnect]]) {
+    assert.match(html, /if\(index\+1>high\)\{high=index\+1;setStep\(index\+1\)\}/, `${name} stageRunner only advances`)
+  }
+  const source = readFileSync(new URL('../lib/pages.js', import.meta.url), 'utf8')
+  assert.equal(source.split('const stageRunner=(setStep)=>{').length - 1, 1, 'one copy of the stage runner, shared')
+})
+
+// ---------------------------------------------------------------------------
+// 「点进去就要生成网络连接」（用户 2026-10-10）：开机自启被明确否决，但打开配对页这个
+// 动作本身就是意图——所以页面加载即自己起公网隧道，不必再点第二次。
+// ---------------------------------------------------------------------------
+
+test('opening the pairing page generates the public link by itself', () => {
+  const fresh = renderDesktopPairingPage({ locale: 'zh', pairingUrl: 'http://127.0.0.1:1/pair?token=x', pairingPin: '12345678' })
+  const taken = renderDesktopPairingPage({ locale: 'zh', pairingUrl: 'https://x', pairingPin: '12345678', tunnelActive: true, connected: true })
+  const guard = 'if(!phoneConnected&&selectedTunnelTab&&!tunnelActive)void switchMode(true);'
+  assert.ok(fresh.includes(guard), 'the page starts the tunnel on load')
+  assert.ok(fresh.indexOf(guard) < fresh.indexOf('setInterval(poll,2000)'), 'it fires before the first status poll, not after it')
+  assert.match(fresh, /tunnelActive=false/, 'a fresh pairing page renders with the tunnel down…')
+  // phoneConnected is interpolated raw, so "no phone yet" is `undefined` — falsy, which
+  // is what the guard reads; a real pairing pins it to true (the `taken` render below).
+  assert.match(fresh, /phoneConnected=(undefined|false)/, '…and with no phone on it, which is exactly when it must fire')
+  assert.ok(taken.includes(guard), 'the same guard ships in every render — the runtime flags decide')
+  assert.match(taken, /tunnelActive=true/, 'with the tunnel up there is nothing to start…')
+  assert.match(taken, /phoneConnected=true/, '…and a paired phone stops it dead either way')
 })

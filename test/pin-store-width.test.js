@@ -5,7 +5,7 @@
 // auto-expiry smuggled in behind the strength work (design §12 禁令 3).
 // All of it runs against a temp file: the real
 // %LOCALAPPDATA%\dsh-pocket\mobile-pairing-pin.json is never touched.
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { closeSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -19,6 +19,12 @@ import { PAIRING_PIN_DIGITS, PAIRING_PIN_MAX_DIGITS, PAIRING_PIN_MIN_DIGITS } fr
 
 const dir = mkdtempSync(join(tmpdir(), 'dsh-pocket-pinstore-'))
 const file = join(dir, 'mobile-pairing-pin.json')
+
+// 这只目录是模块级的（下面每一档都用它），所以回收只能挂在文件级钩子上。
+// 以前没有钩子，每跑一轮全量测试就在 %TEMP% 留一个。
+after(() => {
+  rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 })
+})
 
 function writeRaw(text) {
   writeFileSync(file, text)

@@ -79,15 +79,29 @@ test('WD the watch is called where the run state is decided, on every event seq'
   assert.ok(!update.includes('event.time'), 'no host timestamp is read here either')
 })
 
-test('WD retirement raises the mark and repaints, and closes only the open flag', () => {
-  const expire = between('function expireTurnRunning()', 'function watchTurnRunning(maxSeq)')
+test('WD retirement raises the mark, asks the host, and closes only on a host that agrees', () => {
+  // The bound itself no longer decides anything: it raises the mark and fires a consult.
+  // Silence in the phone log is not evidence the turn ended (a long tool call or a busy
+  // subagent goes quiet while the host still works), which is what took the stop button
+  // away on 2026-10-13. So the three lines that retire the run state live in the answer
+  // handler, not in the bound.
+  const expire = between('function expireTurnRunning()', 'function confirmTurnRunning(')
   assert.ok(
     expire.includes('if(turnRunningSeenSeq>turnRunningSeq)turnRunningSeq=turnRunningSeenSeq'),
     'the mark is raised to the newest seq the log showed, so a replay of the same window cannot reopen the turn',
   )
-  assert.ok(expire.includes('turnRunningOpen=false'), 'the open flag is the only thing retirement closes')
-  assert.ok(expire.includes('agentRunning=awaitingTurnSeq!==null'), 'the run state is re-derived, not forced false')
-  assert.ok(expire.includes("lastHistoryKey=''"), 'and the history key is dropped so the next poll repaints')
+  assert.ok(!expire.includes('turnRunningOpen=false'), 'the bound no longer closes the turn on its own')
+  assert.ok(expire.includes('turnRunningConfirming=true'), 'the consult is marked in flight so the next bound cannot stack another')
+  assert.ok(expire.includes('confirmTurnRunning(turnRunningSeenSeq)'), 'and the consult carries the seq the log had reached')
+  const consult = between('function confirmTurnRunning(', 'function finishTurnConfirm(')
+  assert.ok(consult.includes("rpc('session.list'"), 'the verdict comes from the host row, the same source the list page reads')
+  assert.ok(consult.includes('.catch(()=>finishTurnConfirm(seenAtStart,false))'), 'a bridge that cannot answer falls back to retiring — the status must not pin forever')
+  const finish = between('function finishTurnConfirm(', 'function watchTurnRunning(maxSeq)')
+  assert.ok(finish.includes('if(turnRunningSeenSeq>seenAtStart){watchTurnRunning(turnRunningSeenSeq);return}'), 'progress seen during the round trip voids a verdict about the old silence')
+  assert.ok(finish.includes('if(busy){'), 'the host saying "still running" keeps the turn open')
+  assert.ok(finish.includes('turnRunningOpen=false'), 'and only the other answer closes it')
+  assert.ok(finish.includes('agentRunning=awaitingTurnSeq!==null'), 'the run state is re-derived, not forced false')
+  assert.ok(finish.includes("lastHistoryKey=''"), 'and the history key is dropped so the next poll repaints')
 })
 
 test('WD the literals the earlier cards pinned are still intact and still single', () => {

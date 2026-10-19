@@ -112,6 +112,34 @@ test('K-1: offering the icon changes nothing about who may see these pages', asy
   }
 })
 
+// The app document now names `/app-icon?ui=1` instead of inlining the icon three
+// times per cold open (31.7 KB of base64 on a `no-store` document). That trade
+// only pays off if the route is real, gated like every other brand asset, and
+// cached — and if the BARE path still serves the raw 1024x1024 the manifest
+// promises. Geometry/alpha of the small form is covered by R-T7/R-T8 below.
+test('K-2: /app-icon?ui=1 serves the small form, gated and cached; the bare path stays raw', async () => {
+  const t = await startBridge()
+  try {
+    const SMALL = Buffer.from('POCKET-UI-ICON-BYTES', 'utf8')
+    t.bridge.iconUiBytes = SMALL
+    assert.notEqual((await httpFetch(`${t.base}/app-icon?ui=1`)).status, 200, 'an unpaired phone cannot read the route either')
+    const cookie = await t.pairMobile('PocketIconK2/1.0')
+    const ui = await httpFetch(`${t.base}/app-icon?ui=1`, { headers: { cookie } })
+    assert.equal(ui.status, 200)
+    assert.equal(ui.headers.get('cache-control'), 'public, max-age=86400', 'the day-long cache is what makes one URL beat three inlines')
+    assert.equal(ui.headers.get('content-type'), 'image/png')
+    assert.equal(await ui.text(), SMALL.toString('utf8'), 'the bytes are the resized form, not the source file')
+
+    // Without the small bytes in hand the variant must not pretend: it falls
+    // through to the raw path (404 here — the helper boots with no icon file).
+    t.bridge.iconUiBytes = null
+    assert.notEqual((await httpFetch(`${t.base}/app-icon?ui=1`, { headers: { cookie } })).status, 200,
+      'no icon in hand means no icon, never a wrong one')
+  } finally {
+    await t.stop()
+  }
+})
+
 // ---------------------------------------------------------------------------
 // WP-RESCAN-A / R-T7 + R-T8 — the producer's own geometry and alpha handling.
 // R-T7 (probe-03): `const S = src.width` was the stride, the y-clamp bound AND

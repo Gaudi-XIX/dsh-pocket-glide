@@ -18,9 +18,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mobilePageAssets } from '../lib/pages.js'
+import { STEP_PROCESS_LABELS } from '../lib/step-process.generated.js'
 import { toolActivityCategory } from '../lib/constants.js'
 
 const assets = { zh: mobilePageAssets({ locale: 'zh' }), en: mobilePageAssets({ locale: 'en' }) }
+
+// The page embeds the generated host table as STEP (message.stepProcess.*);
+// the sandbox needs the same data the rendered asset carries.
+function STEP_TABLE(locale) {
+  return locale === 'en' ? STEP_PROCESS_LABELS.en : STEP_PROCESS_LABELS.zh
+}
 
 function labels(locale) {
   const line = assets[locale].js.match(/^const L=(\{.*\});/m)
@@ -49,13 +56,14 @@ function extractFunction(source, name) {
 function renderSandbox(locale) {
   const js = assets[locale].js
   const names = [
-    'toolActivityCategory', 'diffLineSplit', 'toolSummaryLine', 'clusterToolBlocks',
+    'toolActivityCategory', 'diffLineSplit', 'toolSummaryLine', 'clusterToolBlocks', 'stepTitleFor',
     'renderBlock', 'toolClusterState', 'toolArgsOf', 'diffRowsHtml', 'renderToolDiff',
-    'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'pretty',
+    'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'stableLiveTitle', 'liveThinkingLine', 'pretty',
   ]
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
     'L',
+    'STEP',
     'activeSession',
     `${body};
      const esc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
@@ -64,10 +72,11 @@ function renderSandbox(locale) {
      function activityChevron(){return '<c></c>'}
      function reasoningSummary(){return ''}
      const turnOpenState=new Map()
+     const liveTitle={session:null,text:'',desired:'',shownAt:0,timer:null}
      const transcriptView='verbose'
      const pendingQuestion=null
-     return { renderBlock, renderToolCard, renderTurnProcess, clusterToolBlocks, toolActivityCategory, diffLineSplit, toolSummaryLine }`,
-  )(labels(locale), 's1')
+     return { renderBlock, renderToolCard, renderTurnProcess, clusterToolBlocks, toolActivityCategory, diffLineSplit, toolSummaryLine, stableLiveTitle, liveThinkingLine, liveTitle }`,
+  )(labels(locale), STEP_TABLE(locale), 's1')
 }
 
 const tool = (name, status, args, result) => ({ kind: 'tool', id: name + ':' + Math.random(), name, status, args, result: result || '' })
@@ -154,13 +163,17 @@ const CATEGORIES = ['read', 'readImage', 'write', 'search', 'edit', 'commands', 
 test('verb tables cover every category in both locales and both states', () => {
   for (const locale of ['zh', 'en']) {
     const L = labels(locale)
-    for (const table of ['stepVerbs', 'stepDone', 'stepCount']) {
+    // stepCount is retired: the desktop titles carry no counts (processTitle),
+    // and the card title follows the plain done-phrase. The generated STEP
+    // table (message.stepProcess.*) is the single narration source instead.
+    for (const table of ['stepVerbs', 'stepDone']) {
       assert.ok(L[table], `${locale}: ${table} must exist`)
       assert.deepEqual(Object.keys(L[table]).sort(), [...CATEGORIES].sort(), `${locale}: ${table} covers exactly the narration categories`)
       for (const key of CATEGORIES) {
         assert.ok(String(L[table][key]).length > 0, `${locale}: ${table}.${key} must be non-empty`)
       }
     }
+    assert.equal(L.stepCount, undefined, 'the self-invented count table is retired')
     assert.ok(L.toolRaw, `${locale}: the raw-details summary must exist`)
     assert.ok(L.diffMore.includes('{n}'), `${locale}: the elision row must carry the {n} slot`)
   }
@@ -215,7 +228,7 @@ test('diffLineSplit trims the common head and tail so the middle is the edit', (
 
 test('toolSummaryLine reduces a call to its primary argument', () => {
   const { toolSummaryLine } = renderSandbox('zh')
-  assert.equal(toolSummaryLine('read', { file_path: 'D:\\workspace\\deep\\nest\\a.ts' }), 'a.ts', 'windows paths collapse to the basename')
+  assert.equal(toolSummaryLine('read', { file_path: 'F:\\defws\\deep\\nest\\a.ts' }), 'a.ts', 'windows paths collapse to the basename')
   assert.equal(toolSummaryLine('read', { file_path: '/var/log/app.log' }), 'app.log', 'posix paths too')
   assert.equal(toolSummaryLine('bash', { command: 'npm test -- --watch' }), 'npm test -- --watch')
   assert.equal(toolSummaryLine('bash', { command: 'x'.repeat(80) }), 'x'.repeat(60) + '…', 'long commands clip at 60')
@@ -350,14 +363,42 @@ function turnOf(locale, blocks) {
   return renderSandbox(locale).renderTurnProcess({ turnKey: '7', streaming: false, blocks })
 }
 
-test('three reads collapse into one counted card with a row per file', () => {
+// Desktop processTitle port: the fold's summary title joins the top-3
+// categories' done-phrases without counts, exactly like dsh-client-ui-chat.
+test('the fold title is the count-free top-3 join, desktop phrasing', () => {
+  const { renderTurnProcess } = renderSandbox('zh')
+  const one = renderTurnProcess({ turnKey: 'a', streaming: false, blocks: [tool('read', 'done', { file_path: '/w/a' })] })
+  assert.ok(one.includes('已读取文件'), 'one category speaks its done-phrase only')
+  const two = renderTurnProcess({ turnKey: 'b', streaming: false, blocks: [
+    tool('read', 'done', { file_path: '/w/a' }),
+    tool('edit', 'done', { file_path: '/w/a', old_string: 'x', new_string: 'y' }),
+  ] })
+  assert.ok(two.includes('已读取文件并修改了文件'), 'two categories join with joinTwo and strip the shared 已 prefix')
+  const three = renderTurnProcess({ turnKey: 'c', streaming: false, blocks: [
+    tool('read', 'done', { file_path: '/w/a' }),
+    tool('edit', 'done', { file_path: '/w/a', old_string: 'x', new_string: 'y' }),
+    tool('bash', 'done', { command: 'npm test' }),
+  ] })
+  assert.ok(three.includes('已读取文件，修改了文件，执行了命令'), 'three categories join with the zh comma')
+  const four = renderTurnProcess({ turnKey: 'd', streaming: false, blocks: [
+    tool('read', 'done', { file_path: '/w/a' }),
+    tool('edit', 'done', { file_path: '/w/a', old_string: 'x', new_string: 'y' }),
+    tool('bash', 'done', { command: 'npm test' }),
+    tool('read_image', 'done', { file_path: '/w/i.png' }),
+  ] })
+  assert.ok(four.includes('等</span>'), 'a fourth category wraps the title in the more-template')
+})
+
+test('three reads collapse into one card with a row per file', () => {
   const html = turnOf('zh', [
     tool('read', 'done', { file_path: '/w/src/a.ts' }),
     tool('read', 'done', { file_path: '/w/src/b.ts' }),
     tool('read', 'done', { file_path: '/w/src/c.ts' }),
   ])
   assert.equal(html.split('class="tool change-cluster"').length - 1, 1, 'one card for the whole run')
-  assert.ok(html.includes('已读取 3 个文件'), 'the count title speaks the card examples from the card')
+  // Desktop wording has no counts on the card title (processTitle uses plain
+  // done-phrases); the per-file rows below the fold are the count.
+  assert.ok(html.includes('已读取文件'), 'the title is the Host done-phrase, count-free')
   assert.equal(html.split('cluster-row').length - 1 >= 3, true, 'three rows')
   for (const name of ['a.ts', 'b.ts', 'c.ts']) assert.ok(html.includes(name), `${name} gets its row`)
 })
@@ -372,13 +413,13 @@ test('a mixed turn cuts into per-category cards with Host count phrasing', () =>
     tool('edit', 'done', { file_path: '/w/a.ts', old_string: 'x', new_string: 'y' }),
   ])
   assert.equal(html.split('class="tool change-cluster"').length - 1, 3, 'reads, commands and the edit each get a card')
-  assert.ok(html.includes('执行了 3 条命令'), 'the commands card counts in the Host tone')
+  assert.ok(html.includes('执行了命令'), 'the commands card speaks the count-free Host done-phrase')
   assert.ok(html.includes('修改了文件'), 'a single edit keeps the plain past tense')
 })
 
 test('the en page counts in english', () => {
   const html = turnOf('en', [tool('read', 'done', { file_path: '/w/a.ts' }), tool('read', 'done', { file_path: '/w/b.ts' })])
-  assert.ok(html.includes('Read 2 files'))
+  assert.ok(html.includes('Read files'), 'the en title is the count-free Host done-phrase')
 })
 
 test('merged edit clusters fold each row into its own diff', () => {
@@ -386,22 +427,98 @@ test('merged edit clusters fold each row into its own diff', () => {
     tool('edit', 'done', { file_path: '/w/a.ts', old_string: 'a1', new_string: 'a2' }),
     tool('edit', 'done', { file_path: '/w/b.ts', old_string: 'b1', new_string: 'b2' }),
   ])
-  assert.ok(html.includes('修改了 2 个文件'), 'the count title')
+  assert.ok(html.includes('修改了文件'), 'the count-free Host done-phrase title')
   assert.equal(html.split('details class="cluster-row"').length - 1, 2, 'each edit row is its own expander')
   assert.ok(html.includes('diff-line-del'), 'and carries its diff')
 })
 
-test('a live turn narrates the last cluster in the in-progress tense', () => {
+test('a live turn folds into the same single container and narrates the running verb', () => {
   const sandbox = renderSandbox('zh')
   const html = sandbox.renderTurnProcess({
     turnKey: '9',
     streaming: true,
     blocks: [tool('read', 'done', { file_path: '/w/a.ts' }), tool('bash', 'running', { command: 'npm test' })],
   })
-  assert.ok(html.includes('turn-process-live'), 'the live container shape is unchanged')
-  assert.ok(html.includes('已读取文件'), 'the settled call speaks past tense even mid-turn')
-  assert.ok(html.includes('正在运行命令'), 'the running call speaks the in-progress verb')
-  assert.ok(!html.includes('已调用'), 'no past tense leaks onto the running call')
+  // 0.4.40: the live phase speaks the desktop's shape — ONE fold from the moment
+  // it appears (ProcessGroupHeader port), not a flat stack that collapses at the
+  // flip. The header narrates the newest running cluster in the in-progress tense.
+  assert.ok(html.startsWith('<div class="message assistant"><details class="turn-process" data-live="1" data-state="running"'), 'the live turn renders the same turn-process fold, marked live')
+  const headerAt = html.indexOf('<span class="activity-title">正在运行命令</span>')
+  assert.ok(headerAt >= 0 && headerAt < html.indexOf('<div class="turn-process-body">'), 'the header narrates the running call in the in-progress tense')
+  assert.ok(html.includes('已读取文件'), 'the settled call inside the body speaks past tense even mid-turn')
+  assert.ok(!html.includes('turn-process-live'), 'the flat live stack is retired')
+})
+
+test('a live turn with nothing running narrates the Host thinking verb', () => {
+  const sandbox = renderSandbox('zh')
+  const html = sandbox.renderTurnProcess({
+    turnKey: '9b',
+    streaming: true,
+    blocks: [tool('read', 'done', { file_path: '/w/a.ts' })],
+  })
+  assert.ok(html.includes('<span class="activity-title">正在分析请求</span>'), 'the header falls back to message.stepProcess.thinking, not the done tally')
+})
+
+test('live and done folds share one open-state key, so the flip preserves expansion', () => {
+  const sandbox = renderSandbox('zh')
+  const keyOf = (html) => html.match(/data-open-key="([^"]*)"/)[1]
+  const live = sandbox.renderTurnProcess({ turnKey: '9c', streaming: true, blocks: [tool('read', 'running', { file_path: '/w/a.ts' })] })
+  const done = sandbox.renderTurnProcess({ turnKey: '9c', streaming: false, blocks: [tool('read', 'done', { file_path: '/w/a.ts' })] })
+  assert.equal(keyOf(live), keyOf(done), 'one key space across the flip — a user-opened fold stays open')
+  assert.equal(keyOf(live), 'turn:9c')
+})
+
+test('in the standard view a live fold stays closed, like the desktop collapsed grouping', () => {
+  const sandbox = briefSandbox('zh', 'standard')
+  const html = sandbox.renderTurnProcess({ turnKey: '9d', streaming: true, blocks: [tool('read', 'running', { file_path: '/w/a.ts' })] })
+  assert.ok(html.includes('<details class="turn-process" data-live="1" data-state="running" data-open-key="turn:9d">'), 'live fold closed by default under the standard work-details view')
+})
+
+test('the live header holds each verb for a minimum beat before switching', async () => {
+  const { stableLiveTitle, liveTitle } = renderSandbox('zh')
+  assert.equal(stableLiveTitle('正在读取文件', 50), '正在读取文件', 'first render adopts immediately')
+  assert.equal(stableLiveTitle('正在运行命令', 50), '正在读取文件', 'a fast switch holds the previous verb')
+  await new Promise((resolve) => setTimeout(resolve, 70))
+  assert.equal(stableLiveTitle('正在运行命令', 50), '正在运行命令', 'after the beat the new verb lands')
+  assert.equal(liveTitle.text, '正在运行命令', 'the hold state committed the latest desired verb')
+})
+
+test('entering another session adopts its live title without holding', () => {
+  const { stableLiveTitle, liveTitle } = renderSandbox('zh')
+  assert.equal(stableLiveTitle('正在读取文件', 60000), '正在读取文件')
+  assert.equal(stableLiveTitle('正在运行命令', 60000), '正在读取文件', 'within the beat it holds')
+  liveTitle.session = 's2'
+  assert.equal(stableLiveTitle('正在搜索代码', 60000), '正在搜索代码', 'a session switch adopts immediately, never the stale verb')
+})
+
+test('each fold holds its own title beat — a new fold adopts immediately', () => {
+  const { stableLiveTitle } = renderSandbox('zh')
+  assert.equal(stableLiveTitle('正在读取文件', 60000, 'turn:1'), '正在读取文件')
+  assert.equal(stableLiveTitle('正在分析请求 · 行', 60000, 'turn:2'), '正在分析请求 · 行', 'another fold never inherits the hold')
+  assert.equal(stableLiveTitle('正在分析请求 · 新行', 60000, 'turn:2'), '正在分析请求 · 行', 'the same fold still holds within the beat')
+})
+
+test('a pure-thinking phase folds too, narrating the thinking verb and the newest thought line', () => {
+  const sandbox = renderSandbox('zh')
+  const html = sandbox.renderTurnProcess({ turnKey: '9e', streaming: true, blocks: [think('先看目录结构\n再定改法')] })
+  assert.ok(html.startsWith('<div class="message assistant"><details class="turn-process" data-live="1" data-state="running"'), 'thinking alone is the same live fold, not a standalone row')
+  const headerAt = html.indexOf('<span class="activity-title">正在分析请求 · 再定改法</span>')
+  assert.ok(headerAt >= 0 && headerAt < html.indexOf('<div class="turn-process-body">'), 'the header narrates the thinking verb plus the newest thought line')
+})
+
+test('a tool running keeps the thought line out of the header', () => {
+  const sandbox = renderSandbox('zh')
+  const html = sandbox.renderTurnProcess({ turnKey: '9f', streaming: true, blocks: [think('想一句'), tool('bash', 'running', { command: 'npm test' })] })
+  const headerAt = html.indexOf('<span class="activity-title">正在运行命令</span>')
+  assert.ok(headerAt >= 0 && headerAt < html.indexOf('<div class="turn-process-body">'), 'the header is the verb alone')
+  assert.ok(!html.includes('activity-title">正在运行命令 ·'), 'thought lines never ride a tool title')
+})
+
+test('a settled thinking-only group lands as the done fold, titled by the host thinking phrase', () => {
+  const sandbox = renderSandbox('zh')
+  const html = sandbox.renderTurnProcess({ turnKey: '9g', streaming: false, blocks: [think('想了一句')] })
+  assert.ok(html.startsWith('<details class="turn-process"'), 'one fold shape when settled, no standalone think row')
+  assert.ok(html.includes('<span class="activity-title">已完成分析</span>'), 'the done tally falls back to the host thinking phrase')
 })
 
 test('a pending question still hides while its composer owns the floor', () => {
@@ -426,6 +543,82 @@ test('a pending question still hides while its composer owns the floor', () => {
 })
 
 // ------------------------------------------------------- 8. stylesheet
+
+// A-档 (2026-10-11): the phone fold shows the CATEGORY plus a count and nothing
+// else — no file names, no commands, no diff rows, no raw JSON — unless the
+// reader opts into 'verbose'. The data is still fetched; only the paint is thin.
+function briefSandbox(locale, view) {
+  const js = assets[locale].js
+  const names = [
+    'toolActivityCategory', 'diffLineSplit', 'toolSummaryLine', 'clusterToolBlocks', 'stepTitleFor',
+    'renderBlock', 'toolClusterState', 'toolArgsOf', 'diffRowsHtml', 'renderToolDiff',
+    'renderToolRaw', 'renderToolCard', 'renderTurnProcess', 'stableLiveTitle', 'liveThinkingLine', 'pretty',
+  ]
+  const body = names.map((name) => extractFunction(js, name)).join('\n')
+  return new Function(
+    'L', 'STEP', 'transcriptView', 'activeSession',
+    `${body};
+     const esc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+     const markdown=text=>String(text||'')
+     function activityIcon(){return '<i class="icon"></i>'}
+     function activityChevron(){return '<c></c>'}
+     function reasoningSummary(){return ''}
+     const turnOpenState=new Map()
+     const liveTitle={session:null,text:'',desired:'',shownAt:0,timer:null}
+     const pendingQuestion=null
+     return { renderTurnProcess, renderToolCard }`,
+  )(labels(locale), STEP_TABLE(locale), view, 's1')
+}
+
+test('A-tier: the card paints a count, never the subjects it touched', () => {
+  const html = briefSandbox('zh', 'standard').renderTurnProcess({
+    turnKey: 'A1',
+    streaming: false,
+    blocks: [
+      tool('read', 'done', { file_path: '/secret/project/src/salary-ledger.ts' }, 'ledger body'),
+      tool('read', 'done', { file_path: '/secret/project/src/payroll.sql' }),
+      tool('read', 'done', { file_path: '/secret/project/src/tax-grid.ts' }),
+    ],
+  })
+  assert.ok(html.includes('已读取文件'), 'the category still names what happened')
+  assert.ok(html.includes('3 次'), 'and how many times it happened')
+  for (const leak of ['salary-ledger.ts', 'payroll.sql', 'tax-grid.ts', 'secret', 'ledger body', 'file_path']) {
+    assert.ok(!html.includes(leak), `the ${leak} never reaches the phone screen`)
+  }
+  assert.ok(!html.includes('diff-line'), 'no diff rows are computed for the fold')
+  assert.ok(!html.includes('tool-raw'), 'neither does the raw JSON fold')
+})
+
+test('A-tier: the tool name and its arguments stay off a single-call card too', () => {
+  const html = briefSandbox('zh', 'standard').renderTurnProcess({
+    turnKey: 'A2',
+    streaming: false,
+    blocks: [tool('bash', 'done', { command: 'rm -rf /Users/toast/private' }, 'removed')],
+  })
+  assert.ok(html.includes('执行了命令'), 'the category names the action')
+  assert.ok(!html.includes('rm -rf'), 'the command itself is not painted')
+  assert.ok(!html.includes('private'), 'neither is what it pointed at')
+})
+
+test('A-tier: a failed card still says it failed', () => {
+  const html = briefSandbox('zh', 'standard').renderTurnProcess({
+    turnKey: 'A3',
+    streaming: false,
+    blocks: [tool('edit', 'error', { file_path: '/w/a.ts', old_string: 'x', new_string: 'y' })],
+  })
+  assert.ok(html.includes('失败'), 'failure is still legible without the body')
+  assert.ok(!html.includes('a.ts'), 'but the failing file stays unnamed')
+})
+
+test('A-tier: verbose is the opt-in that puts the detail back', () => {
+  const blocks = [tool('read', 'done', { file_path: '/w/a.ts' }, 'file body')]
+  const brief = briefSandbox('zh', 'standard').renderTurnProcess({ turnKey: 'A4', streaming: false, blocks })
+  const verbose = briefSandbox('zh', 'verbose').renderTurnProcess({ turnKey: 'A4', streaming: false, blocks })
+  assert.ok(!brief.includes('a.ts'), 'standard hides it')
+  assert.ok(verbose.includes('a.ts'), 'verbose shows it again')
+  assert.ok(verbose.includes('file body'), 'result text included')
+  assert.ok(verbose.includes('tool-raw'), 'and the technical-details fold returns')
+})
 
 test('the stylesheet carries the new organs with token-only colors', () => {
   const { css } = assets.zh

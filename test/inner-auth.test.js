@@ -227,7 +227,7 @@ test('every bridge→Host /api call carries the json content type and the inner 
     assert.equal(exportRes.status, 200)
 
     const inner = host.inbound.filter((entry) => entry.path.startsWith('/api/'))
-    assert.ok(inner.length >= 4, `the Host was reached at least four times, saw ${String(inner.length)}`)
+    assert.ok(inner.length >= 3, `the Host was reached at least three times, saw ${String(inner.length)} — the boot history probe retired with the focus jump`)
     for (const entry of inner) {
       const declared = Object.keys(entry.headers).find((name) => name.toLowerCase() === 'content-type')
       assert.equal(
