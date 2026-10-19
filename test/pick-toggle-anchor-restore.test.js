@@ -78,18 +78,26 @@ test('pick toggle: 点开另一个字段时原来的收回去', () => {
 
 const RESTORE = slice(js, 'function restoreTranscriptAnchor(box,anchor,tries,turn){', '// 键盘收/放')
 
-function buildRestore(rows, boxTop = 0) {
+function buildRestore(rows, boxTop = 0, opts = {}) {
   const marks = []
   const box = {
+    isConnected: true,
     scrollTop: 100,
+    scrollHeight: 2000,
+    clientHeight: 700,
     __settleTurn: 0,
     querySelectorAll() { return rows },
     getBoundingClientRect() { return { top: boxTop } },
   }
-  const make = new Function('$', 'probeMark', 'followStream', 'setTimeout', `${RESTORE};return restoreTranscriptAnchor`)
+  const timers = []
+  const schedule = opts.chain
+    ? (fn) => { timers.push(fn); return timers.length }
+    : () => {}
+  const make = new Function('$', 'probeMark', 'followStream', 'setTimeout', 'SCROLL_FOLLOW_PX', `${RESTORE};return restoreTranscriptAnchor`)
   // tries 传 0，重试链不进 setTimeout，测的就是当下这一次写入决策。
-  const restore = make(() => ({ isConnected: true }), (tag) => marks.push(tag), false, () => {})
-  return { restore, box, marks }
+  // 传 opts.chain 时 $ 必须回同一个 box：重试链的守卫要读 live.__settleTurn（新造一个对象就对不上令牌）。
+  const restore = make(() => box, (tag) => marks.push(tag), false, schedule, 120)
+  return { restore, box, marks, timers, tick: () => timers.shift()() }
 }
 
 const row = (top) => ({ getBoundingClientRect: () => ({ top }) })
@@ -116,6 +124,35 @@ test('anchor restore: 锚点行已对齐时不写', () => {
   assert.deepEqual(marks, [])
 })
 
+// R1（用户 m00002「还是有页面跳跃」）：120ms×3 的重试链原来无条件把锚点写回去，
+// 读者在这 360ms 内的滚动被逐次覆盖。真机 4 组、每组 3–4 次 rs，间隔恒 116–126ms。
+test('anchor restore: 重试之间读者自己挪走了且离开跟随带时不再拽回', () => {
+  const s = buildRestore([row(10), row(200), row(320)], 0, { chain: true })
+  s.restore(s.box, { index: 1, offset: 50 }, 3) // delta = 150 ⇒ 写到 250
+  assert.equal(s.box.scrollTop, 250)
+  assert.deepEqual(s.marks, ['rs'])
+  s.marks.length = 0
+  // 读者在 120ms 内上滑到 900（sh 2000 − 900 − ch 700 = 400 > 120 ⇒ 确实离开底带）。
+  s.box.scrollTop = 900
+  s.tick()
+  assert.equal(s.box.scrollTop, 900, 'the reader keeps his position')
+  assert.deepEqual(s.marks, ['rx'], 'and the escape is stamped')
+  assert.equal(s.timers.length, 0, 'the chain terminates — no further pull')
+})
+
+test('anchor restore: 重试之间只是被布局钳位（仍在底带内）时照旧校正', () => {
+  const s = buildRestore([row(10), row(200), row(320)], 0, { chain: true })
+  s.restore(s.box, { index: 1, offset: 50 }, 3) // 写到 250
+  s.marks.length = 0
+  // 内容塌陷/视口变高把 scrollTop 钳到 240：距上次写入 <2px 门槛之外但仍在底带内
+  // （2000−240−700=1060 > 120 不成立才走这条——所以用离底 60 的几何）。
+  s.box.scrollHeight = 1000
+  s.box.scrollTop = 240
+  s.tick() // 距上次写入 10px、离底 1000−240−700=60 ≤ 120 ⇒ 继续校正
+  assert.deepEqual(s.marks, ['rs'], 'a clamp is not a reader gesture')
+  assert.equal(s.box.scrollTop, 240 + (200 - 0 - 50), 're-measured against the current layout')
+})
+
 // ─── 3) settleOlderShift ───────────────────────────────────────────────
 //
 // 补页（拉到顶边加载更早的历史）时视口会「跳几下」。根因是旧行带
@@ -134,8 +171,8 @@ const SETTLE = slice(js, 'function settleOlderShift(box,anchor,tries,turn){', '/
 function buildSettle(rowsOrFn, boxTop = 0, opts = {}) {
   const marks = []
   const box = {
-    scrollTop: 100,
     isConnected: true,
+    scrollTop: 100,
     __settleTurn: 0,
     querySelectorAll() { return typeof rowsOrFn === 'function' ? rowsOrFn() : rowsOrFn },
     getBoundingClientRect() { return { top: boxTop } },
