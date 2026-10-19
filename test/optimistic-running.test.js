@@ -29,8 +29,11 @@ const TRUST_MS = Number(/SEND_TRUST_MS=(\d+)/.exec(js)[1]);
 const HORIZON_MS = Number(/TURN_RUNNING_IDLE_MAX_MS=(\d+)/.exec(js)[1]);
 
 function buildSandbox() {
-  const bodies = ['visibleSessions', 'markRowRunning', 'applyRunningMarks', 'projectSessionRows']
+  // projectSessionRows folds a Bot's older parts before it marks anything, so the
+  // fold and its one constant travel with it.
+  const bodies = ['visibleSessions', 'markRowRunning', 'applyRunningMarks', 'projectSessionRows', 'mergeBotParts']
     .map((name) => extractFunction(js, name));
+  bodies.push(/const MERGE_LEGACY_FOLDER=.*/.exec(js)[0]);
   for (const body of bodies) {
     assert.ok(!body.includes('`') && !body.includes('${'), 'page code is spliced into a Function body');
   }
@@ -120,4 +123,83 @@ test('subagent rows are still dropped before any mark is applied', () => {
   box.markRowRunning('child');
   const painted = box.projectSessionRows([{ sessionId: 'child', origin: 'subagent', running: false }]);
   assert.deepEqual(painted, [], 'a subagent session is another session tool, never a list row');
+});
+
+// ---- one Bot, one row (2026-10-20, Chief) ----
+// A long conversation moves to a fresh Session at a context line (ds-bot
+// parts.js). Every part of one Bot carries the same title and the same working
+// directory, so before mergeBotParts the phone showed one Bot as two or three
+// rows with no way to tell they were one conversation.
+function botRow(sessionId, title, folder, updatedAt, origin) {
+  return {
+    sessionId,
+    updatedAt,
+    ...(origin ? { origin } : {}),
+    projections: { values: { title, workingDirectory: folder } },
+  };
+}
+
+test('three parts of one Bot in one folder fold to the newest row only', () => {
+  const box = buildSandbox();
+  const painted = box.projectSessionRows([
+    botRow('p1', 'Chief', 'F:\\DSBOT', 100),
+    botRow('p2', 'Chief', 'F:\\DSBOT', 200),
+    botRow('p3', 'Chief', 'F:\\DSBOT', 300),
+  ]);
+  assert.deepEqual(painted.map((r) => r.sessionId), ['p3']);
+});
+
+test('a part in the pre-move default folder folds into the new workspace part', () => {
+  const box = buildSandbox();
+  const painted = box.projectSessionRows([
+    botRow('old', 'Chief', 'C:\\Users\\toast\\.dsh\\bot\\workspace', 100),
+    botRow('new', 'Chief', 'F:\\DSBOT', 300),
+  ]);
+  assert.deepEqual(painted.map((r) => r.sessionId), ['new']);
+});
+
+test('two Bots in one folder stay two rows', () => {
+  const box = buildSandbox();
+  const painted = box.projectSessionRows([
+    botRow('chief', 'Chief', 'F:\\DSBOT', 300),
+    botRow('verifier', 'Verifier', 'F:\\DSBOT', 100),
+  ]);
+  assert.deepEqual(painted.map((r) => r.sessionId), ['chief', 'verifier']);
+});
+
+test('same title in unrelated folders stays two rows', () => {
+  const box = buildSandbox();
+  const painted = box.projectSessionRows([
+    botRow('a', 'X', 'F:\\one', 100),
+    botRow('b', 'X', 'F:\\two', 300),
+  ]);
+  assert.deepEqual(painted.map((r) => r.sessionId), ['a', 'b']);
+});
+
+test('a newer part at an ancestor folder folds the older deeper part', () => {
+  const box = buildSandbox();
+  const painted = box.projectSessionRows([
+    botRow('deep', 'Chief', 'F:\\DSBOT', 100),
+    botRow('shallow', 'Chief', 'F:\\', 300),
+  ]);
+  assert.deepEqual(painted.map((r) => r.sessionId), ['shallow']);
+});
+
+test('a subagent row between two parts does not stop the fold', () => {
+  const box = buildSandbox();
+  const painted = box.projectSessionRows([
+    botRow('p1', 'Chief', 'F:\\DSBOT', 100),
+    botRow('s1', 'child', 'F:\\DSBOT', 200, 'subagent'),
+    botRow('p2', 'Chief', 'F:\\DSBOT', 300),
+  ]);
+  assert.deepEqual(painted.map((r) => r.sessionId), ['p2']);
+});
+
+test('rows without a title are never folded', () => {
+  const box = buildSandbox();
+  const painted = box.projectSessionRows([
+    { sessionId: 'd1', updatedAt: 100, projections: { values: { workingDirectory: 'F:\\DSBOT' } } },
+    { sessionId: 'd2', updatedAt: 300, projections: { values: { workingDirectory: 'F:\\DSBOT' } } },
+  ]);
+  assert.deepEqual(painted.map((r) => r.sessionId), ['d1', 'd2']);
 });

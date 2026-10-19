@@ -1008,9 +1008,17 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   实测 zh 365 325（css 55 056 + js 310 269）/ en 365 243，
 //   相对上一条基线净 +1 210 B。取 367 000（余量 ~1.6 KB）。
 // 2026-10-20 工作区头三处显示裁定（置顶不拖回时钟 + 提问已读即静 + 头只有进行中/全完成两态）：
-//   净增 +2 857 B（本笔单独测得 zh 367 944＝css 55 217 + js 312 727 / en 367 862，基线 HEAD a5dd642 为 zh 365 087 / en 365 005）。
-//   取 371 000（余量 ~3.1 KB）。
-const ASSET_BUDGET_BYTES = 371_000
+//   实测 zh 369 611（css 55 217 + js 314 394）/ en 369 529（css 55 217 + js 314 312）。
+//   净增长含同树在途的 promptShape 图片/文件计数指纹（另线未提交，合计已超 367 000）。
+//   取 371 000（余量 ~1.4 KB）。
+// 2026-10-20 手机页一 Bot 一行（Chief 会话分段在手机显示多条）：
+//   renderWorkspaces 前的 raw list pass `mergeBotParts()`——同一 Bot 的多个 part
+//   （ctx 满后宿主自动新开一段，ds-bot parts.js；共标题共工作目录）折成一行，
+//   只留最新 part，避免一个 Bot 显示两三行。手机页无 part 概念（pages.js 的
+//   session.history 一律按单 sessionId 取），折叠键只能是「标题 + 工作目录」。
+//   实测 zh 372 942（css 55 217 + js 317 725）/ en 372 850，相对上一条基线
+//   净 +3 331 B。取 376 000（余量 ~3 KB）。
+const ASSET_BUDGET_BYTES = 376_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {
