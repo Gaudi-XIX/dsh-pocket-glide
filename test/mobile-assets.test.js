@@ -580,9 +580,13 @@ test('AC-UI7 the QR is one image, zh-* is Chinese, and an unknown locale is not'
 
 test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
   const js = assets.js
-  assert.ok(js.includes('bits.join(L.draftJoin)'), 'the draft summary joins with a locale token')
-  assert.ok(!js.includes("bits.join('，')"), 'not with a full-width comma an English reader cannot see')
-  assert.ok(js.includes('"draftJoin":'), 'and the token is in the label table')
+  // 2026-10-19: the summary is no longer a joined string at all. The optimistic
+  // bubble carries the chip list and renderBlock paints one span per chip, so
+  // there is no separator left for a locale to get wrong ("1 文件" used to be a
+  // second plain text block, which read as message body, not as an attachment).
+  assert.ok(js.includes("kind==='attachment-summary'"), 'the chip row is its own block kind')
+  assert.ok(js.includes(".filter(Boolean).map((bit)=>'<span class=\"draft-chip\">'"), 'one chip span per entry, no join')
+  assert.ok(!js.includes("join('，')") && !js.includes('join("，")'), 'nothing joins on a full-width comma an English reader cannot see')
   // The permission row used to render the upload copy while it waited, so the
   // sheet said "uploading" about something it was only loading.
   assert.ok(
@@ -990,7 +994,17 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   + 桌面刷新按钮强制重建隧道（手机页侧 switchMode 加 force 形参）。
 //   实测 zh 357 070（css 53 504 + js 303 566）/ en 356 987，相对上一条基线（zh 354 860 / en 354 777）
 //   净 +2 210 B（css -17 / js +2 227）。取 358 000（余量 ~930 B）。
-const ASSET_BUDGET_BYTES = 358_000
+// 2026-10-19 上传反馈与附件胶囊（用户 m00002 三问：上传没进度像卡死 / 发出后多一条
+//   「1 文件」纯文本 / 慢）：
+//   draft 卡上传态改整卡进度（.draft-card.is-uploading 转圈、--p 比例填充、百分比与
+//   「已传/总量」两行、ready 右上绿勾 .draft-done），uploadGenericFile/retryDraft 改走
+//   新增 rpcUpload（XHR 才有 upload.onprogress）并加 45 s 静默看门狗；乐观气泡的计数串
+//   从第二段 text 改成 attachment-summary 块按 chips 数组逐个 span 渲染（.draft-chip），
+//   draftSummary 由「join 成串」改为「返回数组」，删掉不再使用的 draftJoin 标签。
+//   实测 zh 363 564（css 55 010 + js 308 554）/ en 363 482（css 55 010 + js 308 472），
+//   相对上一条基线（zh 357 070 / en 356 987）净 +6 494 B（css +1 506 / js +4 988）。
+//   取 365 000（余量 ~1 436 B）。
+const ASSET_BUDGET_BYTES = 365_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

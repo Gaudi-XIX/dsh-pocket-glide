@@ -4,6 +4,17 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.4.53 — 2026-10-19
+
+**上传有转圈与进度、附件占位改胶囊、桥侧开始记上传耗时**（⏳ 待重启生效：`lib/pages.js` 与 `lib/bridge.js` 都属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-19 真机上传 1.17 MB PDF 后三问：①「上传中我觉得要有一个圆圈或者什么上传进度，不能这种硬卡在这儿。我不知道你是卡死了，还是确实正在上传」②「发出去以后……会有'图片 1'、'文件 1'之类的占位，为什么会有这个东西发出去？」③「这个上传进度很慢啊，是 Cloudflare 的原因还是别的什么」）。
+
+- **① 上传中不再是一张静止的卡**：draft 卡在 `uploading` 态由「半透明遮罩＋静止文字『上传中…』」改为转圈（`.draft-ring`）＋百分比＋`已传 / 总量` 两行，底部蓝条按 `--p` 填充；`ready` 后右上角补一枚绿勾（`.draft-done`），不再需要靠卡片「不变」来推断成功。百分比的真实来源是 `xhr.upload.onprogress`——`fetch()` 没有上传进度事件，故新增 `rpcUpload()` 走 XHR，**只有 `file.upload` 走它，其余调用仍走原 `rpc()`**。进度用**原地补丁**写进已在屏的那张卡而不是重建 `draftStrip`：每 tick 重建 DOM 会让转圈动画归零、卡片每秒被丢弃数十次，那正是这个功能要消灭的抖动。
+- **① 慢 ≠ 卡死：45 秒静默看门狗**：`rpcUpload` 内 5 s 一次巡检，`Date.now()-lastByteAt >= 45 000` 才 abort。判据是**静默时长而非总时长**——一个 20 MB 文件在弱网慢慢爬仍在走，掐掉它恰好制造了用户分不清的那次「卡死」。硬超时 `RPC_SLOW_TIMEOUT_MS*4`（12 min）只兜病理情况。上传体发完后等回执那段不再有任何进度事件，`xhr.upload.onload` 重置静默时钟，让回执独享一个完整窗口。
+- **② 「1 文件」占位不是发出去的**：它是乐观行把计数串当**第二段纯文本**渲染出来的（发送内容 `content` 里从来没有它，宿主侧也没有）。现在 `draftSummary()` 返回数组而非 join 好的串，乐观行带 `attachment-summary` 块，`renderBlock` 把每一条渲染成胶囊（`.draft-chip`），与已落定消息里的附件样式一致。顺带删掉已无人使用的 `draftJoin` 标签，消掉一处「英文用户看到全角逗号」的本地化泄漏。
+- **③ 慢在哪一段，桥侧开始记账**：`/api/rpc` 对成功的 `file.upload` 落一条 `rpc upload ok trace=… device=… bytes=… arrival=…ms host=…ms`——`arrival` 是手机字节穿过隧道进桥，`host` 是桥交宿主并拿回执。在此之前，成功上传**在日志上是完全静默的**（只有失败才有行），所以「是 Cloudflare 还是别的」无法从盘上取证。
+- **计量账**：`ASSET_BUDGET_BYTES` 358_000 → **365_000**。实测壳字节 zh 363 564（css 55 010 + js 308 554）/ en 363 482（css 55 010 + js 308 472），相对上一条基线（zh 357 070 / en 356 987）净 +6 494 B（css +1 506 / js +4 988），余量约 1 436 B。
+- **回归锁**：`test/mobile-assets.test.js` AC-UI8 守卫按新形态重写（拦「英文用户看到中文标点」的用意不变，改为断言 `attachment-summary` 分支、chips 逐个成 span、且源码里没有 `join('，')`）。全量 **1314 tests / 1312 pass / 0 fail / 2 skipped**。
+
 ## 0.4.52 — 2026-10-19
 
 **刷新按钮在「手机已连上」时不再静默失效**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面。2026-10-19 重启后实测发现 0.4.51 的强制重建仍被一层页面门拦住：`switchMode` 首句 `if(phoneConnected||modeSwitching)return`——手机在线时点「刷新」静默无操作，桥侧 `force` 日志（`tunnel rebuilt on desktop refresh`）命中为 0，即原始报障「点刷新链接二维码都不刷新」在连接态下的完整成因。桥侧 force 重建本就允许把在线手机 park 掉而非拒绝（同隧道意外死亡处置），页面这一层与服务端口径不符，按「服务端已允许的，页面不得自行再加一层」删去）。
