@@ -9,11 +9,11 @@ work on — not a hosted service, not a team gateway, not a mirror of the deskto
 
 | | |
 |---|---|
-| Package | `dsh-pocket` |
+| Package | `@gaudi-xix/dsh-pocket` |
 | Current version | 0.4.0 ([Changelog](CHANGELOG.md)) |
 | Host requirement | DeepSeek Harness desktop `>= 0.2.0-rc.1` (preview line) |
 | Runtime | Node `^22.19.0 \|\| >=24.0.0` — the plugin runs in the host's own process |
-| Licence | Apache-2.0 ([LICENSE](LICENSE)) |
+| Licence | MIT ([LICENSE](LICENSE)) |
 | UI languages | English and Simplified Chinese |
 
 The Chinese master is in [README.md](README.md).
@@ -508,6 +508,6 @@ deliberately literal, and each one carries a comment naming the sentence it prot
   repository, so run them from a git clone (`npm install && npm test`) — that is also what
   CI does. `tools/` *is* published, because the tunnel pre-seed and profile-install helpers
   are meant to be run by whoever installed the package.
-- Licence is Apache-2.0; the full text is in [LICENSE](LICENSE).
+- Licence is MIT; the full text is in [LICENSE](LICENSE).
 - Release history is in [CHANGELOG.md](CHANGELOG.md): it exists, and its newest section
   tracks `package.json version`. Being updated on every commit is not promised.

@@ -2,10 +2,10 @@
 
 ## Current posture
 
-This repository is **private** while the plugin is stabilising. The claims below describe the
-private stage: what we can promise changes if and when the repository goes public.
+This repository is **public**, but the plugin is still stabilising, and no package is published to
+a registry: it is installed from this repository. The claims below describe the current stage.
 
-Apache-2.0 applies to the code as licensed. There is currently no published package, no
+MIT applies to the code as licensed. There is currently no published package, no
 third-party hosting of this bridge, and no formal disclosure programme.
 
 ## What this software does to your security posture
@@ -33,8 +33,9 @@ Read this section before you deploy it anywhere, including at home.
 
 ## Reporting a vulnerability
 
-Open a private issue, or contact the repository owner directly if the private issue tracker is not
-available to you. Include:
+Open a private security advisory on this repository (Security → Advisories → Report a
+vulnerability), or contact the repository owner directly if that channel is not available to you.
+Include:
 
 1. What an attacker gains, and what they must already hold to gain it (LAN access, a pair, a URL).
 2. The version (`package.json` `version`) and the host version.
@@ -45,9 +46,9 @@ your tunnel URL. Redact them; do not paste the file contents. We may ask for the
 (`<DSH data root>/pocket/logs/pocket.log`) — the logger is written never to record a password or a
 key, but check before attaching.
 
-**Acknowledgement:** we aim to reply within 7 days at the private stage.
-**Fix disclosure:** if a fix ships, it will be described in `CHANGELOG.md` under that version. There
-is no embargo commitment while the repository is private.
+**Acknowledgement:** we aim to reply within 7 days.
+**Fix disclosure:** if a fix ships, it will be described in `CHANGELOG.md` under that version. The
+report stays private until the fix ships; there is no separate embargo commitment.
 
 ## Hardening checklist for an installation
 

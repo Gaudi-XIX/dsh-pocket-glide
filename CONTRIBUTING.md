@@ -98,4 +98,4 @@ Do not open a public issue. See [SECURITY.md](SECURITY.md).
 ## Licence
 
 By contributing you confirm the contribution is yours to offer and that it is licensed under the
-Apache License 2.0, the same licence as the rest of this repository.
+MIT licence, the same licence as the rest of this repository.

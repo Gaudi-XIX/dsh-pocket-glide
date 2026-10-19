@@ -20,4 +20,4 @@
 
 - insert:
     - id: pocket
-      name: 'dsh-pocket'
+      name: '@gaudi-xix/dsh-pocket'

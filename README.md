@@ -1,4 +1,4 @@
-# Pocket DSH (`dsh-pocket`)
+# Pocket DSH (`@gaudi-xix/dsh-pocket`)
 
 > *"Curiouser and curiouser!"*
 
@@ -68,7 +68,7 @@ Pocket 的选择是做明确的减法：桌面端负责完整的代码生产与�
 ## 快速使用
 
 ### 1. 安装与启用
-在 DSH 桌面端将 `dsh-pocket` 添加至配置文件（或通过插件市场安装并启用）。
+在 DSH 桌面端将 `@gaudi-xix/dsh-pocket` 添加至配置文件（或通过插件市场安装并启用）。
 
 ### 2. 扫码配对
 1. 点击 DSH 桌面端侧边栏的 **Pocket** 图标打开配对面板；
@@ -98,4 +98,4 @@ Pocket 的选择是做明确的减法：桌面端负责完整的代码生产与�
 
 ## 开源协议
 
-本项目采用 [Apache-2.0](LICENSE) 协议开源。
+本项目采用 [MIT](LICENSE) 协议开源。
