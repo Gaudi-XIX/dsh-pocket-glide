@@ -10,8 +10,8 @@
 // fix landing. Geometry layer (the part a string can never prove) lives in
 // test/dom/pages-geometry.mjs — gated, real browser, 390x844.
 import { test } from 'node:test'
-import { execFileSync } from 'node:child_process'
 import assert from 'node:assert/strict'
+import { preFixBaseline } from './helpers/pre-fix-baseline.mjs'
 import {
   mobilePageAssets,
   renderMobileReconnectPage,
@@ -756,8 +756,15 @@ test('BUG4 a typed draft takes the stop button\'s place instead of sitting besid
 // 基线钉在不可变的前置提交上，而不是 HEAD：本批六 bug 修复＝8de3463，其父 f8e1669
 // 是「修复落地之前那一次提交」。红先证据必须钉在这一个 sha 上——钉 HEAD 会随
 // 每次提交腐烂（修复一落进 HEAD 断言就自相矛盾），钉 HEAD~1 会随新提交漂移。
-test('RED (against f8e1669) the BUG3/BUG4 guards are absent on the committed page source', () => {
-  const preFix = execFileSync('git', ['show', 'f8e1669:lib/pages.js'], { cwd: 'F:/defws/dsh-pocket', maxBuffer: 1e8 }).toString()
+// The pinned commit lives only in the development repository: the published tree was
+// squashed into a fresh root, so this baseline cannot be read there. "Unreadable" is
+// not the same as "holds", so the test skips with its reason instead of passing.
+test('RED (against f8e1669) the BUG3/BUG4 guards are absent on the committed page source', (t) => {
+  const preFix = preFixBaseline('f8e1669', 'lib/pages.js')
+  if (preFix === null) {
+    t.skip('f8e1669 is not in this history (the published tree was squashed into a fresh root)')
+    return
+  }
   assert.ok(preFix.includes('cancel.hidden=!agentRunning;'), 'the pre-fix baseline lets the stop button sit beside a typed draft')
   assert.ok(!preFix.includes('queued:agentRunning'), 'the pre-fix baseline cannot tell a queued send from a plain one')
   assert.ok(!preFix.includes('if(item.queued)continue'), 'the pre-fix baseline splices every echo into the transcript')
