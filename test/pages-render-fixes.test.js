@@ -748,15 +748,19 @@ test('BUG4 a typed draft takes the stop button\'s place instead of sitting besid
     'the send button still only shows when it actually has something to send')
 })
 
-// Red-first: these three assertions must hold on the HEAD page source, where the
-// queued echo and the always-on stop button are exactly what the user reported.
-// This keeps the two tests below honest — if the guard strings ever disappear from
-// the working tree again, this fails before they can silently pass.
-test('RED the BUG3/BUG4 guards are absent on the committed page source', () => {
-  const head = execFileSync('git', ['show', 'HEAD:lib/pages.js'], { cwd: 'F:/defws/dsh-pocket', maxBuffer: 1e8 }).toString()
-  assert.ok(head.includes('cancel.hidden=!agentRunning;'), 'HEAD lets the stop button sit beside a typed draft')
-  assert.ok(!head.includes('queued:agentRunning'), 'HEAD cannot tell a queued send from a plain one')
-  assert.ok(!head.includes('if(item.queued)continue'), 'HEAD splices every echo into the transcript')
+// Red-first: these three assertions must hold on the pre-fix baseline page source,
+// where the queued echo and the always-on stop button are exactly what the user
+// reported. This keeps the two tests below honest — if the guard strings ever
+// disappear again, this fails before they can silently pass.
+//
+// 基线钉在不可变的前置提交上，而不是 HEAD：本批六 bug 修复＝8de3463，其父 f8e1669
+// 是「修复落地之前那一次提交」。红先证据必须钉在这一个 sha 上——钉 HEAD 会随
+// 每次提交腐烂（修复一落进 HEAD 断言就自相矛盾），钉 HEAD~1 会随新提交漂移。
+test('RED (against f8e1669) the BUG3/BUG4 guards are absent on the committed page source', () => {
+  const preFix = execFileSync('git', ['show', 'f8e1669:lib/pages.js'], { cwd: 'F:/defws/dsh-pocket', maxBuffer: 1e8 }).toString()
+  assert.ok(preFix.includes('cancel.hidden=!agentRunning;'), 'the pre-fix baseline lets the stop button sit beside a typed draft')
+  assert.ok(!preFix.includes('queued:agentRunning'), 'the pre-fix baseline cannot tell a queued send from a plain one')
+  assert.ok(!preFix.includes('if(item.queued)continue'), 'the pre-fix baseline splices every echo into the transcript')
 })
 
 // The two tests above pin the source words; these run the REAL functions out of

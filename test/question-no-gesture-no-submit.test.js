@@ -339,10 +339,14 @@ test('P-14 the toggle sits in the header, so the skip/submit cluster is untouche
     'closing the question resets the collapsed state for the next card')
 })
 
-test('RED the collapse affordance does not exist on the committed page source', () => {
-  // 红先：这条在 HEAD 上必须失败，否则它证明不了本次修的是它（house pattern，同
-  // test/pages-render-fixes.test.js 的 RED 用例）。
-  const head = execFileSync('git', ['show', 'HEAD:lib/pages.js'], { cwd: 'F:/defws/dsh-pocket', maxBuffer: 1e8 }).toString()
-  assert.equal(head.includes('data-question-action="collapse"'), false, 'HEAD has no collapse control')
-  assert.equal(head.includes('questionCollapsed'), false, 'HEAD has no collapsed state')
+test('RED (against f8e1669) the collapse affordance does not exist on the committed page source', () => {
+  // 红先：这条在修复前的页源上必须失败，否则它证明不了本次修的是它（house pattern，
+  // 同 test/pages-render-fixes.test.js 的 RED 用例）。
+  //
+  // 基线钉在不可变的前置提交上，而不是 HEAD：本批六 bug 修复＝8de3463，其父 f8e1669
+  // 是「修复落地之前那一次提交」。红先证据必须钉在这一个 sha 上——钉 HEAD 会随
+  // 每次提交腐烂（修复一落进 HEAD 断言就自相矛盾），钉 HEAD~1 会随新提交漂移。
+  const preFix = execFileSync('git', ['show', 'f8e1669:lib/pages.js'], { cwd: 'F:/defws/dsh-pocket', maxBuffer: 1e8 }).toString()
+  assert.equal(preFix.includes('data-question-action="collapse"'), false, 'the pre-fix baseline has no collapse control')
+  assert.equal(preFix.includes('questionCollapsed'), false, 'the pre-fix baseline has no collapsed state')
 })
