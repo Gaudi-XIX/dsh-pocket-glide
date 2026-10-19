@@ -51,7 +51,7 @@ function fakeBar() {
 
 // One sandbox carrying every page global the bar organs read. Anything missing
 // throws inside renderSubagentBar and measures the test, not the page.
-function buildBarSandbox({ catalog = null, rows = new Map(), view = null, active = 'parent1', expanded = false } = {}) {
+function buildBarSandbox({ catalog = null, rows = new Map(), view = null, active = 'parent1', expanded = false, summaries = [] } = {}) {
   const bar = fakeBar()
   const timers = []
   const make = new Function(
@@ -60,6 +60,7 @@ function buildBarSandbox({ catalog = null, rows = new Map(), view = null, active
     'initialCatalog',
     'initialRows',
     'initialView',
+    'initialSummaries',
     'setInterval',
     'clearInterval',
     `
@@ -69,19 +70,21 @@ function buildBarSandbox({ catalog = null, rows = new Map(), view = null, active
     let subagentExpanded=${JSON.stringify(expanded)}
     let subagentTicker=null
     const subagentRowsByParent=initialRows
+    const sessionSummaries=initialSummaries
     const $=(id)=>id==='subagentBar'?bar:null
     const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
     ${extractFunction(js, 'pad2')}
     ${extractFunction(js, 'formatMessageClock')}
     ${extractFunction(js, 'updateSubagents')}
     ${extractFunction(js, 'subagentRowOf')}
+    ${extractFunction(js, 'parentRowOfActive')}
     ${extractFunction(js, 'subagentStateOf')}
     ${extractFunction(js, 'subagentDurationText')}
     ${extractFunction(js, 'stopSubagentTicker')}
     ${extractFunction(js, 'startSubagentTicker')}
     ${extractFunction(js, 'renderSubagentBar')}
     return {
-      renderSubagentBar, updateSubagents, subagentStateOf, subagentDurationText,
+      renderSubagentBar, updateSubagents, subagentStateOf, subagentDurationText, parentRowOfActive,
       get catalog(){return subagentCatalog},
       get expanded(){return subagentExpanded},
       set expanded(v){subagentExpanded=v},
@@ -93,7 +96,7 @@ function buildBarSandbox({ catalog = null, rows = new Map(), view = null, active
   // A real setInterval would keep node's event loop (and this test process) alive
   // for the full 30s tick; record the handle instead so the ticker's presence is
   // still assertable without ever arming it.
-  const sandbox = make(bar, L, catalog, rows, view, (fn, ms) => { timers.push(ms); return 7 }, (handle) => { if (handle === 7) timers.length = 0 })
+  const sandbox = make(bar, L, catalog, rows, view, summaries, (fn, ms) => { timers.push(ms); return 7 }, (handle) => { if (handle === 7) timers.length = 0 })
   sandbox.timers = timers
   return sandbox
 }
@@ -135,6 +138,25 @@ test('subagentStateOf ranks error over running, and idle is the fallback', () =>
   assert.equal(sandbox.subagentStateOf({ id: 'ghost' }), 'idle', 'a catalog entry with no list row (cold list) is idle, not an invention')
 })
 
+test('subagentStateOf reports unknown when the parent flag promises a runner the row window lost', () => {
+  // The bridge marks the PARENT row descendantRunning from the full list before it
+  // slices to the boot window, so the phone can know a descendant runs while the
+  // child row itself never arrived. That must read as 'unknown', not a false 'idle'.
+  const sandbox = buildBarSandbox({
+    rows: new Map([['parent1', [ROW('c1')]]]),
+    summaries: [{ sessionId: 'other', descendantRunning: true }, { sessionId: 'parent1', descendantRunning: true }],
+  })
+  assert.equal(sandbox.subagentStateOf({ id: 'ghost' }), 'unknown', 'no row + parent flag ⇒ unknown')
+  assert.equal(sandbox.subagentStateOf({ id: 'c1' }), 'idle', 'a row that DID arrive keeps its own truth')
+  const noFlag = buildBarSandbox({
+    rows: new Map([['parent1', [ROW('c1')]]]),
+    summaries: [{ sessionId: 'parent1', running: false }],
+  })
+  assert.equal(noFlag.subagentStateOf({ id: 'ghost' }), 'idle', 'no parent flag stays idle — unknown is earned, not default')
+  const noSummaries = buildBarSandbox({ rows: new Map() })
+  assert.equal(noSummaries.parentRowOfActive(), null, 'parentRowOfActive is null when the summary window has no such row')
+})
+
 // ------------------------------------------------------------------ duration
 
 test('subagentDurationText speaks minutes and hours, never raw ms', () => {
@@ -158,7 +180,7 @@ test('renderSubagentBar hides itself with no catalog, in a subagent view, or wit
 
 test('renderSubagentBar paints one row per catalog entry with running count and labels', () => {
   const now = Date.now()
-  const catalog = [CHILD('c1', { createdAt: now - 5 * 60000 }), CHILD('c2', { label: 'second child' }), CHILD('c3', { createdAt: now - 90 * 60000 })]
+  const catalog = [CHILD('c1', { createdAt: now - 5 * 60000 }), CHILD('c2', { label: 'second child', createdAt: now }), CHILD('c3', { createdAt: now - 90 * 60000 })]
   const rows = new Map([['parent1', [ROW('c1', { running: true }), ROW('c3', { lastError: 'died' })]]])
   const sandbox = buildBarSandbox({ catalog, rows })
   sandbox.renderSubagentBar()
@@ -172,7 +194,7 @@ test('renderSubagentBar paints one row per catalog entry with running count and 
   assert.ok(html.includes('data-subagent-elapsed'), 'the running row carries its createdAt for the ticker')
   assert.ok(html.includes('5 分钟'), 'the running row shows elapsed time from createdAt')
   const idleClock = (html.match(/data-subagent-open="c2"[\s\S]*?<time>([^<]*)<\/time>/) || [])[1]
-  assert.match(String(idleClock), /^\d{2}:\d{2}$/, 'an idle row shows the absolute 24h wall clock of its createdAt — never "x ago" (2026-10-13 unification)')
+  assert.match(String(idleClock), /^(?:\d+月\d+日\s+)?\d{2}:\d{2}$/, 'an idle row shows the absolute 24h wall clock of its createdAt — never "x ago" (2026-10-13 unification)')
 })
 
 test('the capsule header carries a state dot and keeps its label collapsed until expanded', () => {
@@ -184,6 +206,37 @@ test('the capsule header carries a state dot and keeps its label collapsed until
   assert.ok(html.includes('class="subagent-pulse"'), 'the collapsed capsule still says a subagent is there')
   assert.ok(html.includes('subagent-head has-running'), 'a running child turns the dot brand-coloured')
   assert.ok(html.includes('aria-expanded="false"'), 'collapsed by default: the capsule stays a dot, not a row')
+})
+
+test('the head dot goes blue on the parent flag alone — the false-done the user reported', () => {
+  // m00002/m00053①: the lead turn ended while a subagent kept running, so the row
+  // itself says running:false. The bridge's descendantRunning flag is the only proof
+  // left on the phone, and it must still light the capsule (no green check).
+  const catalog = [CHILD('c1'), CHILD('c2')]
+  const sandbox = buildBarSandbox({
+    catalog,
+    rows: new Map([['parent1', [ROW('c1'), ROW('c2')]]]),
+    summaries: [{ sessionId: 'parent1', running: false, descendantRunning: true }],
+  })
+  sandbox.renderSubagentBar()
+  const html = sandbox.bar.innerHTML
+  assert.ok(html.includes('subagent-head has-running'), 'parent flag lights the head dot even with zero running rows')
+  assert.ok(!html.includes(L.subagentRunningCount.replace('{n}', '0')), 'no bogus "0 running" badge')
+})
+
+test('unknown children rank inside the busy band and count as unconfirmed', () => {
+  const catalog = [CHILD('ghost', { createdAt: 5 }), CHILD('calm', { createdAt: 6 })]
+  const sandbox = buildBarSandbox({
+    catalog,
+    rows: new Map([['parent1', [ROW('calm')]]]),
+    summaries: [{ sessionId: 'parent1', descendantRunning: true }],
+  })
+  sandbox.renderSubagentBar()
+  const html = sandbox.bar.innerHTML
+  const order = [...html.matchAll(/data-subagent-open="([^"]+)"/g)].map((m) => m[1])
+  assert.deepEqual(order, ['ghost', 'calm'], 'unknown sorts above idle')
+  assert.ok(html.includes('is-unknown'), 'the row keeps its own class')
+  assert.ok(html.includes(L.subagentUnknownCount.replace('{n}', '1')), 'the head says how many are unconfirmed')
 })
 
 test('the popover ranks the busiest children first — running band, then error band, then idle', () => {
@@ -325,6 +378,9 @@ test('openSession normalizes the subagent opt and the page hides the write surfa
   // transcript, and the two spacer rules that existed only to work around the row
   // it used to take are gone with the row.
   assert.ok(css.includes('.subagent-bar{position:fixed'), 'the capsule floats instead of owning a row')
+  assert.ok(css.includes('grid-template-columns:minmax(0,1fr)'), 'subagent-rows locks track width so long titles do not blow out the row')
+  assert.ok(css.includes('.subagent-row{display:flex;align-items:center;gap:8px;width:100%;min-width:0;max-width:100%'), 'subagent-row clamps width to container')
+  assert.ok(css.includes('.subagent-row time{flex:none;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;text-align:right}'), 'subagent-row time stays pinned to right and never cut off')
   assert.ok(!css.includes('.goal-bar[hidden]+.subagent-bar'), 'the goal-bar spacer for the old row is retired')
   assert.ok(!css.includes('body.subagent-open .subagent-note{margin-top:44px}'), 'the note spacer for the old row is retired')
   assert.ok(js.includes('subagentNote.textContent=subagentView?L.subagentReadonly'), 'the read-only note names the mode')
@@ -371,3 +427,23 @@ test('both realtime routes forward the parent/mode query pair, and session.histo
   assert.ok(bridge.includes('createSessionEventCollector(this, sessionId, subagent)'), 'the tunnel collector gets the address too')
   assert.ok(bridge.includes('return streamSessionStream(this, request, response, sessionId, sinceSeq, subagent)'), 'the SSE forwarder gets the address too')
 })
+
+// --------------------------------------------------- subagent cancel button
+
+test('subagent view cancel button markup, styles, and lifecycle', () => {
+  const { document, css, js } = mobilePageAssets({ locale: 'zh' })
+  assert.ok(document.includes('id="subagentCancel"'), 'subagentCancel button is present in chatView HTML')
+  assert.ok(document.includes('class="primary cancel subagent-stop"'), 'subagentCancel has primary cancel subagent-stop classes')
+  assert.ok(document.includes('aria-label="停止子代理任务"'), 'subagentCancel has accessible label in zh')
+
+  const enAssets = mobilePageAssets({ locale: 'en' })
+  assert.ok(enAssets.document.includes('aria-label="Stop subagent task"'), 'subagentCancel has accessible label in en')
+
+  assert.ok(css.includes('.subagent-stop'), 'CSS includes .subagent-stop positioning and style')
+  assert.ok(css.includes('body.subagent-open .messages{padding-bottom:calc(72px + env(safe-area-inset-bottom))}'), 'CSS gives message list clearance when subagent-open')
+
+  assert.ok(js.includes("const subStop=$('subagentCancel')"), 'syncPromptUi resolves subagentCancel')
+  assert.ok(js.includes('const visible=!!subagentView&&agentRunning;subStop.hidden=!visible'), 'subagentCancel is shown only when in subagentView and agentRunning')
+  assert.ok(js.includes("$('subagentCancel').onclick=$('cancel').onclick"), 'subagentCancel is wired to cancel handler')
+})
+

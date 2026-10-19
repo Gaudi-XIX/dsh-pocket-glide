@@ -173,6 +173,40 @@ provisioning 与 running 成员用共享 ongoing loading，failed 红点），�
 - 遗留（候选延期，见 flow 卡）：ZCode 式子代理目录面板（§5-3 可选项）、`bodyPreview`/`toolSlice` 取回式大消息、
   ACP 舰队台账（§5-6）；`detailed` 档在 pocket 与 standard 等价（死档）维持现状。
 
+### 7.6. 真机首例已落，两处口径更正（2026-10-18 追记）
+
+上面 §7.5 的「渲染层首例待落」在 2026-10-18 由用户真机走查撞开（用户 m00002：「在正在进行对话当中，主代理的会话结束了，子代理还在运行呢。然后这个会话在这个页面上显示就是『已完成』，这个是不对的呀」）。
+`pocket.log` 同刻留痕：`notify dropped: 子代理运行期间会话状态误显示完成 已完成`（2026-10-18T09:39:49Z）——**通知侧与页面侧共用同一判据，所以一起错**。三条口径更正：
+
+1. **单层聚合 → 多层**。§7.5 写的「单层，对齐桌面 sidebar」对错了参照物：宿主自己的判据是多层 BFS
+   （`dsh-subagent/lib/index.js:2535-2557 runningDescendants()`，按 `parentSession` 建 `childrenOf` 从 root 走、`visited` 防环）。
+   `lib/projections.js` 的 `applyDescendantRunning` 已改成同款多层（命中任一 running 后代即标祖级行）。
+   本机会话面实测：590 个 header 中 `delegationDepth` 只有 0/1 两档、subagentOfSubagent=0 ⇒ 多层在**本机数据上暂无样本**，
+   改它是为了与宿主语义一致，不是为了解释这次报错——**这次误判的真因见第 2 条**。
+2. **真因是「行窗口里没有子行」与「拿不到子行谎报 idle」**，不是聚合层数。两条独立缺口：
+   - 页面 boot 只取 `SESSION_LIST_PREFETCH=30` 行（`lib/pages.js:320`），桥按 `updatedAt` 倒序切片 ⇒ 历史子会话行被切掉；
+     父行的 `descendantRunning` 标记**不受切片影响**（桥在切片**之前**打标，`lib/bridge.js:6209-6231` 顺序实证），
+     受影响的是胶囊弹层里逐条子代理的状态。
+   - `subagentStateOf(entry)` 旧实现拿不到子行一律返回 `'idle'`（灰点），这正是用户看到的「子代理在跑却不显示正在运行」。
+     现在新增第三种状态 `'unknown'`（父行有 `descendantRunning` 但子行不在窗口 ⇒ 半透明蓝点），
+     且**胶囊头只要父行标志在就挂 `has-running`（蓝点）**——这条是用户 m00053 ① 的直接修法。
+   - 另外补两次刷新：进聊天时 `refreshSubagentRowsIfNeeded()`（同一会话最多补拉一次全量 `session.list`，
+     只在「有 catalog 但父会话无子行」时触发）；`applyBootData` 落地后若在聊天页重画胶囊。
+3. **外部/ACP 工人子代理 = 宿主面缺口，手机侧修不了**（别再往这条上打补丁）：
+   `establishExternalCatalogChild()`（`dsh-subagent/lib/index.js:827`）只写 catalog、**不建子 session 行**；
+   宿主自己判活跃是 `activity: sessions.get(entry.id) === void 0 ? "inactive" : "running"`（`:2421`），
+   且 `entry.mode === "external"` 时 `children = []` 不递归（`:2394`），`assertChildIdAvailable`（`:1597`）
+   要求 external 的 `childId` 不得已存在于 agents/sessions ⇒ **桌面端自己的子代理树也把外部工人报成 inactive**。
+   catalog 视图行只有 `{id, createdAt, mode, label}`、**只 append 永不移除**，本机实测某父 91 条 catalog 的 `childId`
+   **91/91 解析不到现存子 header** ⇒ catalog 不能当运行态信号源（只当 label/createdAt 用），
+   拿 `mode==='external'` 判「在跑」会把早已结束的工人永久标成 running（假阳性）。
+   冷会话行同理：`summarizeCold()` 硬编码 `running:false`。
+   **结论**：若真机仍出现误判，需要当次会话 id 从 session header 判是否 external/cold，那是宿主该补的面，不在 `F:\defws\dsh-pocket\` 范围内（AGENTS.md 硬约束 7）。
+
+回归锁：`test/record-projection.test.js`（多层聚合 + 防成环反例）、`test/subagent-panel.test.js`（unknown 判定/排序/胶囊头兜底亮蓝点）、
+`test/landing-fingerprint.test.js`（boot 落地重画）。全量 `npm test` 1295 / 1291 pass / 2 fail，
+两条红均非本线（`mobile-assets` 壳预算已由本线记账 349_000→352_000；`pin-field-width` 属另一条在途线的重连文案）。
+
 ## 8. 两处取证冲突的处理（Provenance）
 
 | 项 | 第一版（LEAD 直读） | 第二版采信 | 依据 |

@@ -455,4 +455,69 @@ test('a pinned row paints beside every row and reports its state', () => {
   // (user, 2026-10-14: 「对话的显示宽度发生了一些变化…就怕后面的那个置顶按钮也看不到了」;
   // only workspaces holding such a title showed it, which is why just defws looked broken).
   assert.match(css, /\.task-line\{[^}]*min-width:0/, 'the grid item may shrink below its min-content')
+  assert.match(css, /\.task-pin:disabled\{[^}]*opacity:/, 'disabled pin dims during sync')
+})
+
+test('togglePin inverts pinned state optimistically, calls rpc, and restores on failure', async () => {
+  const start = js.indexOf('async function togglePin(')
+  const end = js.indexOf('function titleFor(', start)
+  const fnStr = js.slice(start, end)
+
+  let currentPinned = ['s1']
+  const pinBusy = new Set()
+  let rendered = 0
+  const toasts = []
+  let rpcShouldFail = false
+  const rpcCalls = []
+  const rpc = async (method, payload) => {
+    rpcCalls.push({ method, payload })
+    if (rpcShouldFail) throw new Error('network down')
+    return { pinnedSessionIds: ['s2'] }
+  }
+
+  const makeToggle = new Function(
+    'pinnedSessionIds_getter', 'pinnedSessionIds_setter',
+    'pinBusy', 'renderWorkspaces', 'showToast', 'L', 'rpc',
+    'let pinnedSessionIds = pinnedSessionIds_getter();' +
+    fnStr +
+    ';return async (id) => {' +
+    '  const p = togglePin(id);' +
+    '  pinnedSessionIds_setter(pinnedSessionIds);' +
+    '  await p;' +
+    '  pinnedSessionIds_setter(pinnedSessionIds);' +
+    '};'
+  )
+
+  const toggle = makeToggle(
+    () => currentPinned,
+    (v) => { currentPinned = v },
+    pinBusy,
+    () => { rendered++ },
+    (msg) => { toasts.push(msg) },
+    L,
+    rpc
+  )
+
+  // 1. Success case: unpin s1 optimistically and settle with RPC return
+  await toggle('s1')
+  assert.equal(rpcCalls.length, 1)
+  assert.equal(rpcCalls[0].method, 'workspace.unpin')
+  assert.deepEqual(currentPinned, ['s2'], 'settles with rpc response')
+  assert.deepEqual(toasts, [L.unpinnedNotice])
+  assert.equal(pinBusy.size, 0)
+
+  // 2. Failure case: roll back to original pins
+  rpcShouldFail = true
+  rpcCalls.length = 0
+  toasts.length = 0
+  await toggle('s2')
+  assert.equal(rpcCalls.length, 1)
+  assert.equal(rpcCalls[0].method, 'workspace.unpin')
+  assert.deepEqual(currentPinned, ['s2'], 'rolls back to original pins on error')
+  assert.deepEqual(toasts, [L.pinFailed])
+  assert.equal(pinBusy.size, 0)
+})
+
+test('action === "pin" locks revealedLists so unpinned older rows do not vanish', () => {
+  assert.match(js, /else if\(action==='pin'\)\{e\.stopPropagation\(\);const rows=card\.querySelectorAll\('\.task-row'\)\.length;if\(wsId&&rows&&!revealedLists\.has\(wsId\)\)revealedLists\.set\(wsId,rows\);void togglePin\(btn\.dataset\.pin\)\}/)
 })

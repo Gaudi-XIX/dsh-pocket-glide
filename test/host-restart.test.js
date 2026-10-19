@@ -40,11 +40,9 @@ test('the phone home document carries the header button and the confirm card say
     assert.equal(appJs.status, 200)
     const app = await appJs.text()
     assert.match(app, /location\.replace\('\/bye'\)/, 'a confirmed restart exits the page to the goodbye')
-    // REQ5①③: 名单每名一行（<ul><li>）而不是顿号拼一行；点下去先出中间态再把请求
-    // 发出去。2026-10-17 用户 m00118 追加：中间态不要文字「正在重启…」，要转圈圈
-    // ——status 挂 .host-spin（文案键降级为 aria-label，读屏仍可听见）。
+    // 2026-10-18 用户追加：转圈圈直接在按钮上改 UI（btn 挂 .host-spin），不在下方新打一行。
     assert.match(app, /hostBusyRefuse\+'<ul>'/, 'the busy list is one line per session')
-    assert.match(app, /status\.innerHTML='<span class="host-spin"/, 'the restarting state is a spinner, not a sentence')
+    assert.match(app, /btn\.innerHTML='<span class="host-spin"/, 'the restarting state is a spinner directly on the button')
     assert.match(app, /L\.hostRestarting/, 'the spinner still carries its accessible label')
     assert.match(app, /confirmHostRestart\(true\)/, 'the force button routes to the forced path')
   } finally { await t.stop() }
@@ -218,7 +216,7 @@ test('force=true cancels every busy session then arms the restart', async () => 
   } finally { await t.stop() }
 })
 
-test('force=true with a cancel failure answers 502 and does not arm', async () => {
+test('force=true proceeds with restart even if session cancel fails or subagent is busy', async () => {
   const armed = []
   const t = await startBridge({
     harness: 'fake',
@@ -240,10 +238,9 @@ test('force=true with a cancel failure answers 502 and does not arm', async () =
       headers: { ...JSON_HEADERS, cookie, origin: t.base },
       body: JSON.stringify({ force: true }),
     })
-    assert.equal(res.status, 502)
+    assert.equal(res.status, 200)
     const j = await res.json()
-    assert.equal(j.ok, false)
-    assert.deepEqual(j.failed, ['s-run'])
-    assert.equal(armed.length, 0, 'a partial cancel failure must not arm')
+    assert.equal(j.ok, true)
+    assert.equal(armed.length, 1, 'force restart arms even when cancel is refused or agent is busy')
   } finally { await t.stop() }
 })

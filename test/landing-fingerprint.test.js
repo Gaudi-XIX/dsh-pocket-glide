@@ -99,7 +99,11 @@ test('the page hands the fingerprint forward and keeps the projection on notModi
   assert.match(source, /const sessReq=listFingerprint\?\{fingerprint:listFingerprint\}:\{\};/)
   assert.match(source, /if\(sessValue&&sessValue\.fingerprint\)listFingerprint=sessValue\.fingerprint;/)
   // applyBootData: the session projection runs only when the rows really came.
-  assert.match(source, /if\(!\(sessInput\.notModified===true\)\)\{subagentRowsByParent=splitSubagentRows\(sessInput\.items\);sessionSummaries=projectSessionRows\(sessInput\.items\);bootListPartial=sessInput\.partial===true\}/)
+  assert.match(source, /if\(!\(sessInput\.notModified===true\)\)\{subagentRowsByParent=splitSubagentRows\(sessInput\.items\);sessionSummaries=projectSessionRows\(sessInput\.items\);bootListPartial=sessInput\.partial===true;/)
+  // A redraw of the subagent capsule follows on purpose: the boot rows are the only
+  // child-row source before the first refresh, so a chat opened from a cold boot has
+  // nothing to show until this lands (m00002, 2026-10-18).
+  assert.match(source, /bootListPartial=sessInput\.partial===true;if\(activeSession&&!subagentView\)renderSubagentBar\(\)\};/)
   assert.match(source, /,listFingerprint=''/, 'the stamp is page state, like the rest')
   // The bridge function and the notModified answer exist in source.
   assert.match(bridgeSource, /function listFingerprint\(items\)\s*\{/)

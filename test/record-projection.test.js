@@ -349,14 +349,28 @@ test('a running subagent marks only its direct parent as descendantRunning', () 
   assert.equal(typeof rows[0].descendantRunning, 'boolean', 'the flag survives compaction as a small value')
 })
 
-test('grandchildren aggregate only through their own parent, one level deep', () => {
+test('grandchildren aggregate all the way up to the root lead, not one level deep', () => {
+  // Host's own rule (dsh-subagent/lib/index.js runningDescendants) walks the whole
+  // subtree by BFS. The phone must agree: a lead whose grandchild is still running
+  // is NOT done, or the pill shows a green check while work is in flight (m00002).
   const grand = { sessionId: 'grand', parentSessionId: 'child', origin: 'subagent', running: true, updatedAt: 1 }
   const child = { sessionId: 'child', parentSessionId: 'lead-1', origin: 'subagent', running: false, updatedAt: 2 }
   const lead = { sessionId: 'lead-1', running: false, updatedAt: 3 }
   const rows = compactSessionRows(applyDescendantRunning([grand, child, lead]))
 
+  assert.equal(rows[0].descendantRunning, undefined, 'the running row itself carries no flag')
   assert.equal(rows[1].descendantRunning, true, 'the direct parent of the running row is marked')
-  assert.equal(rows[2].descendantRunning, undefined, 'the grandparent is not (desktop sidebar shares only direct children)')
+  assert.equal(rows[2].descendantRunning, true, 'the grandparent is marked too — the chain walks upward')
+})
+
+test('a parentSession cycle cannot spin the walker forever', () => {
+  // Defensive: rows are host data. If a parent pointer ever points back into its own
+  // subtree, the BFS must visit each node once and settle, not hang the bridge tick.
+  const a = { sessionId: 'a', parentSessionId: 'b', origin: 'subagent', running: false, updatedAt: 1 }
+  const b = { sessionId: 'b', parentSessionId: 'a', origin: 'subagent', running: true, updatedAt: 2 }
+  const rows = applyDescendantRunning([a, b])
+  assert.equal(rows[0].descendantRunning, true, 'a reaches its running cycle partner')
+  assert.equal(rows[1].descendantRunning, undefined, 'the running row needs no flag')
 })
 
 test('applyDescendantRunning never mutates the rows it marks', () => {
