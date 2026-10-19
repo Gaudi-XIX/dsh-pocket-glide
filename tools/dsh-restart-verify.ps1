@@ -11,7 +11,9 @@
   判定标准（三条同时成立才算成功）：
     1. 日志里有「已发起桌面端」
     2. 当前 DSH 进程的 pid/启动时间与 dsh-before-restart.txt 记录的**全不一样**
-    3. 19387 与 43127 在监听
+    3. DSH 进程在监听：Pocket 桥端口有其一，且另有一个 127.0.0.1 的 GUI 端口
+       （GUI 端口是动态分配的，**不写死** —— 2026-10-19 运行态实测为 5065，
+        同日的 19387 是旧口径。写死会让每次成功重启都被判成「未成功」。）
 #>
 Set-StrictMode -Version 2.0
 
@@ -44,9 +46,18 @@ $survivors = @($now | Where-Object { $before.ContainsKey([string]$_.Id) })
 
 Write-Host ''
 Write-Host '=== 3) 端口 ==='
-$ports = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-  Where-Object { $_.LocalPort -in 19387, 43127 } | Select-Object -ExpandProperty LocalPort -Unique)
-Write-Host "  listening: $(if ($ports.Count) { $ports -join ',' } else { 'none' })"
+# 端口不从常量判：GUI 端口动态分配，只认「DSH 进程自己在监听什么」。
+# 桥端口在候选表里（43127/43128），其余 127.0.0.1 上的监听即 GUI。
+$bridgePorts = @(43127, 43128)
+$dshPids = @($now | ForEach-Object { $_.Id })
+$listenConns = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+  Where-Object { $_.OwningProcess -in $dshPids })
+$bridgeFound = @($listenConns | Where-Object { $_.LocalPort -in $bridgePorts } |
+  Select-Object -ExpandProperty LocalPort -Unique)
+$guiFound = @($listenConns | Where-Object { $_.LocalAddress -eq '127.0.0.1' -and $_.LocalPort -notin $bridgePorts } |
+  Select-Object -ExpandProperty LocalPort -Unique)
+Write-Host "  Pocket 桥监听: $(if ($bridgeFound.Count) { $bridgeFound -join ',' } else { 'none' })"
+Write-Host "  GUI 监听(动态): $(if ($guiFound.Count) { $guiFound -join ',' } else { 'none' })"
 
 Write-Host ''
 Write-Host '=== 4) 任务是否已自删 ==='
@@ -56,14 +67,20 @@ if (Get-ScheduledTask -TaskName 'DSH-ReviveOnce' -ErrorAction SilentlyContinue) 
 
 $logText = if (Test-Path $logPath) { Get-Content $logPath -Encoding UTF8 -Raw } else { '' }
 $launched = $logText -match '已发起桌面端'
-$portsOk = ($ports -contains 19387) -and ($ports -contains 43127)
+$portsOk = ($bridgeFound.Count -gt 0) -and ($guiFound.Count -gt 0)
 $fresh = ($survivors.Count -eq 0) -and ($now.Count -gt 0) -and ($before.Count -gt 0)
 
 Write-Host ''
 Write-Host '=== 判定 ==='
 Write-Host "  日志有「已发起桌面端」: $launched"
 Write-Host "  进程指纹全新(没一个活下来): $fresh"
-Write-Host "  两个端口都在: $portsOk"
+Write-Host "  桥与 GUI 都在监听: $portsOk"
 if ($launched -and $fresh -and $portsOk) { Write-Host '  >>> 重启成功' }
 elseif ($now.Count -eq 0) { Write-Host '  >>> 失败：DSH 没起来（机器现在没有桌面端）' }
 else { Write-Host '  >>> 未成功或证据不足，看上面三项哪条不成立' }
+
+# 退出码必须显式给：本脚本自身没有失败退出路径（判定结果打在 stdout 上给人读），
+# 不写则该进程的 $LASTEXITCODE 会「借」同进程内上一条原生命令的码 —— 被转发垫片
+# 的 `exit $LASTEXITCODE` 带出去就是假失败（2026-10-19 Verifier 实测：先跑
+# `cmd /c exit 7` 再跑本脚本，会得到 exit=7 而验证其实全过）。
+exit 0

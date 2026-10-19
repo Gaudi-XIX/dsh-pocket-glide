@@ -145,10 +145,6 @@ try {
         $hookExit = $LASTEXITCODE
         $ErrorActionPreference = $prevPref
         Log "PostKill 结果：$hookOut (exit=$hookExit)"
-        $vf = Join-Path $env:TEMP 'dsbot-migrate-verify.txt'
-        if (Test-Path -LiteralPath $vf) {
-          Log ('migration verify: ' + (Get-Content -LiteralPath $vf -Raw).Trim())
-        }
       } catch {
         Log "[warn] PostKill 钩子抛错，仍继续拉起：$($_.Exception.Message)"
       }
