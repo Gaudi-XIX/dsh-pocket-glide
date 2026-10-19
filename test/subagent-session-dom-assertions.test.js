@@ -225,6 +225,7 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'fieldText')}
     ${extractFunction(js, 'sessionModelLabel')}
     ${extractFunction(js, 'isSessionUnread')}
+    ${extractFunction(js, 'isQuestionUnread')}
     ${extractFunction(js, 'readLastMessageMap')}
     ${extractFunction(js, 'lastMessageAtOf')}
     ${extractFunction(js, 'lastMessageTimeOf')}
@@ -259,6 +260,7 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'wsFlagHtml')}
     ${extractFunction(js, 'wsRunning')}
     ${extractFunction(js, 'wsGlyphOf')}
+    ${extractFunction(js, 'wsHeadTimeAt')}
     ${extractFunction(js, 'renderWorkspaces')}
     return {
       renderWorkspaces,

@@ -413,7 +413,8 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
   const body = [
     'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
     'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
-    'readLastMessageMap', 'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank',
+    'isQuestionUnread',
+    'readLastMessageMap', 'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank', 'wsHeadTimeAt',
     // T5: renderWorkspaces reads the tail line through tailTextOf — extract the real one.
     'tailTextOf',
     // The head notices (0.4.31): wsFlagsOf/wsFlagHtml are top-level on the page, so

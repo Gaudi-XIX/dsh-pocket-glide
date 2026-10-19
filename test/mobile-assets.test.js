@@ -1007,7 +1007,10 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 // 2026-10-19 页面跳跃治理与全量首屏尾包预载（R1 离开跟随带不再拽回 + R2 移除重复贴底 + boot.tails 全量装载）：
 //   实测 zh 365 325（css 55 056 + js 310 269）/ en 365 243，
 //   相对上一条基线净 +1 210 B。取 367 000（余量 ~1.6 KB）。
-const ASSET_BUDGET_BYTES = 367_000
+// 2026-10-20 工作区头三处显示裁定（置顶不拖回时钟 + 提问已读即静 + 头只有进行中/全完成两态）：
+//   净增 +2 857 B（本笔单独测得 zh 367 944＝css 55 217 + js 312 727 / en 367 862，基线 HEAD a5dd642 为 zh 365 087 / en 365 005）。
+//   取 371 000（余量 ~3.1 KB）。
+const ASSET_BUDGET_BYTES = 371_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {
