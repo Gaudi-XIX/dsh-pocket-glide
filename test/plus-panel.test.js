@@ -184,7 +184,7 @@ test('GET /api/session-attachment decodes Host base64 bytes with the Host media 
     )
     assert.equal(res.status, 200)
     assert.equal(res.headers.get('content-type'), 'image/png')
-    assert.equal(res.headers.get('cache-control'), 'private, no-store')
+    assert.equal(res.headers.get('cache-control'), 'private, max-age=86400')
     assert.equal(res.headers.get('content-length'), String(raw.length))
     const bytes = await readBinary(res)
     assert.deepEqual(bytes, raw)

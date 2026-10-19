@@ -21,6 +21,15 @@
 - **计量账**：预算不动（`ASSET_BUDGET_BYTES` 保持 371_000）。相对 HEAD 净增 zh +2 298 B / en +2 298 B，实测壳字节 zh 370 242（css 55 217 + js 315 025）/ en 370 160（css 55 217 + js 314 943），余量 zh 758 B / en 840 B。
 - **回归锁**：新增 `test/pages-optimistic-retirement.test.js` 6 条（不同图数不误退休 / 无附件不误退休 / 图片副本不退休纯文件回声 / 自己的副本仍退休（防修过度）/ 多帧渲染不翻转 / 同形两回声仍会被第一份副本一起退休——**已知形状盲区，明文钉住**）；`test/transcript-order.test.js` 沙箱补注入 `promptShape` 并把 M17 静态锁改钉规则而非稠密表达式；`test/pages-render-fixes.test.js` BUG3 沙箱同步补注入。红前置自证：把 `lib/pages.js` 还原成 HEAD、只留测试，`test/pages-optimistic-retirement.test.js` = **6 tests / 2 pass / 4 fail**（帧序列那条 `['kept','retired','retired','retired']` ≠ `['kept','kept','retired','retired']`）。净检出全量 `node --test --test-concurrency=1 test/*.test.js` = **1334 tests / 1332 pass / 0 fail / 2 skipped**。
 
+**附件响应改为可缓存（闪烁的另一半）**（⏳ 待重启生效：`lib/bridge.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。承接上一节「本笔不声称修好闪烁」里点名的真机机制——那一节修的是「相似发送互相误退休」，这一节修的是「每帧重建把图片重新下载一遍」。2026-10-20 用户报「图片发送以后，图片消失又重复出现」）。
+
+- **机制**：`paintMessages` 每帧用 `box.innerHTML` 整段重建会话，任何非 `assistant/chunk` 的流事件（tool/call、tool/result、step/\*、job/\*）都触发全量重画，于是每个 `<img>` 都是新元素；而 `/api/session-attachment` 原先带 `cache-control: private, no-store`，新元素没有可复用的字节，手机就在每个非 chunk 事件后把 165 KB / 319 KB 的图重新下载一遍再解码——屏幕上正是「消失一下又出现」。
+- **修法**：附件响应头 `private, no-store` → **`private, max-age=86400`**。attachmentId 是内容寻址的，宿主该行在会话期内字节不变，答案可安全从浏览器缓存重放；`private` 保证字节不落共享缓存。选一天窗口与上方静态资源分支（`public, max-age=86400`）同档。**不改 service worker**：壳的 `BYPASS` 正则（`lib/pages.js` 内 `/^\/(api|…)/`）已把 `/api` 整段排除在 SW 拦截外，`/api/session-attachment` 从来只走浏览器 HTTP 缓存，所以改响应头正是对的杠杆。
+- **未动的两处 no-store**：同文件 `session-file`、`session-export` 两条路由的 `private, no-store` 保持原样——它们不是会话内反复重画的 `<img>` 源，改它们没有这块收益，且导出/下载本就不该缓存。
+- **计量账**：`lib/bridge.js` 不在壳内，壳字节与 `ASSET_BUDGET_BYTES` 均不动。
+- **回归锁**：`test/plus-panel.test.js` 附件路由断言同步为 `private, max-age=86400`（同文件 export 路由的 no-store 断言不动）。`node --test test/plus-panel.test.js` = **19 tests / 19 pass / 0 fail**。
+- **仍存的另一半**：本节让重画的 `<img>` 命中浏览器缓存、不再重下载，但「每帧 `innerHTML` 整段重建」本身没动——彻底不重建 DOM（图片元素增量保留）是更大的改动，留待后续。真机是否仍闪，须重启宿主＋手机完全关闭重开后实测。
+
 ## 0.4.53 — 2026-10-19
 
 **上传有转圈与进度、附件占位改胶囊、桥侧开始记上传耗时**（⏳ 待重启生效：`lib/pages.js` 与 `lib/bridge.js` 都属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-19 真机上传 1.17 MB PDF 后三问：①「上传中我觉得要有一个圆圈或者什么上传进度，不能这种硬卡在这儿。我不知道你是卡死了，还是确实正在上传」②「发出去以后……会有'图片 1'、'文件 1'之类的占位，为什么会有这个东西发出去？」③「这个上传进度很慢啊，是 Cloudflare 的原因还是别的什么」）。
