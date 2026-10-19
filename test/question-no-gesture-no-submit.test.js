@@ -22,8 +22,8 @@
 // 不进「跳过/提交」那一行（P-14），且它在 HEAD 上不存在（RED）。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
 import { mobilePageAssets } from '../lib/pages.js'
+import { preFixBaseline } from './helpers/pre-fix-baseline.mjs'
 
 const { css, js } = mobilePageAssets({ locale: 'zh' })
 
@@ -339,14 +339,21 @@ test('P-14 the toggle sits in the header, so the skip/submit cluster is untouche
     'closing the question resets the collapsed state for the next card')
 })
 
-test('RED (against f8e1669) the collapse affordance does not exist on the committed page source', () => {
+test('RED (against f8e1669) the collapse affordance does not exist on the committed page source', (t) => {
   // 红先：这条在修复前的页源上必须失败，否则它证明不了本次修的是它（house pattern，
   // 同 test/pages-render-fixes.test.js 的 RED 用例）。
   //
   // 基线钉在不可变的前置提交上，而不是 HEAD：本批六 bug 修复＝8de3463，其父 f8e1669
   // 是「修复落地之前那一次提交」。红先证据必须钉在这一个 sha 上——钉 HEAD 会随
   // 每次提交腐烂（修复一落进 HEAD 断言就自相矛盾），钉 HEAD~1 会随新提交漂移。
-  const preFix = execFileSync('git', ['show', 'f8e1669:lib/pages.js'], { cwd: 'F:/defws/dsh-pocket', maxBuffer: 1e8 }).toString()
+  //
+  // 该 sha 只存在于开发仓：公开发布线是 squash 出的全新根（无共同祖先），这里读不到它。
+  // 读不到基线 ≠ 基线成立，故显式 skip，绝不静默通过。
+  const preFix = preFixBaseline('f8e1669', 'lib/pages.js')
+  if (preFix === null) {
+    t.skip('f8e1669 is not in this history (the published tree was squashed into a fresh root)')
+    return
+  }
   assert.equal(preFix.includes('data-question-action="collapse"'), false, 'the pre-fix baseline has no collapse control')
   assert.equal(preFix.includes('questionCollapsed'), false, 'the pre-fix baseline has no collapsed state')
 })
