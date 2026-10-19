@@ -228,6 +228,13 @@ function buildQueueActionSandbox(rpc) {
     `
     const L={queueEditFailed:'编辑失败',queueRemoveFailed:'撤回失败',queueSteerFailed:'发送失败',queueCount:'排队消息 {n} 条',queueImage:'图片',queueFile:'文件',queueUnrenderable:'[图片/文件]',queueEdit:'编辑',queueSave:'保存',queueCancel:'取消',queueRemove:'撤回',queueSteer:'立刻发送'}
     let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',activeSession='s1',streamProjections=null
+    // A queue action now also kicks the transcript leg (user 2026-10-19: 「发送」后
+    // 显示很慢), so the sandbox has to carry those three names: the poll kick, the
+    // history repaint, and the dedupe key it clears.
+    let connectionMode='tunnel',lastHistoryKey='k'
+    const kicks=[]
+    function scheduleEventPoll(delay){kicks.push(['poll',delay])}
+    function loadHistory(initial,force){kicks.push(['history',initial,force]);return Promise.resolve()}
     const $=(id)=>containers[id]
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'goalOf')}
@@ -258,6 +265,8 @@ function buildQueueActionSandbox(rpc) {
       get html(){return containers.queueDock.innerHTML},
       get classes(){return classState},
       get cssVars(){return cssVars},
+      get kicks(){return kicks},
+      get historyKey(){return lastHistoryKey},
     }
   `,
   );
@@ -295,6 +304,11 @@ test('recall sends remove and refreshes the registry with the answer', async () 
   assert.doesNotMatch(box.html, /data-id="m1"/,
     'the recalled row is gone — a stale pre-action paint would still carry its buttons');
   assert.deepEqual(box.toasts, [], 'no error on the happy path');
+  // The steered/recalled message reaches the transcript without waiting out the
+  // realtime poll backoff (user 2026-10-19: 「显示出来的速度非常之慢」).
+  assert.deepEqual(box.kicks, [['poll', 0], ['history', false, true]],
+    'and the transcript is repainted right away, not on the next 1.5–6s frame');
+  assert.equal(box.historyKey, '', 'the history dedupe key is cleared so the repaint is not skipped');
 });
 
 test('the remove affordance is the same 13px stroke icon family as steer/edit', () => {

@@ -39,7 +39,7 @@ function chunkEvent(seq, turn, step, text) {
 
 function buildSandbox() {
   const { js } = mobilePageAssets({ locale: 'zh' })
-  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'durableUserPromptText', 'messagesWithOptimistic']
+  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime', 'durableUserPromptText', 'messagesWithOptimistic']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
     `let olderEvents=[],streamEvents=[],lastDurableMessages=[],optimisticPrompts=[];

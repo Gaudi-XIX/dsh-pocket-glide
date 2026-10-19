@@ -74,7 +74,7 @@ let cachedMessage = null
 // assert a fiction the page does not have.
 function projectionSandbox() {
   if (cachedProjection) return cachedProjection
-  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'durableUserPromptText', 'messagesWithOptimistic']
+  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime', 'durableUserPromptText', 'messagesWithOptimistic']
   const body = names.map((name) => extractFunction(assets.zh.js, name)).join('\n')
   cachedProjection = new Function(
     `let olderEvents=[],streamEvents=[],lastDurableMessages=[],optimisticPrompts=[];

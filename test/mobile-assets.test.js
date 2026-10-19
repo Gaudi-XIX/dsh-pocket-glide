@@ -984,7 +984,13 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   questionCollapsed 与 handler 的 collapse 分支（不落答案、不取消提问）、一条文案键 questionCollapse。
 //   实测 zh 354 860（css 53 521 + js 301 339）/ en 354 777，相对上一条基线（zh 353 876 / en 353 788，
 //   BUG-5 指针穿透补丁之后）净 +984 B（css +389 / js +595）。取 356 000（余量 ~1.1 KB）。
-const ASSET_BUDGET_BYTES = 356_000
+// 2026-10-19 排队消息落位复位（用户 m00544「刚刚给你发的图片就是证据」）：
+//   新增 orderUserBubblesByTime（user 气泡按自身 messageTime 与上方行比对复位，
+//   无时间戳的行当墙）+ queueAction 成功后即时拉正文（tunnel 档 scheduleEventPoll(0)）
+//   + 桌面刷新按钮强制重建隧道（手机页侧 switchMode 加 force 形参）。
+//   实测 zh 357 070（css 53 504 + js 303 566）/ en 356 987，相对上一条基线（zh 354 860 / en 354 777）
+//   净 +2 210 B（css -17 / js +2 227）。取 358 000（余量 ~930 B）。
+const ASSET_BUDGET_BYTES = 358_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

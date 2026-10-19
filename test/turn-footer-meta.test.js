@@ -128,7 +128,7 @@ function messageSandbox(locale) {
 // them as top-level names here would test a fiction the page does not have.
 function projectionSandbox() {
   return memo('projection', () => {
-    const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'durableUserPromptText', 'messagesWithOptimistic']
+    const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime', 'durableUserPromptText', 'messagesWithOptimistic']
     const body = names.map((name) => extractFunction(assets.zh.js, name)).join('\n')
     return new Function(
       `let olderEvents=[],streamEvents=[],lastDurableMessages=[],optimisticPrompts=[];

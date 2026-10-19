@@ -140,7 +140,7 @@ test('D the connection-mode keys are disabled while a phone is connected', () =>
   }
   assert.match(PAGES_SOURCE, /function syncModeControls\(connected\)\{phoneConnected=connected;const disabled=connected\|\|modeSwitching/,
     'a live phone disables the keys, as does an in-flight switch')
-  assert.match(PAGES_SOURCE, /async function switchMode\(enableTunnel\)\{if\(phoneConnected\|\|modeSwitching\)return/,
+  assert.match(PAGES_SOURCE, /async function switchMode\(enableTunnel,force\)\{if\(phoneConnected\|\|modeSwitching\)return/,
     'and switchMode refuses to swap the tunnel out from under a connected phone')
 })
 

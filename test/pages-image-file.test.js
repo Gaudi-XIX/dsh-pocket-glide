@@ -262,7 +262,7 @@ test('a session with no events collects nothing', () => {
 
 function projectionSandbox() {
   const js = assets.zh.js
-  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'visibleMessages']
+  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'visibleMessages', 'orderUserBubblesByTime']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(`
     const processBlocks=()=>[];
