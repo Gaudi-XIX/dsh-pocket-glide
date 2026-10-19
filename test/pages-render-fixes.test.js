@@ -793,6 +793,9 @@ function buildQueueSendSandbox(opts) {
     function draftSummary(){return ''}
     function latestEventSeq(){return 5}
     function durableUserPromptText(message){return String((message.blocks&&message.blocks[0]&&message.blocks[0].text)||message.text||'')}
+    // 2026-10-20 promptShape 进入退休判据（见 test/pages-optimistic-retirement.test.js），
+    // 沙箱必须把它一并注入，否则 echo filter 会在 ReferenceError 上炸，而不是退休。
+    ${extractFunction(js, 'promptShape')}
     function armAwaitingTurn(){}
     function clearAwaitingTurn(){}
     function markRowRunning(){}

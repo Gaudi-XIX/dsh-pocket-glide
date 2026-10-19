@@ -12,6 +12,15 @@
 - **③ 工作区头仅两态**：`wsGlyphOf` 收敛混态回落，只剩「正在进行的对话」与「整个工作区没有正在进行的对话」两态；空白工作区保留现状空白虚线，不算完成。
 - **计量账**：`ASSET_BUDGET_BYTES` 367_000→371_000，HEAD+本笔实测 zh 367 944（css 55 217 + js 312 727）/ en 367 862，余量 ~3.1 KB。
 - **回归锁**：`test/workspace-head-notices.test.js` 新增 5 条（本批 74/74），净检出全量 `node --test --test-concurrency=1 test/*.test.js` = 1324 pass / 0 fail / 4 skipped。
+
+**乐观回声按「形状指纹」退休**（2026-10-20。用户报障原话：「图片发送以后，好像会有那种图片消失又重复出现、消失又出现的 bug」，当日两次真机连发两张图 165 KB / 319 KB 复现）。
+
+- **动机**：乐观回显的退休判据原先只比文字 `durableUserPromptText(message)!==item.text`。纯图消息的文字是空串，所以「两条都只带一张图的发送」在判据眼里是同一句话——谁的 durable 副本先落地，就把**另一条还没到的回声**一起退掉，屏幕上那次发送消失；等它自己的副本落地再画出来。附件的 `attachmentId` 不能拿来当判据：宿主回显时会把图片重写一份（规范化副本、新 id），两边永远对不上。
+- **判据**：新增 `promptShape(message)`，把「一条发送」归约成 `图片数|文件数|文字长度|文字`。文字取第一个 `text` 块（回声自身没有 blocks，回落到 `message.text`）；图片/文件数先数 blocks，再把 `message.chips`（`'1 图片'` / `'1 Images'` / `'1 文件'` / `'1 File'`）里的数字按「含『图』或英文 image」归到图片、其余归到文件累加。`messagesWithOptimistic` 的淘汰判据由文字相等改成指纹相等，水位推进（`item.afterSeq` 每帧上移到已见过的最新同形副本）**原样保留**——去掉它会让 matches≥2 的回声永久不退休、变成卡死的重复气泡（`test/transcript-order.test.js` 的 M17 用例正是钉这一点的）。
+- **本笔不声称修好闪烁**：上面这条只消灭「相似发送互相误退休」这一类。真机上「图片消失又出现」的机制另有出处且本笔未动——`paintMessages` 每帧 `box.innerHTML` 整段重建会话 DOM（任何非 `assistant/chunk` 流事件都触发全量重画，见 `queueStreamRender(…, type!=='assistant/chunk')`），而 `/api/session-attachment` 带 `cache-control: private, no-store`，每个 `<img>` 重建后都要重新下载/解码。手机端这条待另修。
+- **计量账**：预算不动（`ASSET_BUDGET_BYTES` 保持 371_000）。相对 HEAD 净增 zh +2 298 B / en +2 298 B，实测壳字节 zh 370 242（css 55 217 + js 315 025）/ en 370 160（css 55 217 + js 314 943），余量 zh 758 B / en 840 B。
+- **回归锁**：新增 `test/pages-optimistic-retirement.test.js` 6 条（不同图数不误退休 / 无附件不误退休 / 图片副本不退休纯文件回声 / 自己的副本仍退休（防修过度）/ 多帧渲染不翻转 / 同形两回声仍会被第一份副本一起退休——**已知形状盲区，明文钉住**）；`test/transcript-order.test.js` 沙箱补注入 `promptShape` 并把 M17 静态锁改钉规则而非稠密表达式；`test/pages-render-fixes.test.js` BUG3 沙箱同步补注入。红前置自证：把 `lib/pages.js` 还原成 HEAD、只留测试，`test/pages-optimistic-retirement.test.js` = **6 tests / 2 pass / 4 fail**（帧序列那条 `['kept','retired','retired','retired']` ≠ `['kept','kept','retired','retired']`）。净检出全量 `node --test --test-concurrency=1 test/*.test.js` = **1334 tests / 1332 pass / 0 fail / 2 skipped**。
+
 ## 0.4.53 — 2026-10-19
 
 **上传有转圈与进度、附件占位改胶囊、桥侧开始记上传耗时**（⏳ 待重启生效：`lib/pages.js` 与 `lib/bridge.js` 都属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-19 真机上传 1.17 MB PDF 后三问：①「上传中我觉得要有一个圆圈或者什么上传进度，不能这种硬卡在这儿。我不知道你是卡死了，还是确实正在上传」②「发出去以后……会有'图片 1'、'文件 1'之类的占位，为什么会有这个东西发出去？」③「这个上传进度很慢啊，是 Cloudflare 的原因还是别的什么」）。

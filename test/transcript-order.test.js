@@ -39,7 +39,7 @@ function chunkEvent(seq, turn, step, text) {
 
 function buildSandbox() {
   const { js } = mobilePageAssets({ locale: 'zh' })
-  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime', 'durableUserPromptText', 'messagesWithOptimistic']
+  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime', 'durableUserPromptText', 'promptShape', 'messagesWithOptimistic']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
     `let olderEvents=[],streamEvents=[],lastDurableMessages=[],optimisticPrompts=[];
@@ -858,8 +858,14 @@ test('M17 the send records what retirement needs', () => {
   // by the closing brace — otherwise every new field turns this red.
   assert.ok(send.includes('sameTextAtSend,afterSeq'), 'and travels with the echo')
   const echo = betweenA3('function messagesWithOptimistic(durable)', 'function latestEventSeq()', js)
-  assert.ok(echo.includes('return!(matches===1&&(floor>=0||item.sameTextAtSend===0))'), 'retirement is the narrow rule, not the first match')
-  assert.ok(echo.includes('const floor=item.afterSeq'), 'the gate reads the watermark as it was before this paint')
+  // 2026-10-20 shape-aware retirement: the gate now carries the candidate count
+  // AND the shape fingerprint, and the watermark it compares against is read from
+  // the item before this paint moves it up. Pin the *rule* (narrow single
+  // candidate, shape-aware, watermark read before it advances) rather than the
+  // old dense expression, or every refactor of the predicate turns this red.
+  assert.ok(echo.includes('matches===1&&(item.afterSeq>=0||item.sameTextAtSend===0)'), 'retirement is the narrow rule, not the first match')
+  assert.ok(echo.includes('promptShape(item)'), 'and it only retires a send of the same shape')
+  assert.ok(echo.includes('if(seq>(item.afterSeq??-1))matches+=1'), 'the gate reads the watermark as it was before this paint')
   assert.ok(echo.includes('item.afterSeq=newest'), 'and the watermark then moves up to what the phone has seen')
   assert.ok(!echo.includes('!durable.some('), 'and the "any match wins" filter is gone')
 })
