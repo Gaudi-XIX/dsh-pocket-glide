@@ -177,7 +177,10 @@ test('the transcript offers a tap target for older messages', () => {
   // literal `box.innerHTML=olderButtonHtml()+messages.map(renderMessage).join('')+status`
   // (change 2026-10-02-fix-pocket-audit-remediation, tasks WP-A1 A-7②) — the older
   // row still leads and the messages still follow it.
-  assert.ok(html.includes("box.innerHTML=olderButtonHtml()+(messages.length?messages.map(renderMessage).join(''):transcriptWaitHtml(box))+status"))
+  // 2026-10-21 earlier-parts: the merged earlier conversation feed (bot.earlier)
+  // prepends before the older row — an additive axis that leaves the older-pull
+  // join untouched.
+  assert.ok(html.includes("box.innerHTML=earlierPartsHtml()+olderButtonHtml()+(messages.length?messages.map(renderMessage).join(''):transcriptWaitHtml(box))+status"))
   assert.ok(html.includes('function renderOlderButton()'), 'the row must be re-synced without a full repaint')
 })
 
@@ -216,7 +219,7 @@ test('a blank skeleton is retried instead of being left on screen', () => {
   // `if(!$('messages').querySelector('.loading'))return`
   // (change 2026-10-02-fix-pocket-audit-remediation); a session the desktop
   // reports as blank needs no content, so it is not retried into a false failure.
-  assert.ok(js.includes("if($('messages').querySelector('.message')||sessionBlank)return"), 'the watchdog stops once content paints')
+  assert.ok(js.includes("if($('messages').querySelector('.message:not(.earlier-msg)')||sessionBlank)return"), 'the watchdog stops once content paints')
   assert.ok(!js.includes("if(!$('messages').querySelector('.loading'))return"), 'the skeleton is no longer the stop signal')
   assert.ok(js.includes('if(attempt>=3){showTranscriptRetry();return}'), 'three silent retries end in a tappable retry')
   assert.ok(js.includes('armSkeletonWatchdog(id)'), 'openSession must arm it')

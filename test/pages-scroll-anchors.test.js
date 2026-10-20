@@ -262,6 +262,9 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
     function settledTranscriptHeight(){return box&&box.scrollHeight?box.scrollHeight:lastScrollHeight}
     function renderMessage(message){return '<div class="message '+message.role+'"></div>'}
     function syncScrollAnchors(){}
+    // earlier-parts is an additive axis: the paint sandbox has no earlier feed
+    // loaded, so the prepend must render as an empty string.
+    function earlierPartsHtml(){return ''}
     ${body}
     return {
       paintMessages,
@@ -330,6 +333,8 @@ test('paintMessages tags the history tail through the real markHistoryTail', () 
     function syncScrollAnchors(){}
     let followStream=true
     let transcriptAnchor=null,skipAnchorOnce=false
+    // earlier-parts prepends an empty feed in this sandbox (no earlier pages).
+    function earlierPartsHtml(){return ''}
     ${body}
     return { paintMessages }
   `)
@@ -532,7 +537,7 @@ test('mergeOpenedMapFromBridge restores lost history without downgrading newer l
 test('the page wires the machine where the tests cannot reach: scroll, open, leave', () => {
   const js = assets.zh.js
   assert.match(js, /followStream=isNearBottom\(live\)/, 'the scroll handler re-decides the follow from the live band')
-  assert.match(js, /activeSession=id;const summary=sessionSummaries\.find\(item=>item\.sessionId===id\);sessionBlank=summary\?\.blank\?\?true;noteSessionOpened\(id\);followStream=true;/, 'openSession stamps the ledger and re-arms the follow')
+  assert.match(js, /activeSession=id;resetEarlierParts\(\);const summary=sessionSummaries\.find\(item=>item\.sessionId===id\);sessionBlank=summary\?\.blank\?\?true;noteSessionOpened\(id\);followStream=true;/, 'openSession stamps the ledger and re-arms the follow (earlier-parts reset rides between the session switch and the first summary read)')
   assert.match(js, /poll=null;if\(activeSession\)noteSessionOpened\(activeSession\);/, 'leaving to the list stamps the ledger (activity seen live is read)')
   assert.match(js, /scheduleOpenedMapSync\(\);void pullOpenedMapRemote\(\);/, 'boot pulls the ledger back from the bridge after the first paint (0.4.35)')
   assert.match(js, /latest\.classList\.toggle\('show',state\.latest\);prompt\.classList\.toggle\('show',state\.prompt\)/, 'each anchor button is wired to its OWN state — no mutual exclusion in the DOM either')

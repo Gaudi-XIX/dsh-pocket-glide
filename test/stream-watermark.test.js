@@ -200,7 +200,7 @@ test('AC-A7 the failed retry block survives an empty repaint', () => {
 
 test('AC-A7 the watchdog judges painted content and ends on a tappable retry', () => {
   const watchdog = between('function armSkeletonWatchdog(sessionId,attempt=0)', 'function schedulePoll()')
-  assert.ok(watchdog.includes("querySelector('.message')"), 'it asks whether anything was painted')
+  assert.ok(watchdog.includes("querySelector('.message:not(.earlier-msg)')"), 'it asks whether anything was painted')
   assert.ok(!watchdog.includes("querySelector('.loading')"), 'and no longer whether a skeleton is up')
   assert.ok(watchdog.includes('if(attempt>=3){showTranscriptRetry();return}'), 'three tries, then a button')
   assert.ok(watchdog.includes('||sessionBlank'), 'a blank session is not retried into a false failure')
@@ -235,6 +235,8 @@ function buildPaintSandbox(state = {}) {
     const L=${JSON.stringify(L)}
     const $=()=>box
     function renderMessage(message){return '<div class="message '+message.role+'">'+(message.blocks||[]).map((b)=>b.text||'').join('')+'</div>'}
+    // earlier-parts prepends an empty feed in this sandbox (no earlier pages).
+    function earlierPartsHtml(){return ''}
     ${body}
     return {
       olderButtonHtml, paintMessages, showTranscriptRetry, transcriptHasContent, transcriptWaitHtml,

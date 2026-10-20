@@ -1067,7 +1067,27 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   实测 zh 381 793（css 56 093 + js 325 700）/ en 381 713（css 56 093 + js 325 620）；
 //   相对上一条基线净 +1 667 B（js +1 624 / css +43）。
 //   取 381 950（余量 157 B（zh）/ 237 B（en））。
-const ASSET_BUDGET_BYTES = 381_950
+// 2026-10-21 earlier-parts 更早对话段（bot.earlier）：openSession 预载更早各段并画在
+//   当前段之上——新增状态、渲染/加载函数（earlierItemHtml/earlierRowsHtml/
+//   earlierPartsHtml/fetchEarlierPage/paintEarlierFeed/startEarlierParts/resetEarlierParts）、
+//   i18n 两键与 .earlier-feed/.earlier-divider/.earlier-event 等 CSS。
+//   实测 zh 386 725（css 56 686 + js 330 039）/ en 386 651（css 56 686 + js 329 965）。
+// 2026-10-21 earlier-parts v2（Verifier 退回 2 必改 + 6 注意）：feed 顶部加「加载更早的
+//   对话」续拉行（earlierMoreRowHtml，earlierCursor/earlierDone 有了真读者）、
+//   transcript 空判探针改 .message:not(.earlier-msg) ×3、earlierGen 代数守卫、
+//   空 text fallback 不画空泡、.earlier-msg/.earlier-qa* 样式、清账 js 分项 3 B 偏差。
+//   实测 zh 387 688（css 56 836 + js 330 852）/ en 387 618（css 56 836 + js 330 782）。
+// 2026-10-21 earlier-parts v3（Verifier 第二轮退回 2 必改，均 1 行）：earlierDone 只认
+//   cursor（空页不再杀死续拉——host 的 more 按 record 条数算，工具密集段会返空页 +
+//   活 cursor）、fetch 的 finally 加代际判断（陈旧回包不再清掉新一代的 busy）。
+//   实测 zh 387 693（css 56 836 + js 330 857）/ en 387 623（css 56 836 + js 330 787）；
+//   相对 v2 净 +5 / +5 B。
+// 2026-10-21 earlier-parts v4（Verifier 第三轮退回 1 必改，渲染门 2 行）：容器与移除门
+//   改由「行或续拉行」共同决定（首页为空但 cursor 活时续拉行自己撑起容器，首屏在飞时
+//   转圈也能画出来）；实测 zh 387 732（css 56 836 + js 330 896）/ en 387 662
+//   （css 56 836 + js 330 826）；相对 v3 净 +39 / +39 B。
+//   取 388 200（余量 468 B（zh）/ 538 B（en））。
+const ASSET_BUDGET_BYTES = 388_200
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

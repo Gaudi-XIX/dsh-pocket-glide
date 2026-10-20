@@ -145,7 +145,9 @@ test('T1 showError/clearTransientError chatError call sites unchanged (zero JS d
   // used to return silently — an attachment still uploading, an image whose draft
   // never finished — now have to speak, or the tap looks swallowed; and the create
   // itself unwinds through send()'s own catch instead of ensureSession()'s.
-  assert.equal(shown, 23, 'showError chatError call count: 21 + the two new send() failure reports (2026-10-16: the pre-flight rejection and the materialize-and-send rollback)')
+  // 2026-10-21 earlier-parts: fetchEarlierPage reports a failed bot.earlier call
+  // on the same chat error line — an additive call site, not drift.
+  assert.equal(shown, 24, 'showError chatError call count: 21 + the two new send() failure reports (2026-10-16: the pre-flight rejection and the materialize-and-send rollback) + 1 earlier-parts fetch failure (2026-10-21)')
   // 3 baseline sites + the banner dismiss (2026-10-07-fix-pocket-banner-dismiss-and-ttl):
   // the tap-the-right-end exit must leave through the same guard as the frame exit, so it
   // is a fourth call site by construction, not a drift.
