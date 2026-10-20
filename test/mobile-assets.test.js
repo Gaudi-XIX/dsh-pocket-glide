@@ -1021,7 +1021,12 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 // 2026-10-20 附件卡/过程卡随所属回答整体落位（orderUserBubblesByTime 改按显示单元移动）：
 //   实测 zh 375 696（css 55 217 + js 320 479）/ en 375 614（css 55 217 + js 320 397）；
 //   父提交 c587a1d 实测 zh 375 131 / en 375 049，本笔净 +565 B。预算 376 000 不动，余 ~300 B。
-const ASSET_BUDGET_BYTES = 376_000
+// 2026-10-20 Goal 条三层常显卡（状态行+全文大框+底行按钮，chevron 折叠/上收，
+//   点大框直接编辑、返回箭头取消、失焦自动保存）：
+//   实测 zh 377 123（css 55 845 + js 321 278）/ en 377 043（css 55 845 + js 321 198）；
+//   父提交 c7ea6b0 实测 zh 375 696 / en 375 614（c7ea6b0 自述壳字节不变），本笔净 +1 427 B。
+//   取 377 500（余量 ~380 B）。
+const ASSET_BUDGET_BYTES = 377_500
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

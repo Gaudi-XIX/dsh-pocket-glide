@@ -98,8 +98,10 @@ test('queuedRowsOf marks which rows carry the Host MessageId', () => {
 function buildDockSandbox() {
   // querySelector mirrors the sibling sandbox: renderQueueDock looks up its own
   // list to re-arm it when it overflows, and a headless fake has no layout.
-  const fake = () => ({ innerHTML: '', hidden: true, offsetHeight: 120, querySelector: () => null, classList: { toggle() {}, add() {}, remove() {} } });
-  const containers = { goalBar: fake(), queueDock: fake() };
+  const goalToggles = [];
+  const queueToggles = [];
+  const fake = (rec) => () => ({ innerHTML: '', hidden: true, offsetHeight: 120, querySelector: () => null, classList: { toggle(...a) { rec.push(a) }, add() {}, remove() {} } });
+  const containers = { goalBar: fake(goalToggles)(), queueDock: fake(queueToggles)(), goalToggles, queueToggles };
   const classState = {};
   const cssVars = {};
   const document = {
@@ -114,10 +116,10 @@ function buildDockSandbox() {
     `
     const L={
       goalPhaseActive:'进行中',goalPhasePaused:'已暂停',goalPhaseBlocked:'受阻',goalPhaseComplete:'已完成',
-      goalRoundUnit:' 轮',goalPause:'暂停',goalResume:'恢复',goalEdit:'编辑',goalClear:'清除',goalSave:'保存',goalCancel:'取消',
+      goalRoundUnit:' 轮',goalPause:'暂停',goalResume:'恢复',goalEdit:'编辑',goalClear:'清除',goalSave:'保存',goalCancel:'取消',goalFold:'收起/展开',
       queueCount:'排队消息 {n} 条',queueImage:'图片',queueFile:'文件',queueUnrenderable:'[图片/文件]'
     }
-    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',goalBusy=false,goalEditing=false,goalEditText=''
+    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',goalBusy=false,goalEditing=false,goalEditText='',goalFolded=false
     const $=(id)=>containers[id]
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'goalOf')}
@@ -130,8 +132,11 @@ function buildDockSandbox() {
     return {
       goalBar: containers.goalBar,
       queueDock: containers.queueDock,
+      goalToggles: containers.goalToggles,
       setGoal(v){updateGoal(v)},
       setQueue(v){updateQueue(v)},
+      setFolded(v){goalFolded=v},
+      get folded(){return goalFolded},
       get goalHtml(){return containers.goalBar.innerHTML},
       get queueHtml(){return containers.queueDock.innerHTML},
     }
@@ -167,6 +172,35 @@ test('a goal without roundsStarted reads ? instead of the string null', () => {
   box.setGoal({ values: { goal: { ...GOAL, roundsStarted: null } } });
   assert.ok(box.goalHtml.includes('? / 256 轮'), 'the missing counter renders as ?');
   assert.doesNotMatch(box.goalHtml, /null/, 'no JavaScript null leaks into the page');
+});
+
+test('the goal card folds its full text behind a chevron and back again', () => {
+  const box = buildDockSandbox();
+
+  box.setGoal({ values: { goal: GOAL } });
+  assert.equal(box.folded, false, 'a fresh goal starts unfolded');
+  assert.match(box.goalHtml, /data-goal-action="fold"/, 'the head row carries the fold chevron');
+  assert.match(box.goalHtml, /class="goal-text" data-goal-action="edit"/,
+    'the objective paints as a full text box that is itself the edit affordance');
+  assert.equal(box.goalToggles.at(-1)[1], false, 'the unfolded render does not force the folded class');
+
+  box.setFolded(true);
+  box.setGoal({ values: { goal: GOAL } });
+  assert.equal(box.folded, true, 'the fold state is remembered');
+  assert.deepEqual(box.goalToggles.at(-1), ['is-folded', true],
+    'a folded render flags the bar for the stylesheet to hide the text box');
+});
+
+test('the goal card enters editing from the text box and auto-saves on blur', () => {
+  assert.ok(js.includes('<div class="goal-text" data-goal-action="edit">'),
+    'tapping the objective box enters the editor');
+  assert.ok(js.includes('data-goal-action="fold"'), 'the chevron rides the same action bus');
+  assert.ok(js.includes('class="goal-back" data-goal-action="cancel"'),
+    'the editor leads with a back arrow that cancels without saving');
+  assert.ok(js.includes("$('goalBar').addEventListener('pointerdown'"),
+    'a tap on cancel is armed before blur so blur does not auto-save');
+  assert.ok(js.includes("$('goalBar').addEventListener('focusout'"),
+    'blur outside the card auto-saves the edited objective');
 });
 
 test('the queue dock paints the count and per-row previews, and hides when empty', () => {
@@ -227,7 +261,7 @@ function buildQueueActionSandbox(rpc) {
     'toasts',
     `
     const L={queueEditFailed:'编辑失败',queueRemoveFailed:'撤回失败',queueSteerFailed:'发送失败',queueCount:'排队消息 {n} 条',queueImage:'图片',queueFile:'文件',queueUnrenderable:'[图片/文件]',queueEdit:'编辑',queueSave:'保存',queueCancel:'取消',queueRemove:'撤回',queueSteer:'立刻发送'}
-    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',activeSession='s1',streamProjections=null
+    let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',goalBusy=false,goalEditing=false,goalEditText='',goalFolded=false,activeSession='s1',streamProjections=null
     // A queue action now also kicks the transcript leg (user 2026-10-19: 「发送」后
     // 显示很慢), so the sandbox has to carry those three names: the poll kick, the
     // history repaint, and the dedupe key it clears.
