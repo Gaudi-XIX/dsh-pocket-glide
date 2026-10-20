@@ -79,7 +79,7 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
     ${[
       'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
       'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
-      'isQuestionUnread',
+      'isNoticeUnread',
       'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'wsRunning', 'wsGlyphOf', 'sessionModelLabel',
       'readLastMessageMap', 'pruneLastMessageMap', 'noteSessionMessageAt',
       'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank', 'wsHeadTimeAt',
@@ -136,8 +136,9 @@ test('rank: error beats question beats finished-unread', () => {
   ]
   assert.deepEqual(
     headFlags(listSandbox({ summaries: all, ledger: readLongAgo })),
-    [L.wsError, L.wsQuestion],
-    'the failed turn leads and the head shows every kind it found (capped by WS_FLAGS_MAX)',
+    [L.wsError, L.wsQuestion, L.wsNewDone],
+    // 2026-10-20 用户裁定：三类都要显示出来（旧 WS_FLAGS_MAX=2 会把第三类切掉）。
+    'the failed turn leads and the head shows every kind it found',
   )
   const withoutError = all.filter((item) => item.sessionId !== 'a')
   assert.deepEqual(headFlags(listSandbox({ summaries: withoutError, ledger: readLongAgo })), [L.wsQuestion, L.wsNewDone], 'then a waiting turn, then the unread finish')
@@ -172,27 +173,41 @@ test('T2 an error the reader already saw stops nagging the head (2026-10-14 手�
   assert.ok(markup.includes('task-row is-error'), 'the row still shows its error glyph — the fact is visible, the nag is gone')
 })
 
-test('a question the reader already opened stops nagging the head (2026-10-20 置顶规则)', () => {
-  // User ruling (m00126②): 「置顶里面应该关注的是：没有看的、没有回答的提问……只要这些
-  // 都已经点了，上面就不应该再显示」. The question badge used to be unconditional, so a
-  // question the reader had seen (and every question asked while the turn stayed
-  // running) nagged forever. A question is a running turn by construction, so it
-  // cannot ride isSessionUnread — that helper returns false for running rows.
+test('a question keeps nagging the head until it is answered, read or not (2026-10-20 徽标口径 (a))', () => {
+  // User ruling (m00623(a), verbatim): 「提问：理论上讲，提问不分已读未读，只要有提问就
+  // 都要显示出来」. This REPLACES the m00126② gate that this test used to pin — a read
+  // question went quiet there, and the user called that wrong on the phone. The only
+  // exclusion left is the focused chat: the reader is answering it right there.
   const asking = [row({ sessionId: 'a', awaitingQuestion: true, updatedAt: ago(1) })]
   assert.equal(asking[0].running, undefined, 'the row is NOT flagged running — only awaiting')
   assert.deepEqual(headFlags(listSandbox({ summaries: asking, ledger: {} })), [L.wsQuestion], 'never opened → the head names it')
-  assert.deepEqual(headFlags(listSandbox({ summaries: asking, ledger: { a: ago(30) } })), [L.wsQuestion], 'opened BEFORE the question landed → still unread')
-  assert.deepEqual(headFlags(listSandbox({ summaries: asking, ledger: { a: ago(0.5) } })), [], 'opened AFTER it landed → read, quiet')
+  assert.deepEqual(headFlags(listSandbox({ summaries: asking, ledger: { a: ago(30) } })), [L.wsQuestion], 'opened BEFORE the question landed → named')
+  assert.deepEqual(headFlags(listSandbox({ summaries: asking, ledger: { a: ago(0.5) } })), [L.wsQuestion], 'opened AFTER it landed and still unanswered → still named')
   assert.deepEqual(
     headFlags(listSandbox({ summaries: asking, ledger: { a: ago(0.5) }, activeSession: 'a' })),
     [],
-    'and the chat being answered on screen never badges itself',
+    'the one exception: the chat being answered on screen never badges itself',
   )
-  // Same gate holds when the question row also carries the running flag, which is
-  // the shape that made isSessionUnread the wrong helper here.
-  const runningAsk = [row({ sessionId: 'a', awaitingQuestion: true, running: true, updatedAt: ago(1) })]
-  assert.deepEqual(headFlags(listSandbox({ summaries: runningAsk, ledger: { a: ago(0.5) } })), [], 'read running question → quiet')
-  assert.deepEqual(headFlags(listSandbox({ summaries: runningAsk, ledger: { a: ago(30) } })), [L.wsQuestion], 'unread running question → still nags')
+  // gate (b) is the opposite: a read ERROR goes quiet, even though the question
+  // beside it does not — the two kinds are not one rule.
+  const readError = [row({ sessionId: 'e', error: true, updatedAt: ago(1) })]
+  assert.deepEqual(headFlags(listSandbox({ summaries: readError, ledger: { e: ago(0.5) } })), [], 'a read error is quiet (gate b)')
+  assert.deepEqual(headFlags(listSandbox({ summaries: readError, ledger: { e: ago(30) } })), [L.wsError], 'an unread error is named')
+})
+
+test('an error still badges a row the host left running (2026-10-20 真机复验)', () => {
+  // Verbatim (user, m00607): 「我刚刚专门挑了一个错误的对话，它报错了，我没读，工作区标题
+  // 栏上面不显示」. The host keeps running:true on the turn that failed (turn/end with
+  // kind error does not clear it), and isSessionUnread bails out at the top for any
+  // running row — so the badge vanished. Error now rides isNoticeUnread.
+  const failed = [row({ sessionId: 'a', error: true, running: true, updatedAt: ago(1) })]
+  assert.deepEqual(headFlags(listSandbox({ summaries: failed, ledger: {} })), [L.wsError], 'running + failed + never opened → the head says so')
+  assert.deepEqual(headFlags(listSandbox({ summaries: failed, ledger: { a: ago(30) } })), [L.wsError], 'running + failed + opened before → still unread')
+  assert.deepEqual(headFlags(listSandbox({ summaries: failed, ledger: { a: ago(0.5) } })), [], 'and once read it goes quiet like any other error')
+  // The running veto still owns the finished-unread notice: a row that is busy has
+  // not finished anything to announce.
+  const busy = [row({ sessionId: 'b', running: true, updatedAt: ago(1) })]
+  assert.deepEqual(headFlags(listSandbox({ summaries: busy, ledger: {} })), [], 'a running row is not a fresh finish')
 })
 
 test('a sidebar head has only two fallback stories: in progress, or nothing running', () => {

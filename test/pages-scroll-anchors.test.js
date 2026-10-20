@@ -413,7 +413,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
   const body = [
     'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
     'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
-    'isQuestionUnread',
+    'isNoticeUnread',
     'readLastMessageMap', 'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank', 'wsHeadTimeAt',
     // T5: renderWorkspaces reads the tail line through tailTextOf — extract the real one.
     'tailTextOf',
@@ -430,7 +430,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     const L=${JSON.stringify({ noWorkspaces: 'none', noTasksHint: 'hint', newChat: 'new', untitled: 'untitled', clockMd: '{m}/{d}', clockYmd: '{y}-{m}-{d}', moreRows: '{n} more', wsNewDone: 'New', wsQuestion: 'Question', wsError: 'Error' })}
     const BLANK_ROW_VISIBLE_MS=${24 * 60 * 60 * 1000}
     const LIST_ROWS_MAX=${25}
-    const WS_FLAGS_MAX=${2}
+    const WS_FLAGS_MAX=${3}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200
     const UNREAD_RECENCY_MS=${Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])}
     // 12h 窗与未读点无关：此档钉 ledger 语义，窗口豁免防 fixture 新旧把行藏进「更多」。窗口钉在 ROWS-RECENT。

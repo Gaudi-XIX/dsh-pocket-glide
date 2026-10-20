@@ -225,7 +225,7 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'fieldText')}
     ${extractFunction(js, 'sessionModelLabel')}
     ${extractFunction(js, 'isSessionUnread')}
-    ${extractFunction(js, 'isQuestionUnread')}
+    ${extractFunction(js, 'isNoticeUnread')}
     ${extractFunction(js, 'readLastMessageMap')}
     ${extractFunction(js, 'lastMessageAtOf')}
     ${extractFunction(js, 'lastMessageTimeOf')}

@@ -6,9 +6,20 @@
 
 ## 未发布（工作树）
 
+**工作区头徽标口径按真机复验改正**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-20 真机复验两条：①「我刚刚专门挑了一个错误的对话，它报错了，我没读，工作区标题栏上面不显示」②「如果有已完成的消息，标题栏上面还是显示'正在进行中'，这和我的设定就不符」）。
+
+- **用户新口径（m00623，取代同日 m00126②）**：「工作区标题栏的显示规则应该是：只要这个工作区里面有以下内容，都要显示出来：1. 未读的新消息 2. 未读的错误 3. 提问」＋「(a) 提问：理论上讲，提问不分已读未读，只要有提问就都要显示出来。(b) 错误和已完成：肯定是分已读和未读的」。即提问徽标**不设已读门禁**（上一节写的「提问已读即静」被真机判为错），错误与已完成都过未读门禁，三类同时出现时都要画出来。
+- **① 未读错误在 running 行上也出现**：`isQuestionUnread` 改名 `isNoticeUnread`（逻辑一字未改：与 `isSessionUnread` 同构，只差「不按 running 一票否决」），`wsFlagOf` 的 error 分支由 `isSessionUnread` 改走它。根因：报错的那一轮宿主经常仍把行标成 `running:true`（`turn/end` 的 error 不落 `running=false`），而 `isSessionUnread` 首句 `if(!summary||summary.running||summary.blank)return false` 直接否决 ⇒ 徽标消失。running 否决只该管「新完成」提醒（还在忙就别喊完成了），不该管错误。
+- **② 提问不论读过与否都显示**：`wsFlagOf` 的 awaiting 分支去掉未读门禁，只保留 `activeId` 排除（人正在那个会话里回答，徽标不该再喊）。
+- **③ 三类徽标不再被截断**：`WS_FLAGS_MAX` 2→3。cap=2 时一个工作区同时有「未读错误＋提问＋未读新完成」会静默丢掉第三类，与用户「都要显示出来」直接冲突。
+- **未动的**：`taskState` 仍对 error 返回 `'error'`、行的红字形不撤（「不能把错误改成已完成」是行的状态，「不能一直显示错误」是头的提醒，两者分离）；`wsGlyphOf` 的兜底两态、`wsHeadTimeAt` 的头时钟均按上一节，本笔未改。
+- **计量账**：`ASSET_BUDGET_BYTES` 保持 376_000（本笔不动该常量）。本笔后实测壳字节 zh 375 131（css 55 217 + js 319 914）/ en 375 049（css 55 217 + js 319 832），相对「一 Bot 一行」基线（zh 374 315 / en 374 233）净 +816 B，余量 869 B。
+- **回归锁**：`test/workspace-head-notices.test.js` 改写 2 条旧口径用例（rank 那条由 `[error, question]` 改为三类全出；「提问已读即静」那条按 (a) 反转为「读过也显示」并补 (b) 的读后错误仍静）＋新增 1 条「running 行上的未读错误仍出徽标、running 行不算新完成」；`test/pages-scroll-anchors.test.js` 沙箱 `WS_FLAGS_MAX` 同步为 3、抽取名单改 `isNoticeUnread`；`test/subagent-session-dom-assertions.test.js` 抽取名单同步改名。全量 `node --test --test-concurrency=1 test/*.test.js` = **1342 tests / 1340 pass / 0 fail / 2 skipped**（共享工作树含他线在途改动，非净检出）。
+- **已知边界（未修）**：错误标记由 `lib/session-stream.js` 的进程内 store 累积（`sessionErrorStores` 是 WeakMap，容量 16），**宿主重启后、重启前发生的错误无法回溯显示**；某会话自重启起没被 follow 流订阅过就不会有 `lastError`，头也不出错误徽标。
+
 **工作区头三处显示裁定**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-20 三问：①「如果我置顶了比如前天的会话，它就会只显示前天的时间」②「已经阅读过的错误会话，不能在会话里面把错误改成已完成……置顶里面应该关注的是没有看的提问、没有看的错误、没有阅读的新回答」③「最终的显示状态应该只有两种」）。
 - **① 置顶不拖回工作区头时钟**：新增 `wsHeadTimeAt`，头时钟取全部行中最新时间戳而非置顶行，置顶只影响阅读顺序、不冒充「最后说话时间」，无时钟时不输出空 span。
-- **② 提问已读即静**：新增 `isQuestionUnread`（与 `isSessionUnread` 同构但去掉 running/blank 早退），awaiting 提问读过即不再进工作区头徽标；error 仍由 `isSessionUnread` 门控，状态与徽标分离。
+- **② 提问已读即静**：新增 `isQuestionUnread`（与 `isSessionUnread` 同构但去掉 running/blank 早退），awaiting 提问读过即不再进工作区头徽标；error 仍由 `isSessionUnread` 门控，状态与徽标分离。**（此条口径已被上一节推翻：2026-10-20 真机复验裁定提问不分已读未读，该函数改名为 `isNoticeUnread` 且 awaiting 分支去掉门禁；原文保留仅为记录演变。）**
 - **③ 工作区头仅两态**：`wsGlyphOf` 收敛混态回落，只剩「正在进行的对话」与「整个工作区没有正在进行的对话」两态；空白工作区保留现状空白虚线，不算完成。
 - **计量账**：`ASSET_BUDGET_BYTES` 367_000→371_000，HEAD+本笔实测 zh 367 944（css 55 217 + js 312 727）/ en 367 862，余量 ~3.1 KB。
 - **回归锁**：`test/workspace-head-notices.test.js` 新增 5 条（本批 74/74），净检出全量 `node --test --test-concurrency=1 test/*.test.js` = 1324 pass / 0 fail / 4 skipped。
