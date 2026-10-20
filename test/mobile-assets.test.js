@@ -1060,7 +1060,14 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   注释 5 行 + 函数 1 行 + 接线 1 行。实测 zh 380 126（css 56 050 + js 324 076）/
 //   en 380 046（css 56 050 + js 323 996）；相对上一条基线净 +1 191 B（js +1 191）。
 //   取 380 200（余量 74 B（zh）/ 154 B（en））。
-const ASSET_BUDGET_BYTES = 380_200
+// 2026-10-20 冷开取数四项（m01424 定稿）：boot 阶梯的计数从「答复落地才开始」改成
+//   「请求发出即开跑」——新增 countCrawl（在途自走的里程表，CRAWL_MS 110ms 一格、
+//   CRAWL_MAX_MS 8s 到点自停，countUp 从它当前所在的位置接管且不倒退）与
+//   countStepIndex（按 bootSteps 行数判断本方法落在第几行，5 行配对页 / 4 行重连页）。
+//   实测 zh 381 793（css 56 093 + js 325 700）/ en 381 713（css 56 093 + js 325 620）；
+//   相对上一条基线净 +1 667 B（js +1 624 / css +43）。
+//   取 381 950（余量 157 B（zh）/ 237 B（en））。
+const ASSET_BUDGET_BYTES = 381_950
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

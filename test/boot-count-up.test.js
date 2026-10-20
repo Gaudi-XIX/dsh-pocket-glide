@@ -25,7 +25,8 @@ const grab = (start, end) => {
 const ORGANS =
   grab('const COUNT_UP_MS=', 'function stepCountEl') +
   grab('function stepCountEl(', 'function setCount(') +
-  grab('function setCount(', '\nconst rpc=')
+  grab('function setCount(', 'const CRAWL_MS=') +
+  grab('const CRAWL_MS=', '\nconst rpc=')
 
 // Build a bootSteps host with `rows` rows, each carrying one .boot-step-count span.
 function makeWorld({ reduced = false } = {}) {
@@ -45,7 +46,7 @@ function makeWorld({ reduced = false } = {}) {
   // walked in a handful of frames instead of real time.
   let now = 0
   const DateShim = { now: () => now }
-  const run = new Function('document', 'matchMedia', 'requestAnimationFrame', 'Date', `${ORGANS};return {countUp,setCount,stepCountEl}`)
+  const run = new Function('document', 'matchMedia', 'requestAnimationFrame', 'Date', `${ORGANS};return {countUp,countCrawl,setCount,stepCountEl}`)
   const api = run(document, matchMedia, requestAnimationFrame, DateShim)
   const pump = (frames = 40) => {
     for (let i = 0; i < frames && queue.length; i += 1) {
@@ -114,6 +115,36 @@ test('both bootstrap pages carry the climbing organs exactly once', () => {
     assert.equal(count(scripts, 'function stepCountEl('), 1, `${name}: one stepCountEl definition`)
     assert.ok(count(scripts, 'countUp(stepCountEl(') >= 2, `${name}: at least the ws + session counts climb`)
   }
+})
+
+test('countCrawl moves the row while the request is still out', () => {
+  const { api, pump, text } = makeWorld()
+  api.countCrawl(0, zhFmt)
+  assert.equal(text(0), '', 'the first tick is queued, not written eagerly')
+
+  pump(1)
+  assert.match(text(0), /\d+ 个工作区/, 'the row is already moving before any answer')
+
+  const first = Number.parseInt(text(0), 10)
+  pump(3)
+  const later = Number.parseInt(text(0), 10)
+  assert.ok(later > first, `one tick per crawl frame: ${first} -> ${later}`)
+})
+
+test('countUp supersedes the crawl and the landing value is never overwritten', () => {
+  const { api, pump, text } = makeWorld()
+  api.countCrawl(0, zhFmt)
+  pump(3)
+  api.countUp(api.stepCountEl(0), 7, zhFmt)
+  pump(40)
+  assert.equal(text(0), '7 个工作区', 'the crawl stops once the real count lands')
+})
+
+test('the crawl respects prefers-reduced-motion by never starting', () => {
+  const { api, pump, text } = makeWorld({ reduced: true })
+  api.countCrawl(0, zhFmt)
+  pump(3)
+  assert.equal(text(0), '', 'no odometer for a reader who asked for less motion')
 })
 
 test('the ladder rows start blank, so no number is shown before it is measured', () => {
