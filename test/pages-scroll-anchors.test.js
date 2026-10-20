@@ -36,13 +36,18 @@ function extractFunction(source, name) {
 }
 
 function fakeBox({ scrollHeight = 5000, scrollTop = 0, clientHeight = 800 } = {}) {
-  return {
+  const box = {
     scrollHeight, scrollTop, clientHeight,
     innerHTML: '',
     getBoundingClientRect() { return { top: 0, bottom: this.clientHeight, height: this.clientHeight } },
     querySelectorAll() { return [] },
     querySelector() { return null },
   }
+  // paintMessages measures the reader against isNearBottom's settled-height cap,
+  // which reads the live box through $('messages'). Give the sandbox a live reader
+  // of the same object so the band is the one under test.
+  box.$ = () => box
+  return box
 }
 
 // ------------------------------------------------- 1. follow machine organs
@@ -236,6 +241,7 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
   const body = [
     'transcriptHasContent', 'olderButtonHtml', 'loadingShell', 'transcriptWaitHtml',
     'showTranscriptRetry', 'paintMessages', 'esc', 'markHistoryTail', 'readTranscriptAnchor', 'restoreTranscriptAnchor',
+    'transcriptDistance', 'isNearBottom',
   ]
     .map((name) => extractFunction(js, name))
     .join('\n')
@@ -250,6 +256,10 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
     const turnOpenState=new Map()
     const L={}
     const $=()=>box
+    const SCROLL_FOLLOW_PX=120,CV_TAIL_KEEP=8
+    let lastDistance=0,lastScrollHeight=0
+    function transcriptDistance(b){return b.scrollHeight-b.scrollTop-b.clientHeight}
+    function settledTranscriptHeight(){return box&&box.scrollHeight?box.scrollHeight:lastScrollHeight}
     function renderMessage(message){return '<div class="message '+message.role+'"></div>'}
     function syncScrollAnchors(){}
     ${body}
@@ -273,10 +283,23 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
   sandbox.paintMessages([{ role: 'user', blocks: [] }], false)
   assert.equal(box.scrollTop, 1000, 'unlocked: repaint keeps the reader where they are')
 
-  // explicit stick (send path) → bottom AND re-armed
+  // explicit stick (send path) while the reader sits far from the bottom:
+  // R3 (m00002/m00134) — the stick must NOT steal the position back. The old
+  // behaviour re-armed followStream and wrote scrollTop=scrollHeight, which is
+  // the "br then bt in the same frame" jump signature in the real log.
+  box.scrollTop = 1000
+  sandbox.follow = true
   sandbox.paintMessages([{ role: 'user', blocks: [] }], true)
-  assert.equal(box.scrollTop, box.scrollHeight, 'stickToBottom forces the bottom')
-  assert.equal(sandbox.follow, true, 'a forced stick re-arms the follow')
+  assert.equal(box.scrollTop, 1000, 'R3: a reader away from the bottom keeps their place even when the caller asks to stick')
+  assert.equal(sandbox.follow, false, 'R3: a forced stick does not re-arm a follow the reader left')
+
+  // a caller that asks to stick while the reader IS at the bottom still sticks
+  // and re-arms — the send path must keep working for a reader who is following.
+  box.scrollTop = 5000 - 800
+  sandbox.follow = true
+  sandbox.paintMessages([{ role: 'user', blocks: [] }], true)
+  assert.equal(box.scrollTop, box.scrollHeight, 'a forced stick at the bottom still lands there')
+  assert.equal(sandbox.follow, true, 'a forced stick at the bottom still re-arms the follow')
 
   // unlocked but within 90px of the bottom: the pre-paint near-bottom check no
   // longer overrules the unlock (this is the old behaviour's blind spot)

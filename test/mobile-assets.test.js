@@ -1051,7 +1051,11 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   实测 zh 378 265（css 56 050 + js 322 215）/ en 378 185（css 56 050 + js 322 135）；
 //   相对上一条账面 zh 377 578 / en 377 498 净 +687 B（css 0 / js +687）。
 //   取 378 700（余量 435 B（zh）/ 515 B（en））。
-const ASSET_BUDGET_BYTES = 378_700
+// 2026-10-20 R3 上滑不拽底（m00002/m00134）：paintMessages 贴底分支加 readerAway 一门，
+//   注释 6 行 + 逻辑 2 行。实测 zh 378 935（css 56 050 + js 322 885）/ en 378 855
+//   （css 56 050 + js 322 805）；相对上一条基线净 +670 B（js +670 / css 0）。
+//   取 379 100（余量 165 B（zh）/ 245 B（en））。
+const ASSET_BUDGET_BYTES = 379_100
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {
