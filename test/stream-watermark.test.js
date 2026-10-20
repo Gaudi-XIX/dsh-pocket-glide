@@ -84,7 +84,7 @@ test('AC-A1 the page-wide watermark is gone from the script', () => {
 // ---------------------------------------------------------------------------- A-3
 
 test('A-3 leaving a session releases that session watermark', () => {
-  const closing = between('function closeSessionStream()', 'function applyHistory(')
+  const closing = between('function closeSessionStream(', 'function applyHistory(')
   assert.ok(closing.includes('streamWatermarks.delete(activeSession)'), 'the watermark goes with the stream')
   assert.ok(
     closing.indexOf('pendingSyncTimer=null;if(activeSession)streamWatermarks.delete(activeSession)') >= 0,
@@ -424,7 +424,7 @@ test('AC-D7 the reset list, asserted at its present value', () => {
   // pair as "not done", never as "done".
   assert.equal(after.fillBusy, true, 'fillBusy is NOT reset here today')
   assert.equal(after.olderRunBusy, true, 'olderRunBusy is NOT reset here today')
-  const closing = between('function closeSessionStream()', 'function applyHistory(')
+  const closing = between('function closeSessionStream(', 'function applyHistory(')
   assert.ok(!closing.includes('fillBusy'), 'the source says the same')
   assert.ok(!closing.includes('olderRunBusy'), 'and so for the older-page loop')
   assert.ok(

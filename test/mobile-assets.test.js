@@ -273,7 +273,7 @@ test('AC-PERF an aborted RPC reports its own timeout and a reconnect never doubl
   // can never overlap.
   const watch = slice(js, 'function armStreamStaleWatch(sessionId)', 'function showTranscriptRetry()')
   assert.ok(
-    watch.includes('closeSessionStream();schedulePoll();armStreamRetry(sessionId)'),
+    watch.includes('closeSessionStream(true);schedulePoll();armStreamRetry(sessionId)'),
     'the stale path closes the stream, hands back to the poll, then re-arms',
   )
 
@@ -364,7 +364,7 @@ test('AC-PERF an aborted RPC reports its own timeout and a reconnect never doubl
   // session must not abort an in-flight RPC.
   assert.ok(!/sessionAbort|abortSession/i.test(js), 'no page-side session abort table ships')
   assert.ok(
-    !slice(js, 'function closeSessionStream()', 'function applyHistory(').includes('abort('),
+    !slice(js, 'function closeSessionStream(', 'function applyHistory(').includes('abort('),
     'leaving a session does not abort in-flight RPCs',
   )
 })
