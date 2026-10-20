@@ -275,6 +275,23 @@ test('tail stick: 首趟没有 pinned，照旧钉到底并带着写下的值继�
   assert.deepEqual(s.marks, ['ts', 'ts'], 'and each pass stamps, carrying the value it wrote')
 })
 
+// R4（2026-10-20 m01972「刚刚又跳了」）：入口那趟不带 pinned，读者出口从第二趟才生效，
+// 于是贴底写后 120ms 内读者一滑走就被钉回去一次＝橡皮筋（真机 22:42:34
+// `sc…→4577 jk@737279|551 ts@737279|5128`，123ms 后 `rl` 才解除）。
+// 现在入口把「此刻的 scrollTop」记成 pinned（调用它的那次贴底写刚写完这个值），
+// 首趟就能比对；内容长高只增 scrollHeight 不动 scrollTop，所以合法重钉不受影响。
+test('tail stick: 入口即记下 pinned——贴底写后第一趟读者已滑走就不再钉回', () => {
+  const s = buildTailStick(1000)
+  s.settleTailStick(s.box, 4)
+  const queuedBefore = s.timers.length
+  s.box.scrollTop = 500 // 读者在 120ms 窗内滑走
+  s.tick()
+  assert.equal(s.follow(), false, 'the escape fires on the first pass, not the second')
+  assert.deepEqual(s.marks, ['rl'], 'and it is stamped')
+  assert.equal(s.box.scrollTop, 500, 'the reader keeps his position — the first pass does not re-stick')
+  assert.equal(s.timers.length, queuedBefore - 1, 'the chain terminates on the first pass')
+})
+
 test('tail stick: 读者把页面拽离底部时链条自己解除跟随并终止', () => {
   const s = buildTailStick(1000)
   s.settleTailStick(s.box, 4)

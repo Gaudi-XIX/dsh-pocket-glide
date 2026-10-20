@@ -6,6 +6,14 @@
 
 ## 未发布（工作树）
 
+**贴底重钉链首趟就认出读者已滑走（R4，跳跃残留的最后一根橡皮筋）**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-20 22:43 原话：「刚刚又跳了」）。
+
+- **真机证据**（22:42:34，device r2AhHude1h，壳 pocket-909ab20f393f）：`pt@737157|62|14|32|21 bt@737158|5128|5863|735` 整屏重绘写到底 → 读者上滑 `sc…→4577`（−551px）→ 仅 121ms 后 `ts@737279|5128` 把他**钉回 5128** → 再 123ms 才 `rl@737402` 解除。读者出口（`rl` 门）在链条第二趟才生效，首趟无条件写回盒底。
+- **R1/R2/R3 都守不住这里**：R3 的 `readerAway` 门守的是 `paintMessages` 那一次贴底写本身（bt/bf 分支）；`bt` 写完之后交给 `settleTailStick(box,4)` 的四趟重钉链（对付 content-visibility 估行转真行时 scrollHeight 继续长），链条入口那趟 `pinned` 是 undefined，`if(pinned!==undefined&&…)` 整个跳过——首趟必钉。
+- **改法**（一行，净增 43 B）：`settleTailStick` 入口拿令牌那趟顺手 `if(pinned===undefined)pinned=box.scrollTop`——调用它之前那次贴底写刚把 scrollTop 写成底，此刻值就是合法基准。判据本身不动：内容长高只增 scrollHeight 不动 scrollTop，所以「scrollTop 变小」仍只可能是读者动手；合法重钉场景（进会话/发送后）不受影响，视口变高钳位（dist=0<120）与塌盒（无可滚范围）两条边界照旧。
+- **计量账**：`ASSET_BUDGET_BYTES` 保持 381_950；改后实测 zh 381 836（css 56 093 + js 325 743）/ en 381 756，余量 **114 B**。
+- **回归锁**：`test/pick-toggle-anchor-restore.test.js` 新增「入口即记下 pinned——贴底写后第一趟读者已滑走就不再钉回」＋原四条 tail stick 用例逐条复跑全绿。全量 `node --test --test-concurrency=1 test/*.test.js` = **1375 tests / 1373 pass / 0 fail / 2 skipped**（2026-10-20 23:1x）。
+
 **启动页三步计数改为爬升，不再整块蹦出**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-20 原话：「先显示数字，一个数字过一个数字，哒哒哒的效果」）。
 
 - **范围**：配对页与重连页共用的引导阶梯（`sharedStageScript()`），三处计数——工作区数、会话数、消息组数——由「答案到手就整串写死」改成 0→N 爬升；「已连接」「就绪」这类文字标签仍直写，不动画（`setCount` 保留原语义）。两页各一套阶梯，改在共享块里，一次覆盖两面。
