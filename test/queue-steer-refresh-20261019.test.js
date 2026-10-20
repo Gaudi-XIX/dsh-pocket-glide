@@ -168,6 +168,14 @@ function toolEvent(seq, turn, step, callId, name) {
   return { event: { seq, type: 'tool/call', data: { turn, step, callId, name, arguments: {} } } }
 }
 
+// A presented deliverable becomes the attachment card the phone draws under the
+// answer. The host stamps it with a clock (seq/time/turn) but pocket keeps it
+// stamp-less on the row — it is a unit member, not a timestamp of its own, so
+// it must travel with its answer instead of joining the time comparison.
+function presentedEvent(seq, turn, files) {
+  return { event: { seq, type: 'deliverables/presented', data: { turn, callId: 'call-1', files } } }
+}
+
 function buildSandbox() {
   const { js } = mobilePageAssets({ locale: 'zh' })
   const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime']
@@ -264,4 +272,39 @@ test('③ a user bubble without a stamp is never moved', () => {
   ])
   const rendered = sandbox.render()
   assert.deepEqual(rendered.map((m) => m._seq), [1, 2, 3])
+})
+
+// The 2026-10-20 report, extended: the previous answer carries an attachment
+// card, and the attachment has no clock of its own. The bubble must land above
+// the whole unit — answer card AND attachment together — never between them.
+test('③ an attachment card travels with its answer when a steered bubble moves up', () => {
+  const sandbox = buildSandbox()
+  sandbox.setStream([
+    userEvent(1, 1_000, '早先的一条'),
+    assistantEvent(2, 4_000, 1, 1, 'shows 25 failures, not the same reason as before.'),
+    presentedEvent(3, 1, [{ path: 'peer-quota-429.txt', size: 12, name: 'peer-quota-429.txt' }]),
+    userEvent(4, 1_500, '第二个也是显示的问题'),
+  ])
+  const rendered = sandbox.render()
+  assert.deepEqual(rendered.map((m) => m._seq), [1, 4, 2, 3],
+    'the bubble lands above the answer, and the attachment stays under its answer')
+  const presented = rendered.filter((m) => m.blocks?.some((b) => b.kind === 'presented'))
+  assert.equal(presented.length, 1, 'the attachment card is still present')
+  assert.equal(rendered.indexOf(presented[0]), 3,
+    'the attachment card sits under its answer, below the steered bubble')
+})
+
+// The mirror case: a new message typed AFTER the answer was finished must not
+// slide between the answer and its own attachment. It stays below the unit.
+test('③ a later message stays below an answer with an attachment, never inside it', () => {
+  const sandbox = buildSandbox()
+  sandbox.setStream([
+    userEvent(1, 1_000, '早先的一条'),
+    assistantEvent(2, 4_000, 1, 1, 'shows 25 failures, not the same reason as before.'),
+    presentedEvent(3, 1, [{ path: 'peer-quota-429.txt', size: 12, name: 'peer-quota-429.txt' }]),
+    userEvent(4, 9_000, '后来的新问题'),
+  ])
+  const rendered = sandbox.render()
+  assert.deepEqual(rendered.map((m) => m._seq), [1, 2, 3, 4],
+    'the later message stays below the unit; the attachment is never pushed above it')
 })
