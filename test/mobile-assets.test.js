@@ -1055,7 +1055,12 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   注释 6 行 + 逻辑 2 行。实测 zh 378 935（css 56 050 + js 322 885）/ en 378 855
 //   （css 56 050 + js 322 805）；相对上一条基线净 +670 B（js +670 / css 0）。
 //   取 379 100（余量 165 B（zh）/ 245 B（en））。
-const ASSET_BUDGET_BYTES = 379_100
+// 2026-10-20 pt 重绘形状探针（m01729 裁定）：paintMessages 入口接 paintProbe，输出
+//   pt@perf|n|prev|post|fl 样本，区分形态 F（重绘后 sh 塌 0）与形态 I（内容暴缩）。
+//   注释 5 行 + 函数 1 行 + 接线 1 行。实测 zh 380 126（css 56 050 + js 324 076）/
+//   en 380 046（css 56 050 + js 323 996）；相对上一条基线净 +1 191 B（js +1 191）。
+//   取 380 200（余量 74 B（zh）/ 154 B（en））。
+const ASSET_BUDGET_BYTES = 380_200
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {
