@@ -1018,6 +1018,9 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   session.history 一律按单 sessionId 取），折叠键只能是「标题 + 工作目录」。
 //   实测 zh 374 315（css 55 217 + js 319 098）/ en 374 233（css 55 217 + js 319 016）；
 //   父提交 01efd52 实测 zh 370 242 / en 370 160，本笔净 +4 073 B。取 376 000（余量 ~1.7 KB）。
+// 2026-10-20 附件卡/过程卡随所属回答整体落位（orderUserBubblesByTime 改按显示单元移动）：
+//   实测 zh 375 696（css 55 217 + js 320 479）/ en 375 614（css 55 217 + js 320 397）；
+//   父提交 c587a1d 实测 zh 375 131 / en 375 049，本笔净 +565 B。预算 376 000 不动，余 ~300 B。
 const ASSET_BUDGET_BYTES = 376_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
