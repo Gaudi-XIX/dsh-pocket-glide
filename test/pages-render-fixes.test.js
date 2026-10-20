@@ -837,3 +837,120 @@ test('BUG3 a send into an idle session still paints its own bubble', async () =>
   assert.equal(sandbox.bubbles(), 1, 'the ordinary echo is still drawn while the answer is pending')
   sandbox.accept()
 })
+
+// BUG-2 行为沙箱：真跑 selectModel / showSessionModel / renderSessionSettings /
+// pickRows，用一份合成 modelCatalog + 合成 streamProjections（故意持有旧模型 deepseek-v3，
+// 即修复前「上面」显示的那个陈旧值）。断言走两个真实显示出口：renderSessionSettings 产出的
+// 字段按钮文本、pickRows 产出的 is-on 行。
+function buildModelSelectionSandbox(opts) {
+  const body = 'async ' + extractFunction(js, 'selectModel').replace(/^async\s+/, '')
+  const show = extractFunction(js, 'showSessionModel')
+  const render = extractFunction(js, 'renderSessionSettings')
+  const rows = extractFunction(js, 'pickRows')
+  const settingsHost = { innerHTML: '', hidden: false, querySelectorAll: () => [] }
+  const make = new Function('box', `
+    let activeSession='s1',settingsBusy=${String(!!(opts && opts.settingsBusy))},settingsPick=''
+    let sessionSelection=null,sessionSummaries=[],streamProjections={values:{modelSelection:{next:{provider:'deepseek',model:'deepseek-v3'}}}}
+    let presets=[],currentPreset=null,draftPending=null
+    const catalog={
+      groups:[{id:'openrouter',models:[
+        {id:'deepseek-v3',name:'DeepSeek V3'},
+        {id:'gemini-2.5-pro',name:'Gemini 2.5 Pro',reasoning:{efforts:['low','high'],defaultEffort:'high'}}
+      ]}],
+      routableProviders:['openrouter'],
+      current:{provider:'deepseek',model:'deepseek-v3'},
+      default:{provider:'deepseek',model:'deepseek-v3'}
+    }
+    let modelCatalog=null
+    const L={model:'模型',reasoningEffort:'推理强度',reasoningEffortFixed:'固定为',noModels:'当前没有可选模型',settingsLoading:'加载中',settingsUpdated:'会话设置已更新'}
+    function $(id){return id==='sessionSettings'?box:{hidden:true,innerHTML:'',querySelectorAll:()=>[],setAttribute(){},dataset:{}}}
+    function esc(value){return String(value)}
+    function settingsHead(){return ''}
+    function showToast(){}
+    function showError(){}
+    function syncSettingsControls(){}
+    function normalizeSelection(value){if(!value||typeof value!=='object')return null;const provider=typeof value.provider==='string'?value.provider:'',model=typeof value.model==='string'?value.model:'';if(!provider||!model)return null;return{provider,model,...(typeof value.reasoningEffort==='string'&&value.reasoningEffort?{reasoningEffort:value.reasoningEffort}:{})}}
+    function sameModelSelection(a,b){return !!a&&!!b&&a.provider===b.provider&&a.model===b.model&&(a.reasoningEffort||'')===(b.reasoningEffort||'')}
+    function modelSelectionOf(projections){return normalizeSelection(projections&&projections.values&&projections.values.modelSelection&&projections.values.modelSelection.next)}
+    function modelEntryOf(provider,model){const group=(modelCatalog&&modelCatalog.groups||[]).find(item=>item.id===provider);const entry=group?group.models.find(item=>item.id===model):null;return{group,model:entry}}
+    function effortsOf(entry){return entry&&entry.model&&entry.model.reasoning&&Array.isArray(entry.model.reasoning.efforts)?entry.model.reasoning.efforts:[]}
+    function effortLabel(entry){return effortValue(entry)}
+    function currentSelection(){return sessionSelection??{}}
+    function draftModelSelection(){if(!activeSession&&draftPending&&draftPending.model)return{...draftPending.model};return sessionSelection??modelSelectionOf(streamProjections)}
+    function draftAgentPreset(){return null}
+    function presetIsLocked(){return false}
+    function presetLabel(preset){return preset&&preset.id||''}
+    function fieldText(value,fallback){const clean=String(value??'').replace(/\\s+/g,' ').trim();return clean||String(fallback??'')}
+    ${extractFunction(js, 'settingFieldHtml')}
+    ${extractFunction(js, 'settingReadonlyHtml')}
+    ${extractFunction(js, 'effortValue')}
+    function sessionRowValues(id){let row=sessionSummaries.find(item=>item.sessionId===id);if(!row){row={sessionId:id,updatedAt:0,blank:false,awaitingQuestion:false,values:{}};sessionSummaries.unshift(row)}return row.values}
+    async function rpc(method,payload){if(method==='session.selectModel')return{selected:{provider:payload.provider,model:payload.model}};return{}}
+    ${show}
+    ${render}
+    ${rows}
+    ${body}
+    return {
+      async selectModel(){
+        modelCatalog=catalog
+        await selectModel(modelEntryOf('openrouter','gemini-2.5-pro'))
+        return this
+      },
+      hostEvent(selection){modelCatalog=catalog;showSessionModel(selection);return this},
+      fieldText(){modelCatalog=catalog;renderSessionSettings();const match=box.innerHTML.match(/data-pick="model"[^>]*><span>([^<]*)</);return match?match[1]:''},
+      highlightedRow(){modelCatalog=catalog;const html=pickRows('model');const match=html.match(/class="setting-opt is-on" data-value="([^"]*)"/);return match?match[1]:''},
+      rowSelection(){const row=sessionSummaries.find(item=>item.sessionId==='s1');return row&&row.values&&row.values.modelSelection?row.values.modelSelection.next:null}
+    }
+  `)
+  return make(settingsHost)
+}
+
+// BUG-2 第二条症状（user m00002：「切换的那一瞬间只在下拉栏里显示已切换，不会在上面显示；
+// 只有发了消息以后才会」）：「当前模型」原本有两个事实源——下拉列表高亮读
+// modelCatalog.current（selectModel 一成功就乐观写入，点完立刻亮），字段按钮文本经
+// draftModelSelection() 回落 streamProjections 的宿主投影快照（只在 projections 同步/历史帧
+// 刷新）。于是同一面板里两处显示不同值，且要等发消息触发 turn/start → scheduleProjectionsSync
+// 才对齐。修法＝单一事实源：页面级 sessionSelection 承载当前选择，宿主投影、model/selection
+// 流事件与 selectModel 成功回包都汇到它（showSessionModel 是唯一写入口），所有显示点读同一个
+// currentSelection()。下面两条跑真函数：一条钉住写入面（回包必须同时改字段文本与列表高亮），
+// 一条钉住事件面（宿主在途事件不得被 settingsBusy 吞掉）。
+test('BUG2 a live model switch paints the field text and the list highlight from one source', async () => {
+  const sandbox = buildModelSelectionSandbox({ settingsBusy: false })
+  await sandbox.selectModel()
+  assert.equal(sandbox.fieldText(), 'Gemini 2.5 Pro',
+    'the field button names the switched model immediately — no waiting for a send')
+  assert.equal(sandbox.highlightedRow(), 'openrouter\u001fgemini-2.5-pro',
+    'and the pick list highlights that same row from the same source')
+  assert.deepEqual(sandbox.rowSelection(), { provider: 'openrouter', model: 'gemini-2.5-pro' },
+    'the session row projection still records the switch for the workspace list')
+})
+
+test('BUG2 a host model/selection event lands while a switch is in flight', async () => {
+  const sandbox = buildModelSelectionSandbox({ settingsBusy: true })
+  sandbox.hostEvent({ provider: 'openrouter', model: 'deepseek-v3.2' })
+  assert.equal(sandbox.fieldText(), 'deepseek-v3.2',
+    'the authoritative host value is not dropped because a page-initiated switch is still in flight')
+})
+
+// The two tests above run the real functions; these pin the words that keep the
+// one-source model in place. `settingsBusy` may only gate the submit entry (so a
+// double tap cannot fire two RPCs), never the host's authoritative value: that
+// gate is what made「点了没反应」与「上面不更新」两个症状同时出现。
+test('BUG2 the page holds one current selection, not a catalog shadow copy', () => {
+  assert.match(js, /sessionSelection=null,modelCatalog=null/,
+    'the current selection lives in its own page state variable')
+  assert.match(extractFunction(js, 'showSessionModel'), /sessionSelection=next/,
+    'the host event, the settings refresh and the switch echo all write the same variable')
+  assert.doesNotMatch(extractFunction(js, 'showSessionModel'), /settingsBusy/,
+    'no in-flight page switch may swallow the host authoritative value')
+  assert.doesNotMatch(extractFunction(js, 'showSessionModel'), /modelCatalog\.current/,
+    'the catalog keeps only directory data; the shadow copy is gone')
+  for (const name of ['refreshSessionSettings', 'openSessionSettings', 'selectModel']) {
+    assert.doesNotMatch(extractFunction(js, name), /modelCatalog\.current=/,
+      `${name} must not keep a second copy of the current selection on the catalog`)
+  }
+  assert.match(extractFunction(js, 'currentSelection'), /return sessionSelection\?\?{}/,
+    'every display point reads the one source')
+  assert.match(extractFunction(js, 'closeSessionStream'), /streamProjections=null;sessionSelection=null/,
+    'leaving a session drops its selection with the rest of the per-session state')
+})

@@ -203,6 +203,34 @@ test('the goal card enters editing from the text box and auto-saves on blur', ()
     'blur outside the card auto-saves the edited objective');
 });
 
+test('the goal card keeps the verb row beside the status pill in one head row', () => {
+  // 用户 m00423：上面小行（状态+轮数+下拉键）与下面小行（暂停/取消键）合并到一行——
+  //   左边＝任务状态＋任务轮数，右边依次＝下拉键、运行/暂停、取消。省掉一整行的垂直空间。
+  const box = buildDockSandbox();
+  const head = (html) => html.slice(0, html.indexOf('</div>') + 6);
+
+  box.setGoal({ values: { goal: GOAL } });
+  const active = head(box.goalHtml);
+  assert.match(active, /<span class="goal-phase">/, 'the head row opens with the status pill');
+  assert.match(active, /<span class="goal-rounds">/, 'the round counter sits beside the status pill');
+  const at = ['data-goal-action="fold"', 'data-goal-action="pause"', 'data-goal-action="clear"']
+    .map((needle) => active.indexOf(needle));
+  assert.ok(at.every((i) => i > 0), 'fold, pause and clear all ride the same head row');
+  assert.deepEqual(at, [...at].sort((a, b) => a - b),
+    'the verb order is fold, run/pause, cancel — never a second row');
+  assert.equal(box.goalHtml.indexOf('<div class="goal-actions"'), -1,
+    'no standalone verb row is left below the head');
+
+  box.setGoal({ values: { goal: { ...GOAL, goal: { ...GOAL.goal, phase: 'paused' } } } });
+  assert.match(head(box.goalHtml), /data-goal-action="resume"[\s\S]*data-goal-action="clear"/,
+    'a paused goal offers resume instead of pause, still inside the head row');
+
+  assert.match(css, /\.goal-actions\{[^}]*margin-left:auto/,
+    'the verb group is pushed to the row end, not stretched across it');
+  assert.match(css, /\.goal-bar \.queue-edit-box\{[^}]*min-height:56px/,
+    'the editor box is styled inside the goal card, where the composer scope cannot reach it');
+});
+
 test('the queue dock paints the count and per-row previews, and hides when empty', () => {
   const box = buildDockSandbox();
 

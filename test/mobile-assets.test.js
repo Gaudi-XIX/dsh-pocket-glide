@@ -1026,7 +1026,24 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   实测 zh 377 123（css 55 845 + js 321 278）/ en 377 043（css 55 845 + js 321 198）；
 //   父提交 c7ea6b0 实测 zh 375 696 / en 375 614（c7ea6b0 自述壳字节不变），本笔净 +1 427 B。
 //   取 377 500（余量 ~380 B）。
-const ASSET_BUDGET_BYTES = 377_500
+// 2026-10-20 Goal 条收成单行 + 编辑框补样式（用户 m00423：上面小行与下面小行「合并到上面那行」，
+//   点出来的编辑框「肯定是错误的」）：
+//   ① 动词组整段搬进 .goal-head，下拉键成为 .goal-actions 的第一个子元素，
+//      右对齐改由 .goal-actions{margin-left:auto} 承担（.goal-fold 去掉 margin-left:auto），
+//      不再有独立底行；② 编辑态 textarea 原本只有 `.goal-bar .queue-edit-box{margin-bottom:2px}`，
+//      而真正的规则挂在 `.composer .queue-edit-box` 下——#goalBar 不在 .composer 里，
+//      于是吃不到任何样式、渲染成浏览器默认 textarea（截图里被裁断的方框就是它）。
+//      现补齐 `.goal-bar .queue-edit-box`（min-height:56px/max-height:40vh/resize:none/
+//      1px var(--line) 边框/var(--card) 底色/13px 行高 1.5），并删掉已无用的
+//      `.goal-bar.is-editing{display:block}`。
+//   实测 zh 377 328（css 56 050 + js 321 278）/ en 377 248（css 56 050 + js 321 198）；
+//   相对上一条基线（zh 377 123 / en 377 043，本笔前半段）净 +205 B（css +205 / js 0）。
+//   预算 377 500 不动，余 172 B（zh）/ 252 B（en）。
+// 2026-10-20 本笔 Goal 条合并布局＋他线 sessionSelection 重构（工作树合流）：
+//   实测 zh 377 578（css 56 050 + js 321 528）/ en 377 498（css 56 050 + js 321 448）；
+//   父提交 c7ea6b0 自述 zh 375 696 / en 375 614，本笔净 +1 882 B（css +482 / js +1 400）。
+//   取 377 800（余量 ~222 B）。
+const ASSET_BUDGET_BYTES = 377_800
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {
