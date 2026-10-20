@@ -1043,7 +1043,15 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   实测 zh 377 578（css 56 050 + js 321 528）/ en 377 498（css 56 050 + js 321 448）；
 //   父提交 c7ea6b0 自述 zh 375 696 / en 375 614，本笔净 +1 882 B（css +482 / js +1 400）。
 //   取 377 800（余量 ~222 B）。
-const ASSET_BUDGET_BYTES = 377_800
+// 2026-10-20 Goal 编辑框自适应长高（工作树在途，未提交）：编辑态 textarea 由
+//   min-height:56px/max-height:40vh/overflow-y:auto 改成 min-height:40px/overflow:hidden，
+//   高度交给新增的 goalEditGrow(box) 按行数与 scrollHeight 现算，oninput 每敲一下重算。
+//   顺带修掉 goalEditGrow 里 /\n/g 被模板字符串吃掉反斜杠导致的 app.js 语法错误
+//   （整份脚本不执行 ⇒ 手机页永远停在 splash，2026-10-20 15:14–15:40 那轮故障）。
+//   实测 zh 378 265（css 56 050 + js 322 215）/ en 378 185（css 56 050 + js 322 135）；
+//   相对上一条账面 zh 377 578 / en 377 498 净 +687 B（css 0 / js +687）。
+//   取 378 700（余量 435 B（zh）/ 515 B（en））。
+const ASSET_BUDGET_BYTES = 378_700
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

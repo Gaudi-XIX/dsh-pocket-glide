@@ -227,8 +227,12 @@ test('the goal card keeps the verb row beside the status pill in one head row', 
 
   assert.match(css, /\.goal-actions\{[^}]*margin-left:auto/,
     'the verb group is pushed to the row end, not stretched across it');
-  assert.match(css, /\.goal-bar \.queue-edit-box\{[^}]*min-height:56px/,
+  // 自适应长高（goalEditGrow）：下限 40px（与脚本算高度的基准一致），涨到 40vh 就
+  // 由 max-height 夹住、overflow-y 接管滚动 —— 目标再长也不能把消息区顶没。
+  assert.match(css, /\.goal-bar \.queue-edit-box\{[^}]*min-height:40px[^}]*max-height:40vh[^}]*overflow-y:auto/,
     'the editor box is styled inside the goal card, where the composer scope cannot reach it');
+  assert.ok(js.includes("goalEditGrow(e.target)"),
+    'typing recomputes the editor height, not just the first focus');
 });
 
 test('the queue dock paints the count and per-row previews, and hides when empty', () => {
