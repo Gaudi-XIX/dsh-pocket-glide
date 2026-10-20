@@ -1016,8 +1016,8 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   （ctx 满后宿主自动新开一段，ds-bot parts.js；共标题共工作目录）折成一行，
 //   只留最新 part，避免一个 Bot 显示两三行。手机页无 part 概念（pages.js 的
 //   session.history 一律按单 sessionId 取），折叠键只能是「标题 + 工作目录」。
-//   实测 zh 372 942（css 55 217 + js 317 725）/ en 372 850，相对上一条基线
-//   净 +3 331 B。取 376 000（余量 ~3 KB）。
+//   实测 zh 374 315（css 55 217 + js 319 098）/ en 374 233（css 55 217 + js 319 016）；
+//   父提交 01efd52 实测 zh 370 242 / en 370 160，本笔净 +4 073 B。取 376 000（余量 ~1.7 KB）。
 const ASSET_BUDGET_BYTES = 376_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
