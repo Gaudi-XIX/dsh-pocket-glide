@@ -17,8 +17,12 @@
 //   POCKET_CDP_PORT=9333    — the debugging port (default 9333)
 //   POCKET_EDGE=<path>      — Edge/Chrome binary (default: auto-detect)
 //
-// Exit codes: 0 pass-or-gated-skip; 1 assertion failed; 2 environment (browser
-// or CDP unreachable — stderr prints a pasteable launch command).
+// Exit codes: 0 pass-or-gated-skip; 1 assertion failed (the geometry itself is wrong);
+// 2 environment (browser or CDP unreachable, OR a bootstrap precondition never held —
+// page did not boot / no session row / chat never opened / #messages never painted;
+// stderr prints a pasteable launch command). The split is the point: 1 is a product
+// claim, 2 is "this run proved nothing". Before 2026-10-22 every precondition failure
+// escaped as 1 and was read as a geometry regression.
 //
 // Scenarios (tasks T1-T3, red-first: all three were red on the d51a8c1 baseline
 // and flip green only when the matching fix lands):
@@ -65,6 +69,53 @@ const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 function gate() {
   const missing = [GATE_ENV, PORT_ENV, EDGE_ENV].filter((key) => !process.env[key]);
   return { on: process.env[GATE_ENV] === '1' && missing.length === 0, missing };
+}
+
+// 2026-10-22 (change 2026-10-19-feat-pocket-geometry-harness-bootstrap-gate).
+// The bootstrap precondition is a PURE function of four probes, so it can be exercised
+// without a browser. It answers exactly one question: IS THE VIEW UNDER TEST MEASURABLE?
+// It never judges geometry — a view that is present but ugly still passes. A field left
+// `undefined` is one the caller has not measured yet, so it is skipped.
+//   ready    — window.__pocketAppReady === true (also true on the workspace list, hence
+//              never sufficient on its own)
+//   entered  — 'clicked' | 'no-row' | other result of clicking the canned session row
+//   chatOpen — body carries .chat-open
+//   messages — count of `#messages > .message`, or -1 when #messages is absent
+function viewPrecondition({ ready, entered, chatOpen, messages }) {
+  if (ready === false) return 'the page never reached __pocketAppReady (bootstrap precondition failed — this is an environment failure, not an assertion)';
+  if (entered !== undefined && entered !== 'clicked') return `no session row to open (${entered}) — the harness cannot walk into the chat view`;
+  if (chatOpen === false) return 'the chat view never opened after clicking the session row (environment precondition)';
+  if (messages === -1) return '#messages is absent after entering chat — the view under test was never painted (environment precondition)';
+  return null;
+}
+
+// A gate that cannot fail is worse than no gate. Before any browser work, drive
+// viewPrecondition() with every shape it exists to catch and require that it rejects each
+// one; if a future edit weakens the gate this throws even though the browser run would
+// still look green. Same argument as subagent-session-dom.mjs selfCheck().
+function selfCheck() {
+  const unmeasurable = [
+    { ready: false, entered: 'clicked', chatOpen: true, messages: 2, why: 'a page that never booted' },
+    { ready: true, entered: 'no-row', chatOpen: false, messages: -1, why: 'no session row to click' },
+    { ready: true, entered: 'clicked', chatOpen: false, messages: 0, why: 'the chat view never opened' },
+    { ready: true, entered: 'clicked', chatOpen: true, messages: -1, why: 'chat-open but #messages absent' },
+  ];
+  for (const shape of unmeasurable) {
+    if (viewPrecondition(shape) === null) {
+      throw new Error(`selfcheck: viewPrecondition() accepted ${shape.why} — the bootstrap gate is hollow`);
+    }
+  }
+  // A gate that rejects everything is just as useless: an EMPTY session is a legal state,
+  // so 0 painted rows must still count as measurable.
+  for (const ok of [
+    { ready: true, entered: 'clicked', chatOpen: true, messages: 0 },
+    { ready: true, entered: 'clicked', chatOpen: true, messages: 7 },
+  ]) {
+    if (viewPrecondition(ok) !== null) {
+      throw new Error(`selfcheck: viewPrecondition() rejected a measurable view (${JSON.stringify(ok)}) — an empty session is legal`);
+    }
+  }
+  log('selfcheck: the bootstrap gate rejects all', unmeasurable.length, 'unmeasurable shapes and accepts a measurable one (a hollow gate would not)');
 }
 
 // ------------------------------------------------------------------ mock host
@@ -256,11 +307,16 @@ async function withPage(port, origin, fn) {
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
     await send('Page.navigate', { url: `${origin}/` });
     const deadline = Date.now() + 15000;
+    let ready = false;
     while (Date.now() < deadline) {
       const probe = await send('Runtime.evaluate', { expression: 'window.__pocketAppReady===true', returnByValue: true });
-      if (probe?.result?.value === true) break;
+      if (probe?.result?.value === true) { ready = true; break; }
       await wait(150);
     }
+    // Booting is a precondition, not an assertion: a page that never booted used to fail
+    // every scenario below and surface as exit 1, i.e. as a product regression.
+    const bootProblem = viewPrecondition({ ready });
+    if (bootProblem) throw new Error(`geometry harness: ${bootProblem}`);
     // 2026-10-19: the page no longer jumps into a conversation from the boot payload
     // (the `initialChat` first-byte jump was retired in 653f26c「冷开一律停主页」).
     // Every scenario below measures the CHAT view, so the harness walks in the way a
@@ -270,7 +326,8 @@ async function withPage(port, origin, fn) {
       expression: `(() => { const row = document.querySelector('button[data-action="open"]'); if (!row) return 'no-row'; row.click(); return 'clicked' })()`,
       returnByValue: true,
     });
-    if (entered?.result?.value !== 'clicked') throw new Error(`geometry harness: no session row to open (${entered?.result?.value})`);
+    const rowProblem = viewPrecondition({ ready, entered: entered?.result?.value });
+    if (rowProblem) throw new Error(`geometry harness: ${rowProblem}`);
     const chatDeadline = Date.now() + 15000;
     let chatOpen = false;
     while (Date.now() < chatDeadline) {
@@ -278,7 +335,18 @@ async function withPage(port, origin, fn) {
       if (probe?.result?.value === true) { chatOpen = true; break; }
       await wait(150);
     }
-    if (!chatOpen) throw new Error('geometry harness: the chat view never opened after clicking the session row');
+    // `chat-open` alone is not proof the transcript exists, and __pocketAppReady is true on
+    // the workspace list too — neither can stand in for "we are in the view under test".
+    // The measurable fact is that #messages itself was painted; how many rows it holds is a
+    // product question (an empty session is legal), so the count is logged for the reader
+    // and only a MISSING #messages fails the precondition.
+    const view = await send('Runtime.evaluate', {
+      expression: `(() => { const box = document.getElementById('messages'); return box ? box.querySelectorAll(':scope > .message').length : -1 })()`,
+      returnByValue: true,
+    });
+    const viewProblem = viewPrecondition({ ready, entered: entered?.result?.value, chatOpen, messages: view?.result?.value });
+    if (viewProblem) throw new Error(`geometry harness: ${viewProblem}`);
+    log('view', `#messages painted ${view?.result?.value} row(s) — chat-open + #messages present is the precondition; an empty session is legal, a missing transcript is not`);
     return await fn({
       send,
       evaluate: async (expression) => {
@@ -921,6 +989,10 @@ async function scenarioTodoPassthrough(host, port, failures) {
 // ----------------------------------------------------------------------- main
 
 async function main() {
+  // selfCheck() runs BEFORE the gate returns: if it sat after the skip branch, the default
+  // (gated-off) path would never exercise it and the "a gate that cannot fail" guarantee
+  // would be hollow by schedule. It needs no browser — viewPrecondition() is pure.
+  selfCheck();
   const { on, missing } = gate();
   if (!on) {
     console.log(
@@ -951,6 +1023,7 @@ async function main() {
   child.stderr.on('data', (chunk) => { stderr += String(chunk); });
 
   const failures = [];
+  let envError = null;
   const report = { browser, cdpPort: CDP_PORT, viewport: '390x844', scenarios: [] };
   try {
     const version = await waitForCdp(CDP_PORT);
@@ -998,6 +1071,14 @@ async function main() {
     } finally {
       await scrollHost.close();
     }
+  } catch (err) {
+    // 2026-10-22: main() used to have try/finally with no catch, so any throw from a
+    // scenario (host unreachable, row never painted, CDP dropped mid-run) escaped to the
+    // top-level await and killed the process with exit 1 — the SAME code as "an assertion
+    // failed". Worse, the report JSON was never printed, so the reader got a bare stack
+    // and no measurements. A precondition failure is environment, not geometry: catch it,
+    // keep the report, and return 2 so the two outcomes can never be confused again.
+    envError = err;
   } finally {
     await new Promise((resolve) => {
       if (child.exitCode !== null) return resolve();
@@ -1009,6 +1090,11 @@ async function main() {
   }
 
   console.log(JSON.stringify(report, null, 2));
+  if (envError) {
+    process.stderr.write(`GEOMETRY ERROR (environment precondition, NOT an assertion failure): ${envError && envError.message}\n`);
+    process.stderr.write('GEOMETRY NOTE: exit 2 means the view was never measurable — no geometry claim above is evidence either way.\n');
+    return 2;
+  }
   if (failures.length) {
     console.log('GEOMETRY FAIL:');
     for (const line of failures) console.log(`  - ${line}`);
