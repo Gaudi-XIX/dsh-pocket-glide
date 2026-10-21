@@ -499,7 +499,7 @@ test('B-8 a same-session rebuild keeps the drawn windows so the re-paint cannot 
   assert.ok(reopen.includes('closeSessionStream(true);openSessionStream(activeSession)'), 'so does the reopen path')
   const open = extractFunction(js, 'openSession')
   assert.ok(
-    open.includes('evictSessionCache()}closeSessionStream(activeSession===id)'),
+    open.includes('evictSessionCache()}if(activeSession&&activeSession!==id)resetEarlierParts();closeSessionStream(activeSession===id)'),
     'a re-entry for the session already open must not wipe what is on screen; a real switch still does',
   )
 })

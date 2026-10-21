@@ -91,7 +91,7 @@ test('A-3 leaving a session releases that session watermark', () => {
     'the release is the last thing closeSessionStream does',
   )
   assert.ok(
-    js.includes('closeSessionStream();closeSessionSettings();activeSession=null'),
+    js.includes('closeSessionStream();resetEarlierParts();closeSessionSettings();activeSession=null'),
     'and it runs while activeSession still names the session being left',
   )
   assert.ok(

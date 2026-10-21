@@ -553,3 +553,44 @@ test('with no earlier feed the transcript stays exactly the current window', () 
   const s = buildTranscriptSandbox({ events, feedPresent: false, pages: [[{ kind: 'user', text: 'old', seq: 500 }]] })
   assert.deepEqual(s.rows().map((r) => r._seq), [900], 'no rows are borrowed from earlier parts')
 })
+
+// --------------------------------- 7. the feed is kept in step with the box
+//
+// paintMessages numbers the nodes in the box against the messages it is handed.
+// A pull of earlier parts adds nodes to the box, so the transcript must be
+// repainted right after it lands — otherwise the next streaming frame is one row
+// short again. Conversely a feed that survives a real session switch paints the
+// previous conversation on top of the new one.
+test('a landed earlier page repaints the transcript with the same buffers', async () => {
+  const js = assets.zh.js
+  const src = extractFunction(js, 'startEarlierParts').replace('void fetchEarlierPage().then(', 'return fetchEarlierPage().then(')
+  const s0 = new Function('init', `
+    let activeSession=init.session, earlierPages=[], earlierCursor=null, earlierDone=false, earlierStartedFor=null, earlierGen=0
+    let streamEvents=[{_seq:1}], streamProjections={values:{}}, olderHasMore=true
+    const calls=[]
+    function fetchEarlierPage(){calls.push('fetch');return Promise.resolve(true)}
+    function applyHistory(value,pending,initial){calls.push({kind:'apply',events:value.events.length,hasMore:value.hasMore,initial})}
+    ${src}
+    return { start: startEarlierParts, calls, state:()=>({startedFor:earlierStartedFor}) }
+  `)({ session: 's1' })
+  s0.start()
+  await Promise.resolve()
+  await Promise.resolve()
+  const apply = s0.calls.find((c) => c && c.kind === 'apply')
+  assert.ok(apply, 'the pull repaints the transcript')
+  assert.equal(apply.events, 1, 'the repaint carries the live window')
+  assert.equal(apply.hasMore, true, 'and the current older flag')
+})
+
+test('a real session switch drops the feed, so the next session never inherits it', () => {
+  const js = assets.zh.js
+  const open = extractFunction(js, 'openSession')
+  assert.ok(open.includes('if(activeSession&&activeSession!==id)resetEarlierParts()'),
+    'the switch clears the feed before the stream is rebuilt')
+  const list = extractFunction(js, 'showSessionList')
+  assert.ok(list.includes('closeSessionStream();resetEarlierParts();'),
+    'leaving the chat clears it too')
+  const draft = extractFunction(js, 'startDraftChat')
+  assert.ok(draft.includes('closeSessionStream();resetEarlierParts();'),
+    'a fresh draft starts without the previous conversation feed')
+})

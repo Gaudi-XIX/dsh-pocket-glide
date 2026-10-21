@@ -148,7 +148,7 @@ test('E the poll lives exactly on the landing: armed on entry, disarmed into a c
   const open = sliceTo('async function openSession(id,title', 'function handleHistory')
   // (2026-10-14 m02164②) entering a chat also hands the outgoing transcript to the
   // cache first — same statement sequence, one more step in the middle.
-  assert.match(open, /clearTimeout\(poll\);stopListPoll\(\);[\s\S]*?evictSessionCache\(\)\}closeSessionStream\(activeSession===id\);/, 'entering a session disarms it beside the session poll')
+  assert.match(open, /clearTimeout\(poll\);stopListPoll\(\);[\s\S]*?evictSessionCache\(\)\}if\(activeSession&&activeSession!==id\)resetEarlierParts\(\);closeSessionStream\(activeSession===id\);/, 'entering a session disarms it beside the session poll')
   const draft = sliceTo('function startDraftChat(workspaceId){', 'async function ensureSession()')
   assert.match(draft, /stopListPoll\(\);draftWorkspaceId=workspaceId;/, 'a new-chat draft counts as a chat too')
 })
@@ -273,11 +273,11 @@ test('F leaving one chat for another stashes the outgoing transcript before the 
   const open = sliceTo('async function openSession(id,title', 'function handleHistory')
   assert.match(
     open,
-    /if\(activeSession&&activeSession!==id&&streamEvents\.length\)\{sessionCache\.set\(activeSession,\{streamEvents,olderEvents,olderHasMore,olderExhausted,streamProjections,at:Date\.now\(\)\}\);evictSessionCache\(\)\}closeSessionStream\(activeSession===id\)/,
+    /if\(activeSession&&activeSession!==id&&streamEvents\.length\)\{sessionCache\.set\(activeSession,\{streamEvents,olderEvents,olderHasMore,olderExhausted,streamProjections,at:Date\.now\(\)\}\);evictSessionCache\(\)\}if\(activeSession&&activeSession!==id\)resetEarlierParts\(\);closeSessionStream\(activeSession===id\)/,
     'the jump caches by the OUTGOING id and only then closes the stream — closing first would empty the arrays it is reading',
   )
   assert.ok(
-    open.indexOf('sessionCache.set(activeSession') < open.indexOf('evictSessionCache()}closeSessionStream(activeSession===id)'),
+    open.indexOf('sessionCache.set(activeSession') < open.indexOf('evictSessionCache()}if(activeSession&&activeSession!==id)resetEarlierParts();closeSessionStream(activeSession===id)'),
     'the stash strictly precedes the teardown (compared against the call, not the comment that names it)',
   )
 })
