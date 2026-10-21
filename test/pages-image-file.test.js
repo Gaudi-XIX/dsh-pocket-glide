@@ -3,7 +3,7 @@
 // onto /api/session-file, and the presented-file cards.
 //
 // Client half: the same slice-the-shell technique block-placeholder uses — the
-// renderer organs live between renderBlock and renderTurnProcess precisely so
+// renderer organs live between renderBlock and renderMessage precisely so
 // this window carries them, and the runtime half is extracted by name.
 // Bridge half: the pure collectors plus a real pairing + temp-file round trip.
 import { test } from 'node:test'
@@ -46,9 +46,9 @@ function extractFunction(source, name) {
 function renderSandbox(locale) {
   const js = assets[locale].js
   const start = js.indexOf('function renderBlock(')
-  const end = js.indexOf('function renderTurnProcess(')
+  const end = js.indexOf('function renderMessage(')
   assert.notEqual(start, -1, 'renderBlock must exist')
-  assert.notEqual(end, -1, 'renderTurnProcess must exist')
+  assert.notEqual(end, -1, 'renderMessage must exist')
   const messageStart = js.indexOf('function renderMessage(')
   const messageEnd = js.indexOf('function syncPromptUi(')
   assert.notEqual(messageStart, -1, 'renderMessage must exist')
@@ -129,7 +129,7 @@ test('isTextualAttachment: the decision table', () => {
   const body = [
     `const esc=v=>String(v==null?'':v)`,
     `function formatBytes(n){return ''}`,
-    js.slice(js.indexOf('function renderBlock('), js.indexOf('function renderTurnProcess(')),
+    js.slice(js.indexOf('function renderBlock('), js.indexOf('function renderMessage(')),
   ].join('\n')
   const { isTextualAttachment } = new Function('L', 'activeSession', `${body};return { isTextualAttachment }`)(labels('zh'), 's1')
   const textual = [
@@ -262,12 +262,13 @@ test('a session with no events collects nothing', () => {
 
 function projectionSandbox() {
   const js = assets.zh.js
-  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'visibleMessages', 'orderUserBubblesByTime']
+  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'turnKeyOf', 'stepKey', 'visibleMessages', 'orderUserBubblesByTime']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(`
     const processBlocks=()=>[];
     const L={};
     ${body}
+    let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null;
     return { visibleMessages }
   `)()
 }

@@ -23,9 +23,9 @@ function labels(locale) {
 function renderSandbox(locale) {
   const js = assets[locale].js
   const start = js.indexOf('function renderBlock(')
-  const end = js.indexOf('function renderTurnProcess(')
+  const end = js.indexOf('function renderMessage(')
   assert.notEqual(start, -1, 'renderBlock must exist')
-  assert.notEqual(end, -1, 'renderTurnProcess must exist')
+  assert.notEqual(end, -1, 'renderMessage must exist')
   const messageStart = js.indexOf('function renderMessage(')
   const messageEnd = js.indexOf('function syncPromptUi(')
   assert.notEqual(messageStart, -1, 'renderMessage must exist')

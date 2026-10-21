@@ -198,40 +198,37 @@ test('markHistoryTail tags everything but the last 8 messages; short transcripts
 
 const renderSandbox = () => {
   const js = assets.zh.js
-  const body = [
-    extractFunction(js, 'renderTurnProcess'),
-    extractFunction(js, 'renderMessage'),
-  ].join('\n')
+  const body = [extractFunction(js, 'renderMessage')].join('\n')
   return new Function(`
     const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
     const L={process:'过程',think:'思考'}
-    const transcriptView='verbose'
     const turnOpenState=new Map()
     function activityIcon(){return '<i></i>'}
-    function activityChevron(){return '<c></c>'}
     function renderBlock(){return '<div class="markdown">x</div>'}
     function renderMessageTail(){return ''}
-    function clusterToolBlocks(){return []}
+    function clusterToolBlocks(blocks){return blocks.map((block,index)=>({type:'block',block,index}))}
     function toolActivityCategory(){return 'tools'}
-    function stepTitleFor(){return ''}
-    function renderToolCard(){return ''}
+    function renderProcessLine(){return '<div class="process-line">已读取文件</div>'}
     ${body}
-    return { renderMessage, renderTurnProcess }
+    return { renderMessage }
   `)()
 }
 
-test('msg-hist lands on the message wrapper and on history turn-process details, never on the tail', () => {
-  const { renderMessage, renderTurnProcess } = renderSandbox()
+test('msg-hist lands on the message wrapper and on the flat process message, never on the tail', () => {
+  const { renderMessage } = renderSandbox()
   const history = renderMessage({ role: 'user', blocks: [{ kind: 'text', text: 'hi' }], _history: true })
   assert.match(history, /^<div class="message msg-hist user">/, 'class order keeps .message.user matching')
   const tail = renderMessage({ role: 'user', blocks: [{ kind: 'text', text: 'hi' }], _history: false })
   assert.match(tail, /^<div class="message user">/, 'untagged markup is byte-identical to the old shape')
   const streamed = renderMessage({ role: 'assistant', streaming: true, blocks: [{ kind: 'text', text: '…' }] })
   assert.doesNotMatch(streamed, /msg-hist/, 'streaming rows are never tagged')
-  const process = renderTurnProcess({ turnKey: 't1', streaming: false, blocks: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], _history: true })
-  assert.match(process, /<details class="turn-process msg-hist"/)
-  const tailProcess = renderTurnProcess({ turnKey: 't1', streaming: false, blocks: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], _history: false })
-  assert.match(tailProcess, /<details class="turn-process" /)
+  // 2026-10-21: the turn-process fold is gone. A process-only row is now a plain
+  // message wrapper whose children are the flat process lines, and the history
+  // tag still has to ride on that wrapper.
+  const process = renderMessage({ turnProcess: true, turnKey: 't1', streaming: false, blocks: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], _history: true })
+  assert.match(process, /^<div class="message assistant msg-hist">/)
+  const tailProcess = renderMessage({ turnProcess: true, turnKey: 't1', streaming: false, blocks: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], _history: false })
+  assert.match(tailProcess, /^<div class="message assistant">/)
 })
 
 // ------------------------------------- 3. the machine through real paintMessages
@@ -262,6 +259,8 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
     function settledTranscriptHeight(){return box&&box.scrollHeight?box.scrollHeight:lastScrollHeight}
     function renderMessage(message){return '<div class="message '+message.role+'"></div>'}
     function syncScrollAnchors(){}
+    function startTurnStatusTimer(){}
+    function stopTurnStatusTimer(){}
     // earlier-parts is an additive axis: the paint sandbox has no earlier feed
     // loaded, so the prepend must render as an empty string.
     function earlierPartsHtml(){return ''}
@@ -331,6 +330,8 @@ test('paintMessages tags the history tail through the real markHistoryTail', () 
     const $=()=>box
     function renderMessage(message){return '<div class="message '+message.role+'">'+(message._history===true?'H':'')+'</div>'}
     function syncScrollAnchors(){}
+    function startTurnStatusTimer(){}
+    function stopTurnStatusTimer(){}
     let followStream=true
     let transcriptAnchor=null,skipAnchorOnce=false
     // earlier-parts prepends an empty feed in this sandbox (no earlier pages).

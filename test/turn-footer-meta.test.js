@@ -87,27 +87,29 @@ function memo(key, build) {
 // a missing key shows up as `undefined` text rather than as a silent pass.
 function helperSandbox(locale) {
   return memo(`helpers:${locale}`, () => {
-    const names = ['esc', 'pad2', 'formatTokens', 'formatMessageClock', 'renderMessageTail']
+    const names = ['esc', 'pad2', 'formatElapsed', 'formatTokens', 'formatMessageClock', 'renderMessageTail']
     const body = names.map((name) => extractFunction(assets[locale].js, name)).join('\n')
-    return new Function('L', `${body};return { pad2, formatTokens, formatMessageClock, renderMessageTail }`)(pageLabels(locale))
+    return new Function('L', `${body};return { pad2, formatElapsed, formatTokens, formatMessageClock, renderMessageTail }`)(pageLabels(locale))
   })
 }
 
 // The renderer, built the way test/block-placeholder.test.js builds it: the real
 // renderBlock, and the [renderMessage, syncPromptUi) window — which is exactly
-// the window the four new helpers have to live in. `renderTurnProcess` is a stub
-// because the fold is asserted separately.
+// the window the four new helpers have to live in. `renderProcessLine` is a stub
+// because the process line is asserted separately.
 function messageSandbox(locale) {
   return memo(`messages:${locale}`, () => {
     const source = assets[locale].js
     const blockStart = source.indexOf('function renderBlock(')
-    const blockEnd = source.indexOf('function renderTurnProcess(')
+    const blockEnd = source.indexOf('function renderProcessLine(')
     assert.notEqual(blockStart, -1, 'renderBlock must exist')
-    assert.notEqual(blockEnd, -1, 'renderTurnProcess must exist')
+    assert.notEqual(blockEnd, -1, 'renderProcessLine must exist')
     const body = [
       `const esc=v=>String(v==null?'':v)`,
       `const markdown=text=>String(text||'')`,
-      `const renderTurnProcess=()=>'<details class="turn-process"></details>'`,
+      `const renderProcessLine=()=>'<div class="process-line"></div>'`,
+      `const clusterToolBlocks=(blocks)=>blocks.map((block,index)=>({type:'block',block,index}))`,
+      `const toolActivityCategory=()=>'tools'`,
       `let agentRunning=false`,
       `const setAgentRunning=v=>{agentRunning=v}`,
       source.slice(blockStart, blockEnd),
@@ -128,13 +130,14 @@ function messageSandbox(locale) {
 // them as top-level names here would test a fiction the page does not have.
 function projectionSandbox() {
   return memo('projection', () => {
-    const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime', 'durableUserPromptText', 'messagesWithOptimistic']
+    const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'turnKeyOf', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime', 'durableUserPromptText', 'messagesWithOptimistic']
     const body = names.map((name) => extractFunction(assets.zh.js, name)).join('\n')
     return new Function(
       `let olderEvents=[],streamEvents=[],lastDurableMessages=[],optimisticPrompts=[];
        const processBlocks=()=>[];
        const L={};
        ${body}
+       let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null;
        return { visibleMessages, mergeEntries }`,
     )()
   })
@@ -437,6 +440,50 @@ test('A11 the pill is wrapped in a footer row, and the clock comes after it', ()
   assert.ok(html.includes('<span class="usage-pill" title="本轮用量">'), 'the pill carries the desktop tooltip')
 })
 
+// ------------------------------------------- A11b the turn clock (2026-10-21)
+// The reader's one hard requirement for the running state was "time keeps
+// moving, so I know the thing is not stuck". The moving number lives on the
+// status row; when the turn ends that row goes away and the same fact has to
+// survive somewhere permanent — so the elapsed time joins the footer clock in
+// the one slot that already carries the moment the turn finished.
+test('A11b the footer clock carries how long the turn took, after the moment', () => {
+  const html = renderAll(project([
+    userEvent(1, 'question'),
+    assistantEvent(2, { text: 'answer', time: DEFAULT_TIME }),
+  ]))
+  assert.equal(clockText(html[1]), '2024年3月14日 15:30', 'the moment leads')
+  // The projection hangs the duration on the same message the usage pill rides,
+  // so renderAll sees it only after visibleMessages attaches it. Mirror that the
+  // way the page does: the elapsed field is read off the projected message.
+  const projected = project([assistantEvent(2, { text: 'answer', time: DEFAULT_TIME })])
+  assert.equal(projected.at(-1).turnElapsed, undefined, 'no turn clock, no duration — the shape is unchanged')
+})
+
+test('A11b a turn elapsed stamp joins the clock with a separator, and never alone', () => {
+  const sandbox = helperSandbox('zh')
+  const time = LOCAL(2024, 3, 14, 15, 30)
+  const plain = sandbox.renderMessageTail({ messageTime: time })
+  assert.equal(clockText(plain), '2024年3月14日 15:30', 'without a duration the clock is untouched')
+
+  const stamped = sandbox.renderMessageTail({ messageTime: time, turnElapsed: 80_000 })
+  assert.equal(clockText(stamped), '2024年3月14日 15:30 · 用时 1m20s', 'the duration follows the moment, dot-separated')
+
+  // No time stamp means no line to hang the duration on: the duration alone must
+  // not invent a footer (the clock is the anchor the reader already trusts).
+  assert.equal(sandbox.renderMessageTail({ turnElapsed: 80_000 }), '', 'a duration with no moment renders nothing')
+})
+
+test('A11b formatElapsed speaks seconds, minutes and hours without decimals', () => {
+  const { formatElapsed } = helperSandbox('zh')
+  assert.equal(formatElapsed(0), '0s')
+  assert.equal(formatElapsed(9_400), '9s')
+  assert.equal(formatElapsed(60_000), '1m00s')
+  assert.equal(formatElapsed(80_000), '1m20s')
+  assert.equal(formatElapsed(3_600_000), '1h00m')
+  assert.equal(formatElapsed(3_930_000), '1h05m')
+  assert.equal(formatElapsed(-5), '0s', 'a negative clock reads as zero, never as garbage')
+})
+
 // ---------------------------------------------------------------- A12 the early returns
 test('A12 a turn-error bubble never grows a footer row', () => {
   const html = renderOne({ role: 'turn-error', blocks: [{ kind: 'turn-error', label: 'failed', detail: 'rate limit' }] })
@@ -448,7 +495,7 @@ test('A12 a turn-error bubble never grows a footer row', () => {
 test('A12 the process fold never grows a footer row', () => {
   const sandbox = messageSandbox('zh')
   const html = sandbox.renderMessage({ turnProcess: true, blocks: [{ kind: 'text', text: 'x' }], messageTime: LOCAL(2024, 3, 14, 15, 30) })
-  assert.equal(html, '<details class="turn-process"></details>', 'the fold branch returns before the footer')
+  assert.ok(!html.includes('msg-tail'), 'the process branch returns before the footer')
 })
 
 // ---------------------------------------------------------------- A13 every message
@@ -533,7 +580,7 @@ test('A15 renderMessage stays one line and appends the footer inside the message
     /\+renderMessageTail\(message\)\+'<\/div>'\}\s*$/.test(line),
     'the footer must be the last child of the .message div, not a sibling node',
   )
-  assert.ok(line.includes("renderTurnProcess(message)"), 'the process fold must still branch out first')
+  assert.ok(line.includes("message.turnProcess"), 'the process branch must still be taken first')
   assert.ok(line.includes("role==='turn-error'"), 'the error bubble must still branch out first')
 })
 
@@ -669,8 +716,12 @@ test('A19 the pill winner is the last reply block emitted, backfilled on the ren
   const projection = between('function visibleMessages(events)', 'function inlineMarkdown(')
   assert.ok(projection.includes('let group=[],segment=0,lastText=-1,lastTime=undefined'),
     'the emitter must track the last reply position in rendered order')
-  assert.ok(projection.includes('if(lastText>=0){rendered[lastText].messageTime=lastTime;rendered[lastText].usage=normalizeUsage(turn.usage)}'),
-    'the pill and the clock must be backfilled onto the final reply block')
+  assert.ok(
+    projection.includes('if(lastText>=0){') &&
+    projection.includes('rendered[lastText].messageTime=lastTime;rendered[lastText].usage=normalizeUsage(turn.usage)') &&
+    projection.includes('rendered[lastText].turnElapsed=spent'),
+    'the pill and the clock must be backfilled onto the final reply block, and the turn elapsed with them',
+  )
   assert.ok(!projection.includes('lastTextSeq'), 'the _seq sentinel must stay gone')
   assert.ok(!projection.includes('item.node==='), 'the half-fixed node comparison must stay gone')
   assert.ok(!projection.includes('textItems'), 'the old text-item queue must stay gone (segments emit in arrival order)')

@@ -39,13 +39,14 @@ function chunkEvent(seq, turn, step, text) {
 
 function buildSandbox() {
   const { js } = mobilePageAssets({ locale: 'zh' })
-  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime', 'durableUserPromptText', 'promptShape', 'messagesWithOptimistic']
+  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'turnKeyOf', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime', 'durableUserPromptText', 'promptShape', 'messagesWithOptimistic']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
     `let olderEvents=[],streamEvents=[],lastDurableMessages=[],optimisticPrompts=[];
      const processBlocks=()=>[];
      const L={};
      ${body}
+     let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null;
      return {
        mergeEntries, visibleMessages, messagesWithOptimistic, windowEvents,
        setStream(value){streamEvents=value},
@@ -502,6 +503,11 @@ function buildRunningSandbox() {
     const TURN_RUNNING_IDLE_MAX_MS=${idle},idle=TURN_RUNNING_IDLE_MAX_MS
     let awaitingTurnSeq=null,awaitingTurnTimer=null,agentRunning=false,lastHistoryKey='',activeSession='s1',turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1,turnRunningTimer=null,turnRunningConfirming=false,pendingQuestion=null
     let hostRows=[],rpcRejects=false
+    // The turn clock the run-state functions now write to: the elapsed stamps and
+    // the retry counter live in page globals, so the sandbox hands them a home.
+    let stopPending=false,turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null
+    const turnElapsedByTurn=new Map(),turnRetryMax=new Map()
+    const stopTurnStatusTimer=()=>{}
     const calls=[]
     const setTimeout=(fn,ms)=>{calls.push(['timeout',ms]);return 1}
     const clearTimeout=handle=>{calls.push(['clear',handle])}

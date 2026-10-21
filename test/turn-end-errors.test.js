@@ -20,7 +20,7 @@ function between(startAnchor, endAnchor) {
 }
 
 const code = [
-  between('function stepKey(d)', 'function contentBlocks(content)'),
+  between('function turnKeyOf(', 'function contentBlocks(content)'),
   between('function contentBlocks(content)', 'function visibleMessages(events)'),
   between('function visibleMessages(events)', 'function inlineMarkdown(text)'),
 ].join('\n')
@@ -31,13 +31,20 @@ const L = {
   turnBlocked: '被拦截，未能执行',
   turnMaxTokens: '已达到长度上限',
   turnInterrupted: '被打断',
+  retryFailed: '重试 {n} 次后失败：',
 }
 
-const context = vm.createContext({ L })
+// 2026-10-21: visibleMessages now reads two page globals — the per-turn elapsed
+// map (to stamp the clock line) and the retry-count map (to prefix the error
+// bubble). The page always declares them; the vm context must too. The maps are
+// held by name so a test can seed one the way noteLlmRetry would.
+const turnElapsedByTurn = new Map()
+const turnRetryMax = new Map()
+const context = vm.createContext({ L, turnElapsedByTurn, turnRetryMax })
 const visibleMessages = vm.runInContext(`${code}\n;visibleMessages`, context)
 
 function endEvent(reason) {
-  return { event: { type: 'turn/end', turn: 1, data: { reason } } }
+  return { event: { type: 'turn/end', data: { turn: 1, reason } } }
 }
 
 function expectBlock(block, kind, label, detail) {
@@ -59,6 +66,21 @@ test('turn/end with an LlmFailure projects a turn-error bubble with the message'
 test('turn/end error without a message falls back to the failure code', () => {
   const messages = visibleMessages([endEvent({ kind: 'error', error: { code: 'offline_503' } })])
   assert.equal(messages.at(-1).blocks[0].detail, 'offline_503')
+})
+
+// 2026-10-21 (user m00068): the desktop retries a doomed model call a few times
+// before it gives up. The phone already receives llm/retry; noteLlmRetry parks
+// the count for this turn, and the failure that finally lands must say how many
+// attempts it took — otherwise a three-retry failure reads like an instant one.
+test('a turn that failed after retries says how many it took', () => {
+  turnRetryMax.set('1', 3)
+  const messages = visibleMessages([
+    endEvent({ kind: 'error', error: { message: 'Provider overloaded', code: 'overloaded' } }),
+  ])
+  const block = messages.at(-1).blocks[0]
+  assert.equal(block.kind, 'turn-error')
+  assert.equal(block.detail, '重试 3 次后失败：Provider overloaded', 'the retry count prefixes the provider message')
+  assert.equal(turnRetryMax.has('1'), false, 'the count is spent — the next turn starts clean')
 })
 
 test('aborted turns show the cancel reason', () => {

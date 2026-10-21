@@ -178,13 +178,14 @@ function presentedEvent(seq, turn, files) {
 
 function buildSandbox() {
   const { js } = mobilePageAssets({ locale: 'zh' })
-  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime']
+  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'turnKeyOf', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
     `let olderEvents=[],streamEvents=[],lastDurableMessages=[];
      const processBlocks=()=>[];
      const L={};
      ${body}
+     let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null;
      return {
        visibleMessages, windowEvents,
        setStream(value){streamEvents=value},

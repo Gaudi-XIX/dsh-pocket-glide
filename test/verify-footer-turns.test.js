@@ -22,7 +22,7 @@
 //
 // The projection sandbox is copied from test/turn-footer-meta.test.js on
 // purpose: it stubs `processBlocks` and `L`, exactly as the shipped file does,
-// so the turn-process fold stays out of these assertions and the three
+// so the process line stays out of these assertions and the three
 // properties above are measured on the text messages alone.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -74,13 +74,14 @@ let cachedMessage = null
 // assert a fiction the page does not have.
 function projectionSandbox() {
   if (cachedProjection) return cachedProjection
-  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime', 'durableUserPromptText', 'messagesWithOptimistic']
+  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'turnKeyOf', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime', 'durableUserPromptText', 'messagesWithOptimistic']
   const body = names.map((name) => extractFunction(assets.zh.js, name)).join('\n')
   cachedProjection = new Function(
     `let olderEvents=[],streamEvents=[],lastDurableMessages=[],optimisticPrompts=[];
      const processBlocks=()=>[];
      const L={};
      ${body}
+     let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null;
      return { visibleMessages }`,
   )()
   return cachedProjection
@@ -90,13 +91,15 @@ function messageSandbox(locale) {
   if (cachedMessage) return cachedMessage
   const source = assets.zh.js
   const blockStart = source.indexOf('function renderBlock(')
-  const blockEnd = source.indexOf('function renderTurnProcess(')
+  const blockEnd = source.indexOf('function renderProcessLine(')
   assert.notEqual(blockStart, -1, 'renderBlock must exist')
-  assert.notEqual(blockEnd, -1, 'renderTurnProcess must exist')
+  assert.notEqual(blockEnd, -1, 'renderProcessLine must exist')
   const body = [
     `const esc=v=>String(v==null?'':v)`,
     `const markdown=text=>String(text||'')`,
-    `const renderTurnProcess=()=>'<details class="turn-process"></details>'`,
+    `const renderProcessLine=()=>'<div class="process-line"></div>'`,
+    `const clusterToolBlocks=(blocks)=>blocks.map((block,index)=>({type:'block',block,index}))`,
+    `const toolActivityCategory=()=>'tools'`,
     `let agentRunning=false`,
     source.slice(blockStart, blockEnd),
     between('function renderMessage(', 'function syncPromptUi(', source),

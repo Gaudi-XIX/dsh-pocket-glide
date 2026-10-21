@@ -33,10 +33,11 @@ function extractFunction(source, name) {
 
 function buildSandbox() {
   const { js } = mobilePageAssets({ locale: 'zh' })
-  const names = ['eventSeq', 'contentBlocks', 'stepKey', 'visibleMessages', 'orderUserBubblesByTime']
+  const names = ['eventSeq', 'contentBlocks', 'turnKeyOf', 'stepKey', 'visibleMessages', 'orderUserBubblesByTime']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
     `${body}
+     let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null;
      return { visibleMessages }`,
   )()
 }

@@ -6,6 +6,18 @@
 
 ## 未发布（工作树）
 
+**过程只留一行、思考独占一条竖串、回合用时实时跳、模型重试说清楚**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值；手机须完全关闭重开才拿得到新壳。用户 2026-10-21 三轮收敛后定案：①「所有工具调用只保留最上面那一个窗口」，点开、下拉二级菜单、点进工具明细「这整个都不需要了」；②「思考单独拿出来放上面」，形成一竖串「一个思考 → 一个回复内容 → 一个时间戳」，思考可点开；③ 桌面端传来的 `transcriptView` 四档在手机上「直接坍缩」，固定一种形态；④ 桌面端模型重试次数与最终报错要透传到手机（「模型不是有时候会重试几次，然后会推一个报错信息吗」）；⑤ 顺序按事件发生先后，不重排（用户选 B 方案「它出现在哪就是哪」），工具行要同时写「已经干了什么几次」和「正在干什么」）。
+- **改法（只动 `lib/pages.js`，桥零改动）**：宿主事件本来就在流到页面，缺的只是渲染。
+  - 删掉外层 `<details class="turn-process">` 折叠容器与整套工具明细器官（`renderToolCard`/`renderToolDiff`/`renderToolRaw`/`diffRowsHtml`/`toolClusterState`/`toolArgsOf`/`pretty`/`diffLineSplit`/`toolSummaryLine`/`stableLiveTitle`/`liveThinkingLine`），新增 `renderProcessLine()`：一行、不可点、无箭头、无 `details`，文本由新纯函数 `processLineText()` 从「类目＋次数＋进行中/失败」推出——「已读取文件 2 次」「已读取文件 3 次，正在编辑文件」「修改了文件（失败）」。相邻同类合并成一行，换类另起一行，顺序一字不改。
+  - 思考块对任何档位都渲染（原来 compact 整块隐藏、verbose 默认展开），默认收起、点开看正文。
+  - `transcriptView` 从渲染路径彻底移除（状态声明／boot 赋值／`extractMobileSettings`／`applyInheritedSettings` 六处全删）；桥仍下发该键，页面侧不再读，也不留设置控件残壳。
+  - 用时并入底部 `turn-status` 行（`deepDiveShimmer` 原样）：`深度思考中… 12s`，1s 定时器只改该节点文本；`turn/start` 起算、`turn/end` 结算，结算值挂到该回合最后一条消息，尾部时间戳变 `18:42 · 用时 1m20s`（`formatElapsed`：`45s`／`1m20s`／`1h05m`）。计时一律手机侧 `Date.now()`——注释里那条「绝不可拿宿主时间戳与本机墙钟比」照旧生效。
+  - 重试透传：`applyStreamEventFrame` 认 `llm/retry` → `noteLlmRetry()` 取 `retry`/`maxRetries`，状态行变琥珀色 `模型报错，正在重试 2/3 · 12s`（`.turn-status[data-warn="1"]`）；重试耗尽后该行消失、`turn/end` 错误横幅 detail 前缀 `重试 3 次后失败：<宿主原文>`。宿主 `failure.message` 原样透传，不改写、不与桌面文案对齐。
+  - **事件 turn 归属修正**：宿主把 `turn` 放在事件信封（`event.turn`），页面原先一律读 `event.data.turn` ⇒ turn 键恒为 `''`（多回合会并成一回合、重试计数与时用都取不到）。新增模块级 `turnKeyOf()`（信封优先、`data` 兜底），供 `stepKey`／`ensureTurn`／`turn/end` 重试前缀共用。
+- **回归锁**：`test/pages-process-render.test.js` 整文件重写（26 test）——动词/计数/失败措辞、单行 `div` 无 `details`/`summary`/chevron、**参数与结果永不外泄**（`file_path`/正文/`diff-line`/`tool-raw` 全不得出现）、退役符号清单、`statusSandbox` 覆盖跳秒与 `2/3` 重试与 `data-warn`；`turn-footer-meta` 新增 A11b（`18:42 · 用时 1m20s` ＋ `formatElapsed` 七档边界）；`turn-end-errors` 新增重试前缀两条；`pages-send-mode`／`pages-scroll-anchors`／`stop-pending`／`transcript-order`／`verify-footer-turns`／`pages-image-file`／`block-placeholder`／`visible-interleave`／`queue-steer-refresh`／`stream-watermark` 的沙箱与锚点同步。
+- **壳自检**：`mobilePageAssets({locale:'zh'})` → js 308,614B / css 53,750B，`new Function()` 解析 OK；退役令牌（`transcriptView`／`turn-process`／`renderToolCard`／`cluster-rows`／`tool-raw`／`diff-line`）全 0。
+- **回归**：全量 `node --test --test-concurrency=1 test/*.test.js` = **1415 tests / 1411 pass / 2 fail**（两例是 `test/tunnel.test.js` 造 `.tgz` 的 MSYS GNU tar 环境伪红，与本线无关，已在上一条里备案）。
+
 **输密码前那张「多余」的落地卡不见了，阶梯的三个假数字也不会再一模一样**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-21 报障两条：①「这个页面我感觉像是多余的」（后澄清「我多余页面的意思是指冷启动第一次输PIN码之前弹出来的那个页面」）；②「这里怎么数字都是一样的，并且数字明显是错的，并且应该一步一步来（我只单的前端显示，后端肯定是提前加载）」——指重连页四步阶梯右侧计数 14/14/14 三个数完全相同）。
 
 - **BUG① 根因**：冷启动手机扫隧道二维码落在 `/`（未鉴权）→ `lib/bridge.js:4989-4990` 渲染 `renderMobileReconnectPage(fresh=true)` → 页内 `MODE==='auto'` 立刻 `startRetry()` POST `/pair/retry`，而隧道档的 `/pair/retry` 是**写死的空转**（`lib/bridge.js:4735-4741` 自注 "deliberate no-op: it only tells the phone to ask for the PIN"）→ 只回 `{pinRequired:true}` → `showPin()` 才把标题换成「输入连接密码」并亮出密码框。也就是说：那张「连接 Pocket + Curiouser and curiouser! + Pocket 一级准备」的卡片只是**为了被下一帧替换掉而存在**。

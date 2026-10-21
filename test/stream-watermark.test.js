@@ -237,6 +237,8 @@ function buildPaintSandbox(state = {}) {
     function renderMessage(message){return '<div class="message '+message.role+'">'+(message.blocks||[]).map((b)=>b.text||'').join('')+'</div>'}
     // earlier-parts prepends an empty feed in this sandbox (no earlier pages).
     function earlierPartsHtml(){return ''}
+    function startTurnStatusTimer(){}
+    function stopTurnStatusTimer(){}
     ${body}
     return {
       olderButtonHtml, paintMessages, showTranscriptRetry, transcriptHasContent, transcriptWaitHtml,
