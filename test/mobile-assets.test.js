@@ -1087,7 +1087,13 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   转圈也能画出来）；实测 zh 387 732（css 56 836 + js 330 896）/ en 387 662
 //   （css 56 836 + js 330 826）；相对 v3 净 +39 / +39 B。
 //   取 388 200（余量 468 B（zh）/ 538 B（en））。
-const ASSET_BUDGET_BYTES = 388_200
+// 2026-10-21 currentTranscript 带上已画的更早各段（跳跃 R6）：行数与盒内 .message
+//   节点失配时 patchLastStreamMessage 退化成整屏重绘，把续看更早各段的读者塌成一屏、
+//   浏览器钳 scrollTop=0（真机 01:14:30 现场 pt n=36 prev=100 post=19，sh 15734→2657）。
+//   earlierPlainRow + currentTranscript 的补行分支 + 测试实测 zh 388 435（css 56 836 +
+//   js 331 599）/ en 388 365（css 56 836 + js 331 529）；相对上一档净 +703 / +703 B。
+//   取 389 000（余量 565 B（zh）/ 635 B（en））。
+const ASSET_BUDGET_BYTES = 389_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

@@ -486,3 +486,70 @@ test('tapping through pages stops at the end of the feed', async () => {
   assert.equal(p4, false, 'no pull after done')
   assert.equal(rpcCount(), 3, 'exactly three pages were requested')
 })
+
+// ------------------------------------------------- 6. currentTranscript rows
+//
+// paintMessages numbers the .message nodes one-to-one against the messages it
+// is handed (older-row / earlier-feed first, then the rows). When the reader had
+// pulled earlier parts, windowEvents() — which does not know about them — handed
+// back only the current window, so patchLastStreamMessage index/nodes.length
+// check failed and the whole box was repainted down to a single row: the
+// transcript collapsed to one screenful, the browser clamped scrollTop to 0 and
+// the reader position was gone (真机 2026-10-21 01:14:30: pt n=36 prev=100 post=19,
+// scrollHeight 15734 -> 2657).
+// The rows handed over must cover every earlier part that is on screen.
+function buildTranscriptSandbox(init) {
+  const body = ['earlierPlainRow', 'currentTranscript', 'windowEvents']
+    .map((name) => extractFunction(assets.zh.js, name)).join('\n')
+  // The page appends the current window first and then pushes the earlier rows,
+  // then sorts by seq: hand them over the same way so the guard is exercised.
+  const pages = (init.pages || []).map((items) => items.slice().reverse());
+  const stream = (init.events || []).slice().reverse();
+  const args = { older: [], stream: stream, pages: pages, feed: init.feedPresent !== false }
+  const sandbox = new Function('init', [
+    'let olderEvents=init.older,streamEvents=init.stream,streamRevision=1,lastDurableMessages=[]',
+    'let earlierPages=init.pages',
+    'const box={querySelector(sel){return sel===\':scope > .earlier-feed\'?(init.feed?{}:null):null}}',
+    'const $=()=>box',
+    'function mergeEntries(list){return list}',
+    'function visibleMessages(ev){return ev.filter((row)=>row&&typeof row._seq==="number")}',
+    body,
+    'return { rows: currentTranscript }',
+  ].join('\n'))
+  return sandbox(args)
+}
+
+test('every earlier part on screen keeps its row so the last row can be patched in place', () => {
+  const events = [{ _seq: 900, role: 'assistant', blocks: [{ kind: 'text', text: 'now' }] }]
+  const pages = [
+    [{ kind: 'answer', text: 'last part', seq: 800 }],
+    [{ kind: 'user', text: 'old question', seq: 500 }, { kind: 'assistant', text: 'old answer', seq: 501 }],
+  ]
+  const s = buildTranscriptSandbox({ events, pages })
+  const rows = s.rows()
+  assert.equal(rows.length, 4, 'one row per painted message: the window row plus every earlier item')
+  assert.deepEqual(rows.map((r) => r._seq), [500, 501, 800, 900], 'rows come back in seq order')
+  assert.equal(rows[3].blocks[0].text, 'now', 'the live row keeps its blocks')
+})
+
+test('a divider takes a node but no row, and a merged seq is handed over once', () => {
+  const events = [{ _seq: 700, role: 'assistant', blocks: [{ kind: 'text', text: 'window copy' }] }]
+  const pages = [
+    [{ kind: 'divider', time: 0 }, { kind: 'assistant', text: 'window copy again', seq: 700 }, { kind: 'answer', text: '', seq: 650 }],
+  ]
+  const s = buildTranscriptSandbox({ events, pages })
+  const rows = s.rows()
+  // paintEarlierFeed paints the divider (a node) and skips the item with no text;
+  // the seq already carried by the current window is not handed over twice.
+  // paintEarlierFeed paints the divider (a node) and the item with no text is
+  // skipped, so the box holds one earlier node; the current window's own records
+  // are handed over as they are (mergeEntries dedupes them inside the page).
+  assert.equal(rows.length, 3, 'one earlier row on screen plus the two window records')
+  assert.deepEqual(rows.map((r) => r._seq), [650, 700, 700], 'earlier rows come first, ordered by seq')
+})
+
+test('with no earlier feed the transcript stays exactly the current window', () => {
+  const events = [{ _seq: 900, role: 'assistant', blocks: [{ kind: 'text', text: 'now' }] }]
+  const s = buildTranscriptSandbox({ events, feedPresent: false, pages: [[{ kind: 'user', text: 'old', seq: 500 }]] })
+  assert.deepEqual(s.rows().map((r) => r._seq), [900], 'no rows are borrowed from earlier parts')
+})
