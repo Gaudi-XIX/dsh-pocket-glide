@@ -6,9 +6,18 @@
 
 ## 未发布（工作树）
 
+**过程行改按「一段工具工作一行」，思考独占一条竖串，用时从 0 一直走，停止键点了就停**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值；手机须完全关闭重开才拿得到新壳。用户 2026-10-22 凌晨真机走查四条：①「怎么把所有的工具调用都压缩成一行了」——他要的竖串是「干了啥，干了啥 → 思考 → 回复 → 干了啥，干了啥 → 思考 → 回复 → 干了啥，干了啥，正在干啥 → 运行态提示，时间」；②「跑马灯一样已经过去的思考」不该闪；③「用时不停清零」，应「从 0 起一直往后走，过 60 秒变 1 分钟的形式」；④「运行中不能停止」）。
+
+- **① 过程行按段合并、置顶该段**：`renderMessage` 的 turnProcess 分支不再逐 cluster 出一行，而是把这一段里所有工具块过 `processRows()`（按类目首次出现顺序聚合，同类 done 与 running 分两行）交给 `processLineHtml()` 出**一行**，且**排在该段思考之前**；回复正文仍是独立消息。于是竖串是「一行过程 → 思考（可点开）→ 回复 → 下一段……」，最后一段的行尾写「正在编辑文件」。（第一版曾把整回合的工具压成一行放在段首，用户 2026-10-22 打回：那样第二段就没有自己的「干了啥」了。）
+- **② 只有最新的思考走扫光**：过程消息里只有 `blocks` 的最后一块在流式时拿到 `streaming=true`（`message.streaming&&block===tail`），其余一律 `data-state="ok"`；跑马灯（`.thinking[data-state=running] .activity-summary:after`）因此只跟着正在写的那一段闪，写过的立刻静下来。
+- **③ 用时不再被清零（根因与 ④ 同一个）**：`noteTurnBoundary()` 原来只在 `seq<turnRunningSeq` 时早退，而 `updateRunning()` 每次轮询都把同一批事件重放一遍 ⇒ 同一个 `turn/start`（`seq` 相等）每秒重跑一次函数体，`turnElapsedAt=Date.now()` 被反复重置（永远显示 0 秒），`stopPending=false` 也被反复抹掉。修法：`fresh=seq>turnRunningSeq`，只有新回合才清 `stopPending`，且计时只在 `!turnElapsedAt||turnElapsedTurn!==startedKey` 时起算。格式沿用 `formatElapsed`（`45s`／`1m20s`／`1h05m`）。
+- **④ 停止键点了就不再被抹掉**：同一条 `fresh` 守卫；另外给 `session.cancel` 加 8 秒看门狗（`stopPendingTimer`）——桥若一直不回，转圈最多转 8 秒就复位成可再停，不再永久卡成禁用态。
+- **回归锁**：`test/pages-process-render.test.js` 新增 `messageSandbox` 与两组用例（一段工具工作一行、行在思考之前、两段各出各的行；只有最新思考带 `data-state="running"`）；`test/visible-interleave.test.js` 的 LEDGER-1 改为 SEGMENT-1（每段只带自己那段的工具、没有回合级 ledger）；`test/stop-pending.test.js` 改钉新形状（`if(fresh)stopPending=false` ＋ 计时的 `if(!turnElapsedAt||turnElapsedTurn!==startedKey)` 守卫 ＋ 看门狗）；`test/turn-footer-meta.test.js` A15 改为钉「页脚是 `.message` 的最后一个子节点，且 turnProcess／turn-error 分支先走」。
+- **回归**：全量 `node --test --test-concurrency=1 test/*.test.js` = **1419 tests / 1414 pass / 2 fail**，两例仍是 `test/tunnel.test.js` 造 `.tgz` 的 MSYS GNU tar 环境伪红（见下条备案）。整套里每轮会随机再红 1 个与本线无关的文件（`device-registry`／`notify`／`inner-auth` 各出现一次，单跑全绿），属套装环境抖动。
+
 **过程只留一行、思考独占一条竖串、回合用时实时跳、模型重试说清楚**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值；手机须完全关闭重开才拿得到新壳。用户 2026-10-21 三轮收敛后定案：①「所有工具调用只保留最上面那一个窗口」，点开、下拉二级菜单、点进工具明细「这整个都不需要了」；②「思考单独拿出来放上面」，形成一竖串「一个思考 → 一个回复内容 → 一个时间戳」，思考可点开；③ 桌面端传来的 `transcriptView` 四档在手机上「直接坍缩」，固定一种形态；④ 桌面端模型重试次数与最终报错要透传到手机（「模型不是有时候会重试几次，然后会推一个报错信息吗」）；⑤ 顺序按事件发生先后，不重排（用户选 B 方案「它出现在哪就是哪」），工具行要同时写「已经干了什么几次」和「正在干什么」）。
 - **改法（只动 `lib/pages.js`，桥零改动）**：宿主事件本来就在流到页面，缺的只是渲染。
-  - 删掉外层 `<details class="turn-process">` 折叠容器与整套工具明细器官（`renderToolCard`/`renderToolDiff`/`renderToolRaw`/`diffRowsHtml`/`toolClusterState`/`toolArgsOf`/`pretty`/`diffLineSplit`/`toolSummaryLine`/`stableLiveTitle`/`liveThinkingLine`），新增 `renderProcessLine()`：一行、不可点、无箭头、无 `details`，文本由新纯函数 `processLineText()` 从「类目＋次数＋进行中/失败」推出——「已读取文件 2 次」「已读取文件 3 次，正在编辑文件」「修改了文件（失败）」。相邻同类合并成一行，换类另起一行，顺序一字不改。
+  - 删掉外层 `<details class="turn-process">` 折叠容器与整套工具明细器官（`renderToolCard`/`renderToolDiff`/`renderToolRaw`/`diffRowsHtml`/`toolClusterState`/`toolArgsOf`/`pretty`/`diffLineSplit`/`toolSummaryLine`/`stableLiveTitle`/`liveThinkingLine`），新增 `renderProcessLine()`：一行、不可点、无箭头、无 `details`，文本由新纯函数 `processLineText()` 从「类目＋次数＋进行中/失败」推出——「已读取文件 2 次」「已读取文件 3 次，正在编辑文件」「修改了文件（失败）」。（**合并粒度由下条 2026-10-22 修正为「一段工具工作一行」**，不是整回合一行。）
   - 思考块对任何档位都渲染（原来 compact 整块隐藏、verbose 默认展开），默认收起、点开看正文。
   - `transcriptView` 从渲染路径彻底移除（状态声明／boot 赋值／`extractMobileSettings`／`applyInheritedSettings` 六处全删）；桥仍下发该键，页面侧不再读，也不留设置控件残壳。
   - 用时并入底部 `turn-status` 行（`deepDiveShimmer` 原样）：`深度思考中… 12s`，1s 定时器只改该节点文本；`turn/start` 起算、`turn/end` 结算，结算值挂到该回合最后一条消息，尾部时间戳变 `18:42 · 用时 1m20s`（`formatElapsed`：`45s`／`1m20s`／`1h05m`）。计时一律手机侧 `Date.now()`——注释里那条「绝不可拿宿主时间戳与本机墙钟比」照旧生效。

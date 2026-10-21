@@ -173,8 +173,10 @@ test('the cancel handler goes optimistic before the rpc and reverts on refusal',
   assert.notEqual(start, -1, 'the handler is wired');
   const body = js.slice(start, js.indexOf(";$('questionComposer')", start));
   assert.match(body, /if\(!activeSession\|\|stopPending\)return/, 'a pending stop cannot double-fire');
-  assert.match(body, /stopPending=true;syncPromptUi\(\);syncTurnStatus\(\)/,
+  assert.match(body, /stopPending=true;[\s\S]*?syncPromptUi\(\);syncTurnStatus\(\);try\{clearAwaitingTurn/,
     'the ack happens before the rpc leaves');
+  assert.match(body, /stopPendingTimer=setTimeout\(\(\)=>\{stopPendingTimer=null;if\(!agentRunning\)return;stopPending=false;/,
+    'a cancel the host never answers cannot leave the button disabled forever');
   assert.match(body, /clearAwaitingTurn\(\);await rpc\('session\.cancel'/, 'the rpc itself is unchanged');
   assert.match(body, /catch\(e\)\{stopPending=false;syncPromptUi\(\);syncTurnStatus\(\);showError/,
     'a refused stop reverts instead of leaving a stuck spinner');
@@ -312,6 +314,6 @@ test('the boundary clear points ship in the page source', () => {
     'expireTurnRunning hands the verdict to the host consult');
   assert.match(js, /if\(!turnRunningOpen\)return;if\(turnRunningSeenSeq>seenAtStart\)\{watchTurnRunning\(turnRunningSeenSeq\);return\}if\(busy\)\{[\s\S]*?\}turnRunningOpen=false;stopPending=false;/,
     'finishTurnConfirm retires the stale stop only on a host that says idle');
-  assert.match(js, /if\(turnRunningOpen\)\{clearTurnRunningWatch\(\);turnRunningSeenSeq=turnRunningSeq;stopPending=false;[\s\S]*?turnElapsedAt=Date\.now\(\);turnRetry=null\}/,
+  assert.match(js, /if\(turnRunningOpen\)\{clearTurnRunningWatch\(\);turnRunningSeenSeq=turnRunningSeq;if\(fresh\)stopPending=false;[\s\S]*?if\(!turnElapsedAt\|\|turnElapsedTurn!==startedKey\)\{turnElapsedTurn=startedKey;turnElapsedAt=Date\.now\(\);turnRetry=null\}/,
     'noteTurnBoundary retires the stop when a new turn starts and arms the turn clock');
 });

@@ -94,6 +94,29 @@ test('INTERLEAVE-1 segments alternate with replies in arrival order', () => {
   )
 })
 
+// 2026-10-22 (m01925): the reader drew the stack as
+//   干了啥 / 思考 / 回复 / 干了啥 / 思考 / 回复 ...
+// so a process group owns exactly the tool calls of its own segment — the
+// segment boundary is what breaks the line, nothing merges across a reply.
+test('SEGMENT-1 each process segment owns only the tools of its own run', () => {
+  const sandbox = buildSandbox()
+  const out = sandbox.visibleMessages([
+    userEvent(1, '跑两步'),
+    toolCall(2, 1, 1, 'c1', 'read_file'),
+    toolResult(3, 1, 1, 'c1'),
+    textChunk(4, 1, 1, '第一步完成'),
+    toolCall(5, 1, 2, 'c2', 'edit_file'),
+    toolResult(6, 1, 2, 'c2'),
+    textChunk(7, 1, 2, '第二步也完成'),
+    turnEnd(8, 1),
+  ])
+  const groups = out.filter((message) => message.turnProcess)
+  assert.equal(groups.length, 2, 'one group per run of tool work')
+  const names = groups.map((message) => message.blocks.filter((block) => block.kind === 'tool').map((block) => block.name))
+  assert.deepEqual(names, [['read_file'], ['edit_file']], 'no tool crosses into a later segment')
+  assert.equal(groups.some((message) => 'ledger' in message), false, 'there is no turn-wide ledger behind the grouping')
+})
+
 test('INTERLEAVE-2 a text block inside a tool step still cuts before the next tool', () => {
   // Same step produces text then a tool call (streaming order): the reply is the
   // text, and the tool after it must open the NEXT group, not ride before the text.

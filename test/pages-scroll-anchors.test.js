@@ -209,6 +209,8 @@ const renderSandbox = () => {
     function clusterToolBlocks(blocks){return blocks.map((block,index)=>({type:'block',block,index}))}
     function toolActivityCategory(){return 'tools'}
     function renderProcessLine(){return '<div class="process-line">已读取文件</div>'}
+    function processRows(){return [{category:'read',count:1,running:false,failed:false}]}
+    function processLineHtml(){return '<div class="process-line">已读取文件</div>'}
     ${body}
     return { renderMessage }
   `)()
@@ -225,9 +227,9 @@ test('msg-hist lands on the message wrapper and on the flat process message, nev
   // 2026-10-21: the turn-process fold is gone. A process-only row is now a plain
   // message wrapper whose children are the flat process lines, and the history
   // tag still has to ride on that wrapper.
-  const process = renderMessage({ turnProcess: true, turnKey: 't1', streaming: false, blocks: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], _history: true })
+  const process = renderMessage({ turnProcess: true, turnKey: 't1', streaming: false, blocks: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], ledger: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], _history: true })
   assert.match(process, /^<div class="message assistant msg-hist">/)
-  const tailProcess = renderMessage({ turnProcess: true, turnKey: 't1', streaming: false, blocks: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], _history: false })
+  const tailProcess = renderMessage({ turnProcess: true, turnKey: 't1', streaming: false, blocks: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], ledger: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], _history: false })
   assert.match(tailProcess, /^<div class="message assistant">/)
 })
 

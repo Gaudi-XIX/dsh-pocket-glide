@@ -571,17 +571,23 @@ test('A15 the four footer helpers live in the renderMessage window', () => {
   }
 })
 
-test('A15 renderMessage stays one line and appends the footer inside the message div', () => {
-  const start = assets.zh.js.indexOf('function renderMessage(')
-  const line = assets.zh.js.slice(start, assets.zh.js.indexOf('\n', start))
-  assert.ok(line.startsWith('function renderMessage('), 'the renderer must still be found on one line')
-  assert.ok(line.includes("renderMessageTail(message)"), 'the message must render its footer')
+test('A15 renderMessage keeps the footer inside the message div and branches out first', () => {
+  // 2026-10-21: the process branch grew a body (it now paints one flat line per
+  // turn), so renderMessage is no longer a single line. The invariant the footer
+  // needs is narrower: whichever branch builds a plain `.message`, the tail is the
+  // LAST child of that div, and both special branches are taken before it.
+  const window = between('function renderMessage(', 'function formatElapsed(')
+  const plain = window.slice(window.indexOf('const blocks='), window.indexOf('\n', window.indexOf('const blocks=')))
+  assert.ok(plain.includes("renderMessageTail(message)"), 'the message must render its footer')
   assert.ok(
-    /\+renderMessageTail\(message\)\+'<\/div>'\}\s*$/.test(line),
+    /\+renderMessageTail\(message\)\+'<\/div>'\}\s*$/.test(plain),
     'the footer must be the last child of the .message div, not a sibling node',
   )
-  assert.ok(line.includes("message.turnProcess"), 'the process branch must still be taken first')
-  assert.ok(line.includes("role==='turn-error'"), 'the error bubble must still branch out first')
+  assert.ok(window.includes("role==='turn-error'"), 'the error bubble must still branch out first')
+  assert.ok(
+    window.indexOf('message.turnProcess') < window.indexOf("role==='turn-error'"),
+    'the process branch must still be taken first',
+  )
 })
 
 test('A19c the clock is gated per bubble, not by the whole-turn running flag', () => {

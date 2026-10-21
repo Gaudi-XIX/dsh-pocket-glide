@@ -61,7 +61,7 @@ function renderSandbox(locale) {
   const js = assets[locale].js
   const names = [
     'toolActivityCategory', 'processLineText', 'clusterToolBlocks',
-    'renderBlock', 'renderProcessLine', 'formatElapsed', 'pad2',
+    'renderBlock', 'processRows', 'processLineHtml', 'renderProcessLine', 'formatElapsed', 'pad2',
   ]
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
@@ -355,7 +355,7 @@ test('a mixed turn cuts into one line per category, in arrival order', () => {
 
 test('a pending question still hides while its composer owns the floor', () => {
   const js = assets.zh.js
-  const names = ['toolActivityCategory', 'processLineText', 'clusterToolBlocks', 'renderBlock', 'renderProcessLine']
+  const names = ['toolActivityCategory', 'processLineText', 'clusterToolBlocks', 'renderBlock', 'processRows', 'processLineHtml', 'renderProcessLine']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   const sandbox = new Function(
     'L', 'activeSession',
@@ -481,4 +481,76 @@ test('the retry counter is kept for the failure banner', () => {
   const { sandbox } = statusSandbox('zh')
   sandbox.noteLlmRetry({ retry: 3, maxRetries: 3, turn: 9, failure: { code: 'overloaded' } })
   assert.ok(sandbox.read().turnRetry, 'the row knows about it')
+})
+
+// ------------------------------------------------- 6. the whole turn, one line
+
+// 2026-10-22 (m01708 ①②): the reader saw one line per tool and a sweep running
+// under every thinking block that had already finished. Both come from the same
+// function, so both are asserted through the real renderMessage.
+function messageSandbox(locale) {
+  const js = assets[locale].js
+  const names = [
+    'toolActivityCategory', 'processLineText', 'clusterToolBlocks', 'renderBlock',
+    'processRows', 'processLineHtml', 'renderProcessLine', 'renderMessage',
+  ]
+  const body = names.map((name) => extractFunction(js, name)).join('\n')
+  return new Function(
+    'L', 'STEP', 'activeSession',
+    `${body};
+     const esc=v=>String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+     const markdown=text=>String(text||'')
+     function activityIcon(){return '<i class="icon"></i>'}
+     function activityChevron(){return '<c></c>'}
+     function reasoningSummary(){return ''}
+     const turnOpenState=new Map()
+     const pendingQuestion=null
+     function renderMessageTail(){return ''}
+     return { renderMessage, processRows }`,
+  )(labels(locale), STEP_TABLE(locale), 's1')
+}
+
+// 2026-10-22 (m01925): the vertical stack the reader drew is
+//   干了啥 / 思考 / 回复 / 干了啥 / 思考 / 回复 ...
+// so the line covers ONE run of tool work (a segment), sits at the TOP of that
+// segment, and the segment's own thinking follows it.
+test('one run of tool work is one line, at the top of its segment', () => {
+  const { renderMessage, processRows } = messageSandbox('zh')
+  const tools = [
+    tool('read', 'done', { file_path: '/w/a.ts' }),
+    tool('read', 'done', { file_path: '/w/b.ts' }),
+    tool('bash', 'done', { command: 'ls' }),
+    tool('edit', 'running', { file_path: '/w/c.ts' }),
+  ]
+  assert.equal(processRows(tools).length, 3, 'one row per category, in first-appearance order')
+  const html = renderMessage({ turnProcess: true, turnKey: 't1', streaming: true, blocks: [...tools, think('看一眼再改')] })
+  assert.equal(html.split('class="process-line"').length - 1, 1, 'the run speaks through a single line')
+  assert.ok(html.includes('已读取文件 2 次'), 'the finished reads fold into a count')
+  assert.ok(html.includes('执行了命令'), 'so does the command')
+  assert.ok(/正在编辑文件/.test(html), 'and the action in flight is written at the tail of that same line')
+  assert.ok(html.indexOf('class="process-line"') < html.indexOf('class="thinking"'), 'the line comes first, the thinking follows it')
+  assert.ok(!html.includes('a.ts'), 'no path rides along')
+})
+
+test('two separate runs draw two lines, never one merged turn-wide line', () => {
+  const { renderMessage } = messageSandbox('zh')
+  const first = renderMessage({ turnProcess: true, turnKey: 't1', segment: 0, streaming: false, blocks: [tool('read', 'done')] })
+  const second = renderMessage({ turnProcess: true, turnKey: 't1', segment: 1, streaming: true, blocks: [tool('edit', 'running')] })
+  assert.equal(first.split('class="process-line"').length - 1, 1, 'the first run owns its line')
+  assert.equal(second.split('class="process-line"').length - 1, 1, 'and so does the second')
+  assert.ok(first.includes('已读取文件') && !first.includes('正在编辑文件'), 'the first says only what it did')
+  assert.ok(second.includes('正在编辑文件') && !second.includes('已读取文件'), 'the second says only what it is doing')
+})
+
+test('only the newest thinking block wears the sweep; the finished ones sit still', () => {
+  const { renderMessage } = messageSandbox('zh')
+  const html = renderMessage({
+    turnProcess: true,
+    turnKey: 't1',
+    streaming: true,
+    blocks: [think('先想一想'), think('再想一想')],
+  })
+  assert.equal(html.split('data-state="running"').length - 1, 1, 'exactly one block is marked live')
+  const states = [...html.matchAll(/class="thinking"[^>]*data-state="([a-z]+)"/g)].map((match) => match[1])
+  assert.deepEqual(states, ['ok', 'running'], 'the older thought sits still, the newest one animates')
 })
