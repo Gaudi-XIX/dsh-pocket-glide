@@ -69,6 +69,24 @@ const retryMaxOf = () => {
   return Number(m[1])
 }
 
+const batchMaxOf = () => {
+  const m = assets.zh.js.match(/const TAIL_BATCH_MAX=(\d+);/)
+  assert.ok(m, 'TAIL_BATCH_MAX must be a plain number in the asset')
+  return Number(m[1])
+}
+
+const roundsMaxOf = () => {
+  const m = assets.zh.js.match(/const TAIL_ROUNDS_MAX=(\d+);/)
+  assert.ok(m, 'TAIL_ROUNDS_MAX must be a plain number in the asset')
+  return Number(m[1])
+}
+
+const requeueMaxOf = () => {
+  const m = assets.zh.js.match(/const TAIL_REQUEUE_MAX=(\d+);/)
+  assert.ok(m, 'TAIL_REQUEUE_MAX must be a plain number in the asset')
+  return Number(m[1])
+}
+
 const tailSandbox = () => {
   const js = assets.zh.js
   const body = [
@@ -160,6 +178,9 @@ const listSandbox = ({ state = {}, rpcImpl }) => {
     const TAIL_PACK_MAX=${packMaxOf()}
     const TAIL_CACHE_MAX=${cacheMaxOf()}
     const TAIL_RETRY_MAX=${retryMaxOf()}
+    const TAIL_BATCH_MAX=${batchMaxOf()}
+    const TAIL_ROUNDS_MAX=${roundsMaxOf()}
+    const TAIL_REQUEUE_MAX=${requeueMaxOf()}
     const tailCache=new Map(),tailArmedAt={},tailPending=new Set(),tailFailed={}
     let activeSession=${JSON.stringify(state.activeSession ?? null)}
     const sessionSummaries=${JSON.stringify(state.rows ?? [])}
@@ -249,6 +270,93 @@ test('a permanently failing row is retried, then left alone until its stamp move
   assert.equal(calls, cap + 1, 'a moved stamp resets the budget and asks again')
 })
 
+// 2026-10-21 用户 m02339 定范围：「所有拉取的会话消息，都停留在这个主页上显示的会话，
+// 也就是 24 小时之内更新的，再加置顶的」。rangeOf 把 renderWorkspaces 里算 cap 的那几句
+// 抽出来——它自带 24h 窗口（RECENT_WINDOW_MS）与置顶穿透，补拉沿用同一份口径就不会外溢。
+const rangeOf = () => {
+  const js = assets.zh.js
+  const cap = extractFunction(js, 'bootRangeCap')
+  return new Function(`const RECENT_WINDOW_MS=${Number(js.match(/const RECENT_WINDOW_MS=(\d+)/)[1])};
+    function sortAtOf(s){return Number((s&&s.updatedAt)||0)}
+    ${cap}
+    return bootRangeCap`)()
+}
+
+test('the landing补拉 range is the 24h window plus pinned rows, never the whole list', () => {
+  const cap = rangeOf()
+  const now = 1_000_000_000_000
+  const H = 60 * 60 * 1000
+  const members = [
+    { sessionId: 'new', updatedAt: now - H }, // in window
+    { sessionId: 'old', updatedAt: now - 30 * H }, // out of window
+    { sessionId: 'old-pinned', updatedAt: now - 90 * 24 * H }, // out of window but pinned
+    { sessionId: 'edge', updatedAt: now - 24 * H + 1000 }, // just inside
+  ]
+  const pinned = new Set(['old-pinned'])
+  assert.equal(cap(members, now, pinned), 3, 'pinned + 24h rows only — the 30-day-old unpinned row stays out')
+})
+
+test('the补拉 keeps asking in batches until the visible rows are done（进主页以后再加载）', async () => {
+  const batch = batchMaxOf()
+  const rounds = roundsMaxOf()
+  const total = Math.min(batch * rounds, 24)
+  assert.ok(total > batch, 'the fixture must need more than one batch')
+  const rows = []
+  const visible = []
+  const tails = {}
+  for (let i = 0; i < total; i++) {
+    const id = 's' + i
+    rows.push({ sessionId: id, updatedAt: i + 1 })
+    visible.push(id)
+    tails[id] = { updatedAt: i + 1, events: [rec(i + 1)] }
+  }
+  const asked = []
+  const box = listSandbox({ state: { rows, visible }, rpcImpl: async (method, payload) => { asked.push(payload.sessions.slice()); return { tails } } })
+  await box.requestVisibleTails()
+  assert.ok(asked.length >= 2, `more than one batch went out (got ${asked.length})`)
+  assert.equal(asked.length, Math.ceil(total / batch), 'one round covers the visible rows by chaining batches')
+  for (const call of asked) assert.ok(call.length <= batch, `a batch never exceeds ${batch} sessions (bridge fans out 4 at a time under a 4500ms deadline)`)
+  assert.equal(box.tailCache.size, total, 'every visible row ends up armed')
+  for (const id of visible) assert.equal(box.tailArmedAt[id], rows.find((r) => r.sessionId === id).updatedAt, `${id} armed at its own stamp`)
+})
+
+test('a row the bridge could not reach in time is requeued, not written off（超时≠失败）', async () => {
+  const rows = [{ sessionId: 'a', updatedAt: 1 }, { sessionId: 'b', updatedAt: 2 }]
+  const visible = ['a', 'b']
+  const asked = []
+  let pass = 0
+  const box = listSandbox({
+    state: { rows, visible },
+    rpcImpl: async (method, payload) => {
+      asked.push(payload.sessions.slice())
+      pass += 1
+      // First pass: the bridge's deadline cut 'b' off. Second pass: it arrives.
+      if (pass === 1) return { tails: { a: { updatedAt: 1, events: [rec(1)] }, b: { error: 'timeout' } } }
+      return { tails: { b: { updatedAt: 2, events: [rec(2)] } } }
+    },
+  })
+  await box.requestVisibleTails()
+  assert.deepEqual(asked[1], ['b'], 'the timed-out row comes back in the next batch')
+  assert.equal(box.tailCache.has('b'), true, 'and it lands')
+  assert.equal(box.tailFailed.b, undefined, 'a deadline is not counted as a failure')
+})
+
+test('a row that keeps timing out stops requeueing, and a moved stamp lets it try again', async () => {
+  const cap = requeueMaxOf()
+  const rows = [{ sessionId: 'a', updatedAt: 1 }]
+  const box = listSandbox({ state: { rows, visible: ['a'] }, rpcImpl: async () => ({ tails: { a: { error: 'timeout' } } }) })
+  const asked = []
+  box.rpcAsked = asked
+  await box.requestVisibleTails()
+  // One round = 1 + TAIL_REQUEUE_MAX attempts at the same row.
+  assert.equal(box.tailArmedAt.a, undefined, 'never armed by a timeout')
+  assert.equal(box.tailFailed.a.count, 1, 'the give-up is recorded as one failure')
+  // Its stamp moving is a new question.
+  box.sessionSummaries[0].updatedAt = 2
+  await box.requestVisibleTails()
+  assert.equal(box.tailArmedAt.a, undefined, 'still not armed, but it asked again (no treadmill, no permanent write-off)')
+})
+
 // ------------------------------------- the pack itself (m01005①)
 
 const packSandbox = () => {
@@ -321,8 +429,8 @@ test('the pack cache is bounded — full records must not pile up unbounded', as
 test('the batch is prefetch only: no tail line in the row, no re-render after it', () => {
   const js = assets.zh.js
   assert.doesNotMatch(js, /task-copy[^]*msg-tail[^]*tailTextOf/, 'the landing row paints no message text — prefetch only (m02164①)')
-  assert.match(js, /rpc\('session\.tails',\{sessions:ids\},60000\)/, 'one screen of tails is judged against 60s, not the 12s default (the bridge fans out up to 30 Host pages)')
-  assert.match(js, /if\(host\.innerHTML!==html\)host\.innerHTML=html;requestVisibleTails\(host\)/, 'the prefetch rides every landing paint')
+  assert.match(js, /rpc\('session\.tails',\{sessions:batch\},60000\)/, '每批尾包按 60s 自己的预算算，不吃 12s 默认档（桥 4 路并发翻 Host 页，一页 465–719ms）')
+  assert.match(js, /if\(host\.innerHTML!==html\)host\.innerHTML=html;requestTailBootRound\(host\);requestVisibleTails\(host\)/, '首屏那一轮立即补、之后的接续轮次也随着每次重画（m02267 用户：「进去主页以后再加载」）')
   assert.match(js, /extracted\.pack=tailPack\(hit\.events\);tailCache\.set\(id,extracted\)/, 'the pack is cached whole, not clipped to one line (m01005①)')
   // A batch that lands must not rebuild the list: the reader is scrolling it.
   // Cut the real function out of the asset — a whole-file regex would happily

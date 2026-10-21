@@ -1093,7 +1093,11 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   earlierPlainRow + currentTranscript 的补行分支 + 测试实测 zh 388 435（css 56 836 +
 //   js 331 599）/ en 388 365（css 56 836 + js 331 529）；相对上一档净 +703 / +703 B。
 //   取 389 000（余量 565 B（zh）/ 635 B（en））。
-const ASSET_BUDGET_BYTES = 389_000
+// 2026-10-21 两条新链路撑破上一档：① 进主页后小批连跑补拉剩余可见行（TAIL_BATCH_MAX /
+//   TAIL_ROUNDS_MAX / TAIL_REQUEUE_MAX + 分批递归，m02267）；② 启动数字改成请求发出即开跑
+//   （countCrawl）。实测 zh 390 426（css 56 836 + js 333 590）/ en 390 356（css 56 836 +
+//   js 333 520）；取 391 500（余量 1 074 B（zh）/ 1 144 B（en））。
+const ASSET_BUDGET_BYTES = 391_500
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

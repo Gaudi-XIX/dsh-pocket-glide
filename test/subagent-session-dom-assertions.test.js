@@ -243,10 +243,12 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     // empty cache and a no-op pull match a landing with nothing prefetched yet.
     const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
     function requestVisibleTails(){}
+    function requestTailBootRound(){}
     ${extractFunction(js, 'tailTextOf')}
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'visibleSessions')}
     ${extractFunction(js, 'blankRowVisible')}
+    ${extractFunction(js, 'bootRangeCap')}
     ${extractFunction(js, 'taskState')}
     ${extractFunction(js, 'taskGlyph')}
     ${extractFunction(js, 'pad2')}

@@ -75,9 +75,10 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
     const $=(id)=>container
     const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
     function requestVisibleTails(){}
+    function requestTailBootRound(){}
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${[
-      'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
+      'visibleSessions', 'blankRowVisible', 'bootRangeCap', 'taskState', 'taskGlyph', 'pad2',
       'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
       'isNoticeUnread',
       'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'wsRunning', 'wsGlyphOf', 'sessionModelLabel',

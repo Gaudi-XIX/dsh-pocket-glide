@@ -439,7 +439,7 @@ test('isSessionUnread: the never-opened inference is suspended until the ledger 
 const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } = {}) => {
   const js = assets.zh.js
   const body = [
-    'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
+    'visibleSessions', 'blankRowVisible', 'bootRangeCap', 'taskState', 'taskGlyph', 'pad2',
     'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
     'isNoticeUnread',
     'readLastMessageMap', 'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank', 'wsHeadTimeAt',
@@ -474,6 +474,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     // the sandbox never fetches — an empty cache means no line, matching the page.
     const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
     function requestVisibleTails(){}
+    function requestTailBootRound(){}
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${body}
