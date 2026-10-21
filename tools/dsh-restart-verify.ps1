@@ -65,6 +65,38 @@ if (Get-ScheduledTask -TaskName 'DSH-ReviveOnce' -ErrorAction SilentlyContinue) 
   Write-Host '  仍存在 —— 任务没跑完（自删没执行），留意残留'
 } else { Write-Host '  已注销' }
 
+Write-Host ''
+Write-Host '=== 5) 手机壳摘要：运行桥 V= 与磁盘实算比对 ==='
+# 生效判据（2026-10-21 定）：重启后运行桥 /sw.js 的 V= 等于按盘上 lib/pages.js
+# 实算的 zh 壳摘要（sha256(css \0 js).slice(0,12)）。桥只回 V，不回壳本体。
+$pocketDir = 'F:\defws\dsh-pocket'
+$digestJs = @'
+import { createHash } from 'node:crypto';
+import { mobilePageAssets } from './lib/pages.js';
+const a = await mobilePageAssets({ locale: 'zh' });
+console.log('pocket-' + createHash('sha256').update(a.css).update('\u0000').update(a.js).digest('hex').slice(0, 12));
+'@
+$disk = $null
+if (Test-Path (Join-Path $pocketDir 'lib\pages.js')) {
+  Push-Location $pocketDir
+  $disk = (& node --input-type=module -e $digestJs 2>$null | Select-Object -Last 1).Trim()
+  Pop-Location
+}
+$running = $null
+try {
+  $sw = (Invoke-WebRequest -Uri 'http://127.0.0.1:43127/sw.js' -UseBasicParsing -TimeoutSec 5).Content
+  if ($sw -match "const V='([^']+)'") { $running = $Matches[1] }
+} catch { }
+Write-Host "  磁盘实算(zh): $disk"
+Write-Host "  运行桥 V=     : $running"
+if ($disk -and $running -and $disk -eq $running) {
+  Write-Host '  >>> 壳一致：手机完全关闭重开后即为新壳'
+} elseif ($disk -and $running) {
+  Write-Host '  >>> 壳不一致：宿主未装载最新工作树（或并行线又改了盘），先查盘上 HEAD/工作树'
+} else {
+  Write-Host '  >>> 证据不足（磁盘脚本或运行桥不可用），按 TODO/SNAPSHOT 的手工判据复核'
+}
+
 $logText = if (Test-Path $logPath) { Get-Content $logPath -Encoding UTF8 -Raw } else { '' }
 $launched = $logText -match '已发起桌面端'
 $portsOk = ($bridgeFound.Count -gt 0) -and ($guiFound.Count -gt 0)
