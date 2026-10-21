@@ -99,15 +99,39 @@ if ($disk -and $running -and $disk -eq $running) {
 
 $logText = if (Test-Path $logPath) { Get-Content $logPath -Encoding UTF8 -Raw } else { '' }
 $launched = $logText -match '已发起桌面端'
-$portsOk = ($bridgeFound.Count -gt 0) -and ($guiFound.Count -gt 0)
-$fresh = ($survivors.Count -eq 0) -and ($now.Count -gt 0) -and ($before.Count -gt 0)
 
+# 端口/进程证据（2026-10-21 起本脚本直接用，不再只看「已发起」日志）：
+# 「已发起」日志缺了不代表没重启 —— 无 before 快照时（如从别的会话手动触发）
+# 网关那条路就不会写它，旧判据会把一次真成功判成「未成功」。
+#
+# 现在按「这台机器上的 DSH 已经跑了多久」判：uptime 小于 5 分钟即视为刚重启。
+# 为什么不用「进程启动晚于 bridge ready」：桥是宿主起来之后再启动的，
+# 宿主/渲染进程必然比 ready 行更早，那个比较恒为假（2026-10-21 实证）。
+# 也不要求「全部进程都全新」：会话侧会按需另起 subprocess runner，
+# 它的启动时间与是否重启无关。
+$portsOk = ($bridgeFound.Count -gt 0) -and ($guiFound.Count -gt 0)
+$minUptime = ($now | ForEach-Object { try { ((Get-Date) - $_.StartTime).TotalSeconds } catch { $null } } | Where-Object { $null -ne $_ } | Measure-Object -Minimum).Minimum
+$uptimeOk = ($now.Count -gt 0) -and ($null -ne $minUptime) -and ($minUptime -lt 300)
+if ($before.Count -gt 0) {
+  $fresh = ($survivors.Count -eq 0) -and ($now.Count -gt 0)
+  $freshBasis = 'before 快照比对'
+} else {
+  $fresh = $uptimeOk
+  if ($null -ne $minUptime) {
+    $freshBasis = "无 before 快照，改按最老进程 uptime（$([int]$minUptime)s，<300s 视为刚重启）"
+  } else {
+    $freshBasis = '无 before 快照且读不到进程启动时间'
+  }
+}
 Write-Host ''
 Write-Host '=== 判定 ==='
 Write-Host "  日志有「已发起桌面端」: $launched"
-Write-Host "  进程指纹全新(没一个活下来): $fresh"
+Write-Host "  进程指纹全新(没一个活下来): $fresh  [$freshBasis]"
 Write-Host "  桥与 GUI 都在监听: $portsOk"
-if ($launched -and $fresh -and $portsOk) { Write-Host '  >>> 重启成功' }
+if ($portsOk -and $fresh) {
+  if ($launched) { Write-Host '  >>> 重启成功' }
+  else { Write-Host '  >>> 重启成功（「已发起」日志缺失，但进程与端口证据成立）' }
+}
 elseif ($now.Count -eq 0) { Write-Host '  >>> 失败：DSH 没起来（机器现在没有桌面端）' }
 else { Write-Host '  >>> 未成功或证据不足，看上面三项哪条不成立' }
 
