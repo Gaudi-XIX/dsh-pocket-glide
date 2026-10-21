@@ -6,6 +6,37 @@
 
 ## 未发布（工作树）
 
+**输密码前那张「多余」的落地卡不见了，阶梯的三个假数字也不会再一模一样**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-21 报障两条：①「这个页面我感觉像是多余的」（后澄清「我多余页面的意思是指冷启动第一次输PIN码之前弹出来的那个页面」）；②「这里怎么数字都是一样的，并且数字明显是错的，并且应该一步一步来（我只单的前端显示，后端肯定是提前加载）」——指重连页四步阶梯右侧计数 14/14/14 三个数完全相同）。
+
+- **BUG① 根因**：冷启动手机扫隧道二维码落在 `/`（未鉴权）→ `lib/bridge.js:4989-4990` 渲染 `renderMobileReconnectPage(fresh=true)` → 页内 `MODE==='auto'` 立刻 `startRetry()` POST `/pair/retry`，而隧道档的 `/pair/retry` 是**写死的空转**（`lib/bridge.js:4735-4741` 自注 "deliberate no-op: it only tells the phone to ask for the PIN"）→ 只回 `{pinRequired:true}` → `showPin()` 才把标题换成「输入连接密码」并亮出密码框。也就是说：那张「连接 Pocket + Curiouser and curiouser! + Pocket 一级准备」的卡片只是**为了被下一帧替换掉而存在**。
+- **BUG① 改法（只动页内，不碰桥）**：新增 `pinFirst = fresh && interactive && connectionMode === 'tunnel'`；命中时首帧就是密码态（heading=`T.pinHeading`、guidance=`T.pinHint`、`#pinBox` 不带 `hidden`、直接 focus），页尾改成 `if(PIN_FIRST){…focus…}else if(MODE==='auto')startRetry();` —— 那趟注定只回 `pinRequired` 的空转不再跑。同时删掉卡片上那两行文艺副标题：正牌首屏 splash 早在 app 壳 `lib/pages.js:704`（`#workspaces > .ws-splash`）里，落地卡上的是复制品（`git log -S"Curiouser"` 实证两处是 10-18「方案C 首屏 splash」那批复制的）。局域网档不照搬：那边的 `/pair/retry` 有真恢复语义（能续就续，续不了才要重新扫码）。
+- **BUG② 根因**：`sharedStageScript()` 里有个假里程表 `countCrawl(i,fmt)`（`CRAWL_MS=110`、`CRAWL_MAX_MS=8000`）：请求一发出就按 `elapsed/110` 每帧自增写进计数格，与真实条数毫无关系；而三条腿（workspace.list / session.list / /api/boot）是**同一微任务里并发起跑**的 ⇒ 三个里程表同刻启动、同帧推进 ⇒ 数字必然一模一样（截图里的 14 ≈ 请求发出后约 1.5s 的帧数）。真实条数要等 `countUp`（`COUNT_UP_MS=450`）接管才写入，截图那一刻还没接管。
+- **BUG② 改法**：① 整段删掉 `countCrawl` / `CRAWL_MS` / `CRAWL_MAX_MS`——**再也不会有「请求还没回来数字先狂涨」**；② 计数改成闸门寄存：`countUp` 在闸门开启后、且该行还没被揭示时，只把 `{target,fmt}` 寄存在元素上（`el._pending`），直到该行被揭示（`releaseCount`）才交出；③ 三条腿**仍旧同时发出**（后端照旧提前加载，用户原话也确认了这一点），但前端按行序揭示：`const reads=[…三条腿…]; reads.forEach(p=>p.catch(()=>{})); await stage(0,()=>reveal(0,reads[0])); await stage(1,…); await stage(2,…)`。于是「一行在它的答案到达之前保持空白——空白等于还在量，比假数诚实」，且走到哪行亮哪行、每行只交自己那一行的真数。
+- **计数语义**（三条腿读的是同一份 catalogue 的不同切片，本来就不同，修好后各是各的数）：第 1 行＝工作区条数；第 2 行＝本次同步回来的会话条数（`limit=SESSION_LIST_ROWS=30`，宿主 `session/list` 不返回总数，见 `lib/bridge.js:6581-6625` 只回 `{items,fingerprint}`）；第 3 行＝预载尾包的会话数（`parsed.tails` 去 `error` 后，≤`BOOT_PRELOAD_TAILS=10`）。
+- **顺带修掉的观感错序**：旧写法下先到的腿会把后到的行标成 `is-done`（划线）而计数还空着；改成按行序揭示后，一行划线时它的数字已经在那儿了。
+- **回归锁**：`test/boot-count-up.test.js` 重写为闸门契约（13 test：无假里程表、闸门寄存、按序交出、闸门默认关、两页各一份器官）；`test/guided-rpc-formatter.test.js` 末条静态锁反转为「两页脚本不含 countCrawl」＋「每个 `countUp(stepCountEl(` 都传函数」；`test/pages-panel-ux.test.js` 的「三读同批」改为钉新形状（`const reads=[…`＋`reads.forEach(p=>p.catch(()=>{}))`＋`await stage(n,()=>reveal(n,reads[m]))`＋`gateLadder()`）；`test/pages-render-fixes.test.js` T5b 三分支（fresh+tunnel 直出密码框、fresh+lan 仍「连接 Pocket」、非 fresh 仍「连接已断开」）。
+- **计量账**：只动两个引导页文档、不进 app 壳，`ASSET_BUDGET_BYTES` 不变，运行壳摘要不受影响（`sharedStageScript()` 只被这两页引用，app 壳 `renderMobilePage` 在 `lib/pages.js:488` 不含它）。
+- **回归**：全量 `node --test --test-concurrency=1 test/*.test.js` = **1423 tests / 1421 pass / 0 fail / 2 skipped**（2026-10-21 20:2x）。注意跑法：DSH 的 bash 把 MSYS 的 GNU tar 排在 `C:\Windows\System32\tar.exe` 之前，`test/tunnel.test.js` 两档造 `.tgz` 的用例会报 `tar (child): Cannot connect to C: resolve failed`（GNU tar 把 `C:\…` 当远程主机）——那是**环境伪红**，与本线无关；把 `C:\Windows\System32` 提到 PATH 最前即全绿（46 tests / 45 pass / 1 skipped）。
+
+**四步卡死的真根因：引导页 `rpc()` 的爬升参数丢了箭头，一调用就 `ReferenceError`**（⏳ 待重启生效：运行桥 43127 仍是 10:36 那次的旧实例。用户 2026-10-21 报障「Pocket 手机连接页面出了大问题，一直停留在这个页面」，红字「暂时无法连接桌面端，请确认 Pocket 正在运行。」＋四步停在第 4 行）。
+
+- **根因（一行）**：`sharedStageScript()` 里 `countCrawl(crawlIdx,method==='workspace.list'?(zh?v+' 个工作区':v+' ws'):(zh?v+' 个会话':v+' sess'))`——第二个参数本该是 `v=>…`，箭头在 `e19957d`「冷开取数四项」里丢了，`v` 从没定义，于是**每次 rpc() 都在请求发出之前就抛 `ReferenceError`**。
+- **为什么一直没暴露**：`countStepIndex()` 只在页面有 `#bootSteps` 时返回行号（即仅两个引导页），app 壳不含这段脚本；有活会话的手机直接进 `/`、永远不渲染引导页——只有「刚掉会话、正要重连」那一刻才踩，正好是最需要它工作的时候。
+- **为什么截图是「前两行划掉却没数字、第三行 10 组消息、第四行转圈」**：`runStages()` 是 `Promise.all([stage0(rpc workspace.list),stage1(rpc session.list),stage2(/api/boot)])` 三条并发；两条 rpc 立刻 reject，stage(2) 直连 `/api/boot` 成功、`setStep(3)` 把前三行标完成、`countUp` 写出「10 组消息」；`Promise.all` 在第一个 rejection 上抛 → catch → 旧码 `fail(T.unavailable)`。前两行空计数正是「请求根本没发出去」的指纹。
+- **证据**：Edge headless 用隧道头（`cf-connecting-ip`＋`cf-ray`）＋手机 UA 在本地把整条链路跑通，页面 `client diag` 当场上报 `{"tag":"runStages","detail":"ReferenceError: v is not defined\n at rpc (…/disconnected:40:183)…"}`（`pocket.log` 2026-10-21T04:52:56Z）。
+- **改法**：恢复 `v=>`（两处）。**回归锁**：新增 `test/guided-rpc-formatter.test.js`——把生成的页面脚本（不是源码片段）放进桩 DOM 里真跑 `rpc()`，断言请求真的发出、工作区/会话计数分别落到第 1/2 行（四步页）与第 2/3 行（五步页）、en 档用英文；另有一条静态锁：`countCrawl()` 的每个调用点都必须传函数。
+- **计量账**：只动引导页文档，不进 app 壳，`ASSET_BUDGET_BYTES` 与运行壳 `V=pocket-049bcd0cf21d` 不受影响。
+- **回归**：全量 `node --test` = **1424 tests / 1422 pass / 0 fail / 2 skipped**（2026-10-21 13:0x）。
+
+**引导四步不再一错即死：读失败原地重试，失败后留下能用的重试**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-21 报障：手机停在重连页不动，红字「暂时无法连接桌面端，请确认 Pocket 正在运行。」＋「回电脑旁重新扫码」，而电脑端一切正常）。
+
+- **证据链**：11:28 配对成功、11:28:34 已生成 app 页 boot 载荷（`boot 310ms bytes=866305`）；11:30 截图里第 4 行「正在准备页面」是活动步、只有第 3 行有「10 组消息」计数 ⇒ 阶梯已被 stage(2) 的 `countUp` 推到第 4 行，而 stage(0)/(1) 的 rpc 早已 reject；reject 落进 `submitPin` 的 catch，把标题复位成「输入连接密码」并把**任何**非超时错误映射成 `T.unavailable`。此后页面不再发任何请求（11:47:48 mux 掉线后再无日志），也没有重试入口——人只能回电脑旁。
+- **改法（共享块 `sharedStageScript()` ＋ 两页模板）**：① 新增 `withRetry(work,attempts=2)`：读失败原地重试一次、退避 350ms；`consentGate`/`unauthorized` 不重试（答案不会变）。② `rpc()` 把 401 标成 `e.unauthorized`（原来 401 被当普通 HTTP 错误，统一报成「连不上桌面」）。③ reconnect 页 `runStages()` 包 try/catch：须知跳转直接去 `/consent`；401 清空 PIN 回密码框（新文案 `superseded`）；其余 → 新文案 `stageFailed`「页面没打开成功，请点重试。」＋动态「重试」按钮原地重跑，不再踢回「回电脑旁重新扫码」。`startRetry` 的 catch 补同款动态重试钮（隧道档也有得点了）。
+- **文案纠错**：PIN 页在密码已通过之后失败，仍显示「暂时无法连接桌面端，请先启动 Pocket。」——加 `verified` 标记，改报 `stageFailed`「连接中断，请点连接重试。」。
+- **另有一处会真卡死**：第 5 步收尾等 `requestAnimationFrame` 两帧，后台 WebView 里 rAF 会被浏览器暂停，最后一格可以无限转；两页都改成 rAF＋600ms 定时器二选一。
+- **计量账**：本笔只动两个引导页文档、不进 app 壳，`ASSET_BUDGET_BYTES` 不变，运行壳摘要 `V=pocket-049bcd0cf21d` 不受影响。
+- **回归锁**：`test/pages-panel-ux.test.js` 的「三读同批」断言改为不依赖 `withRetry` 拼写（`(?:withRetry\(\(\)=>)?rpc(...)`），批次形状与单调阶梯判据不变；全量 `node --test` = **1418 tests / 1416 pass / 0 fail / 2 skipped**（2026-10-21 12:2x）。两页内联脚本另做 `new Function()` 解析检查，均 OK。
+
 **贴底重钉链首趟就认出读者已滑走（R4，跳跃残留的最后一根橡皮筋）**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-20 22:43 原话：「刚刚又跳了」）。
 
 - **真机证据**（22:42:34，device r2AhHude1h，壳 pocket-909ab20f393f）：`pt@737157|62|14|32|21 bt@737158|5128|5863|735` 整屏重绘写到底 → 读者上滑 `sc…→4577`（−551px）→ 仅 121ms 后 `ts@737279|5128` 把他**钉回 5128** → 再 123ms 才 `rl@737402` 解除。读者出口（`rl` 门）在链条第二趟才生效，首趟无条件写回盒底。

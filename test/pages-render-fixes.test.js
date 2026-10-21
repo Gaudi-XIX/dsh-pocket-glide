@@ -374,10 +374,23 @@ test('T5 a tunnel failure offers the way back, a lan failure keeps its retry but
 })
 
 test('T5b a first-time phone is not told its connection was lost', () => {
-  const fresh = renderMobileReconnectPage('zh', 'tunnel', { fresh: true })
+  // Tunnel mode (2026-10-21, user m00008/m00170: the pre-PIN card "感觉像是多余的"):
+  // the bridge's /pair/retry is a deliberate no-op in tunnel mode — it only ever
+  // answers pinRequired — so a first visit goes straight to the password box
+  // instead of showing a card that can only ever be replaced by one.
+  const freshTunnel = renderMobileReconnectPage('zh', 'tunnel', { fresh: true })
+  assert.match(freshTunnel, /<h1 id="heading">输入连接密码<\/h1>/, 'a never-paired tunnel phone lands on the password box itself')
+  assert.doesNotMatch(freshTunnel, /连接已断开/, 'no false alarm on the very first visit')
+  assert.match(freshTunnel, /id="pinBox">/, 'the box is visible on the first frame, not hidden behind a retry round trip')
+  assert.match(freshTunnel, /const PIN_FIRST=true/, 'and the page knows not to run the empty retry')
+  assert.doesNotMatch(freshTunnel, /else if\(MODE==='auto'\)startRetry\(\);\s*$/, 'the no-op round trip is not started')
+  // LAN is different: there /pair/retry can really resume a session, so the first
+  // visit keeps the connecting card and its automatic retry.
+  const freshLan = renderMobileReconnectPage('zh', 'lan', { fresh: true })
+  assert.match(freshLan, /<h1 id="heading">连接 Pocket<\/h1>/, 'a first-time LAN phone keeps the connecting wording')
+  assert.match(freshLan, /id="pinBox" hidden/, 'and its password box stays behind the retry')
+  assert.match(freshLan, /if\(MODE==='auto'\)startRetry\(\)/, 'LAN still runs the automatic retry')
   const returning = renderMobileReconnectPage('zh', 'tunnel', {})
-  assert.match(fresh, /<h1 id="heading">连接 Pocket<\/h1>/, 'the landing page of a never-paired phone names the action')
-  assert.doesNotMatch(fresh, /连接已断开/, 'no false alarm on the very first visit')
   assert.match(returning, /<h1 id="heading">连接已断开<\/h1>/, 'a phone that did lose its session still gets the loss wording')
 })
 

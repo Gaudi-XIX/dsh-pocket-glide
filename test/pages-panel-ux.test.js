@@ -229,11 +229,17 @@ test('the handoff reads go out in one batch, and the ladder only ever climbs', (
   const pin = renderPairingPinPage('zh', null)
   const reconnect = renderMobileReconnectPage('zh', 'tunnel')
   // workspace + session list + boot are independent, and the bridge dedupes the
-  // catalogue itself: three serial round trips become one.
-  assert.match(pin, /await Promise\.all\(\[stage\(1,\(\)=>rpc\('workspace\.list'\)\),stage\(2,\(\)=>rpc\('session\.list'/, 'the PIN page batches its three reads')
-  assert.match(reconnect, /await Promise\.all\(\[stage\(0,\(\)=>rpc\('workspace\.list'\)\),stage\(1,\(\)=>rpc\('session\.list'/, 'and so does the reconnect page')
-  // Rows may now finish out of order, so a late answer for an earlier row must
-  // never rewind the ladder.
+  // catalogue itself: three serial round trips become one. They are built up front
+  // (the backend starts loading them all at once — user 2026-10-21: "后端肯定是
+  // 提前加载"), then awaited row by row so the ladder reveals one row at a time.
+  for (const [name, html] of [['pairing', pin], ['reconnect', reconnect]]) {
+    assert.match(html, /const reads=\[\s*withRetry\(\(\)=>rpc\('workspace\.list'\)\)/, `${name} builds all three reads up front`)
+    assert.match(html, /reads\.forEach\(p=>p\.catch\(\(\)=>\{\}\)\)/, `${name} disarms the not-yet-awaited legs`)
+    assert.match(html, /await stage\(\d,\s*\(\)=>reveal\(\d,reads\[0\]\)\)/, `${name} reveals the rows in order`)
+    assert.match(html, /gateLadder\(\)/, `${name} opens the count gate before the reads go out`)
+  }
+  // Rows are awaited in index order, so a late answer can never light a later row
+  // first; the runner still only advances, which is what keeps the ladder monotone.
   for (const [name, html] of [['pairing', pin], ['reconnect', reconnect]]) {
     assert.match(html, /if\(index\+1>high\)\{high=index\+1;setStep\(index\+1\)\}/, `${name} stageRunner only advances`)
   }
