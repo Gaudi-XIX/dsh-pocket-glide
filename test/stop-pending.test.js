@@ -61,7 +61,7 @@ function buildStatusSandbox() {
     // both read from page globals. The sandbox leaves them idle so the classic
     // 正在停止/深度求索 copy is what these assertions see.
     let turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null
-    const L={deepDiving:'深度求索中',deepDivingFor:'深度求索中，用时 {duration} ···',stopping:'正在停止…',retryError:'模型报错，正在重试 {retry}/{max}',durHour:'小时',durMin:'分',durSec:'秒'}
+    const L={deepDiving:'深度求索中',deepDivingFor:'深度求索中，用时{duration} ···',stopping:'正在停止…',retryError:'模型报错，正在重试 {retry}/{max}',durHour:'小时',durMin:'分',durSec:'秒'}
     const $=()=>box
     const esc=(v)=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     const formatElapsed=(ms)=>Math.round(ms/1000)+'s'

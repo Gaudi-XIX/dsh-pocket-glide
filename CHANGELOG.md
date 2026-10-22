@@ -11,10 +11,10 @@
 
 - **格式改桌面 formatRunDuration**：小时段仅在有小时时出，分钟段从第 60 秒起出，秒段永出。`7秒 / 1分20秒 / 1小时2分0秒`。原手机格式是 `1m20s / 1h00m`，与桌面不一致；新增单位词 `durHour`（zh `小时`／en `h `）、`durMin`（`分`／`m `）、`durSec`（`秒`／`s`）。
 - **1 秒下限**：桌面回合折叠头用 `Math.max(1e3, turn.end.time - turn.start.time)`，运行中用 `Math.max(1e3, now - startTime)`。手机两处同搬：`statusLabel` 与 `visibleMessages` 里把耗时挂到消息上时（`rendered[lastText].turnElapsed=Math.max(1000,spent)`），0.9 秒的回合不再显示 `0秒`。
-- **运行中文案改桌面 chat.deepDivingFor**：`深度求索中，用时 12秒 ···`（原 `深度思考中… 12s`）；`deepDiving` 本体同步改「深度求索中」去掉省略号。回合结束仍走消息尾时钟位：`18:42 · 已完成，用时 1分20秒`（`turnElapsed` 标签改「已完成，用时 {elapsed}」）。
+- **运行中文案改桌面 chat.deepDivingFor**：`深度求索中，用时12秒 ···`（原 `深度思考中… 12s`）；`deepDiving` 本体同步改「深度求索中」去掉省略号。回合结束仍走消息尾时钟位：`18:42 · 已完成，用时1分20秒`（`turnElapsed` 标签改「已完成，用时{elapsed}」）。2026-10-22 下午按 m03443「并且『用时几秒』这个数字前面有空格，数字后面没有空格」去掉 `用时` 与数字之间的空格——桌面原文（`lib/step-process.generated.js:109 "message.turnProcess.took": "已完成，用时 "`）确实带一个尾随空格，但那是为西文 `1m20s` 之间留间隔，中文数字紧跟汉字更自然。
 - 计时起止仍是手机侧 `Date.now()`（既有纪律：宿主事件时间戳绝不与本机墙钟相减），但起止差与桌面 `end.time - start.time` 数值等价。
 
-回归锁：`test/turn-footer-meta.test.js` 的 `A11b formatElapsed` 逐值钉住桌面三段式（0/9秒/1分0秒/1分20秒/1小时0分0秒/1小时5分30秒/负数归零）与尾戳 `已完成，用时 1分20秒`；`test/pages-process-render.test.js` 的状态行用例改钉 `深度求索中，用时 … 12秒`；`test/stop-pending.test.js` 的沙箱标签随页面同步。全量 `node --test --test-concurrency=1 test/*.test.js` = 1430 tests / 1426 pass / 2 fail，两例仍是 `test/tunnel.test.js` 的 MSYS GNU tar 环境伪红。
+回归锁：`test/turn-footer-meta.test.js` 的 `A11b formatElapsed` 逐值钉住桌面三段式（0/9秒/1分0秒/1分20秒/1小时0分0秒/1小时5分30秒/负数归零）与尾戳 `已完成，用时1分20秒`；`test/pages-process-render.test.js` 的状态行用例改钉 `深度求索中，用时… 12秒`；`test/stop-pending.test.js` 的沙箱标签随页面同步。全量 `node --test --test-concurrency=1 test/*.test.js` = 1430 tests / 1426 pass / 2 fail，两例仍是 `test/tunnel.test.js` 的 MSYS GNU tar 环境伪红。
 
 
 ### 手机端不再整片闪：流式期只换最后一条消息，整屏重建只在结构真的变了时（2026-10-22）

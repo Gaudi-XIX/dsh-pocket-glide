@@ -466,7 +466,7 @@ test('A11b a turn elapsed stamp joins the clock with a separator, and never alon
   assert.equal(clockText(plain), '2024年3月14日 15:30', 'without a duration the clock is untouched')
 
   const stamped = sandbox.renderMessageTail({ messageTime: time, turnElapsed: 80_000 })
-  assert.equal(clockText(stamped), '2024年3月14日 15:30 · 已完成，用时 1分20秒', 'the duration follows the moment, dot-separated')
+  assert.equal(clockText(stamped), '2024年3月14日 15:30 · 已完成，用时1分20秒', 'the duration follows the moment, dot-separated')
 
   // No time stamp means no line to hang the duration on: the duration alone must
   // not invent a footer (the clock is the anchor the reader already trusts).
