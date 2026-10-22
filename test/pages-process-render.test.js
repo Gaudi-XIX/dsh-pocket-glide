@@ -439,9 +439,9 @@ test('the process line never animates under reduced motion', () => {
 // elapsed clock, and while the host is retrying the model it says so.
 function statusSandbox(locale) {
   const js = assets[locale].js
-  const names = ['statusLabel', 'statusLineHtml', 'noteLlmRetry', 'formatElapsed', 'pad2', 'syncTurnStatusLabel']
+  const names = ['statusLabel', 'statusLineHtml', 'noteLlmRetry', 'formatElapsed', 'pad2', 'syncTurnStatusLabel', 'hostNowAt', 'runningElapsedMs']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
-  const state = { stopPending: false, turnElapsedAt: 0, turnElapsedTurn: null, turnRetry: null, turnRetryMax: new Map(), pendingQuestion: null }
+  const state = { stopPending: false, hostClockAt: 0, hostClockLocalAt: 0, turnElapsedHostStart: 0, turnElapsedShown: 0, turnElapsedTurn: null, turnRetry: null, turnRetryMax: new Map(), pendingQuestion: null }
   const line = { textContent: '', dataset: {}, classList: { toggle() {} } }
   const box = { querySelector: (sel) => (sel === '.turn-status' ? line : null) }
   const sandbox = new Function(
@@ -453,8 +453,8 @@ function statusSandbox(locale) {
      const $=()=>box
      const agentRunning=true
      function syncTurnStatus(){syncTurnStatusLabel()}
-     let stopPending=state.stopPending,turnElapsedAt=state.turnElapsedAt,turnElapsedTurn=state.turnElapsedTurn,turnRetry=state.turnRetry,turnRetryMax=state.turnRetryMax,pendingQuestion=state.pendingQuestion
-     return { read:()=>({stopPending,turnElapsedAt,turnElapsedTurn,turnRetry}), statusLabel, statusLineHtml, noteLlmRetry, syncTurnStatusLabel, set:(k,v)=>{if(k==='turnElapsedAt')turnElapsedAt=v;if(k==='stopPending')stopPending=v;if(k==='turnRetry')turnRetry=v}}`,
+     let stopPending=state.stopPending,hostClockAt=state.hostClockAt,hostClockLocalAt=state.hostClockLocalAt,turnElapsedHostStart=state.turnElapsedHostStart,turnElapsedShown=state.turnElapsedShown,turnElapsedTurn=state.turnElapsedTurn,turnRetry=state.turnRetry,turnRetryMax=state.turnRetryMax,pendingQuestion=state.pendingQuestion
+     return { read:()=>({stopPending,turnElapsedHostStart,turnElapsedTurn,turnRetry}), statusLabel, statusLineHtml, noteLlmRetry, syncTurnStatusLabel, set:(k,v)=>{if(k==='clock'){turnElapsedHostStart=v.start;hostClockAt=v.now;hostClockLocalAt=v.local||Date.now();turnElapsedShown=0}if(k==='stopPending')stopPending=v;if(k==='turnRetry')turnRetry=v}}`,
   )(labels(locale), state, box)
   return { sandbox, line }
 }
@@ -462,9 +462,10 @@ function statusSandbox(locale) {
 test('the status row beats with the elapsed clock', () => {
   const { sandbox } = statusSandbox('zh')
   const L = labels('zh')
-  sandbox.set('turnElapsedAt', 0)
+  sandbox.set('clock', { start: 0, now: 0 })
   assert.equal(sandbox.statusLabel(), L.deepDiving, 'with no clock it is the plain waiting phrase')
-  sandbox.set('turnElapsedAt', Date.now() - 12_000)
+  // The desktop clock, handed over on a frame: turn/start at 1_000_000, hostNow 12s later.
+  sandbox.set('clock', { start: 1_000_000, now: 1_012_000 })
   const text = sandbox.statusLabel()
   assert.ok(text.startsWith(L.deepDivingFor.split('{')[0]), 'the waiting phrase leads')
   assert.match(text, /12秒/, 'and the elapsed time rides behind it, in the desktop duration words')

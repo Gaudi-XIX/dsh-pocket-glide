@@ -393,6 +393,7 @@ function buildConnectionSandbox(state = {}) {
     ${NOTICE_STATE(state)}
     ${organs}
     let lastLiveStatusAt=0,unreachableStreak=0
+    function noteHostClock(){}
     ${source}
     return {
       checkConnection,

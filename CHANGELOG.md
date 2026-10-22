@@ -5,6 +5,17 @@
 最新的一节对应当前 `package.json` 的 `version`。
 
 ## 未发布（工作树）
+### 运行用时改为宿主钟直传：桥在既有帧上带 hostNow，页面不再自己算（2026-10-22，0.4.55）
+
+真机反馈（m00054）：「我刚刚重启，已经测试了，时间显示一片混乱……在一次工具调用或者一回合里面退出再进，时间就会重置，然后还会跳」「电脑端不是有时间吗？直接把那个时间传到手机 Pocket 上显示不行吗？……我就知道你肯定是要增加手机 Pocket 和电脑端的连接压力，我觉得这是严令禁止的」。上一版（4f7ac3b）的「宿主跨度重锚」在装载后真机仍复现重置＋跳变：静默的工具回合里批内最大记录戳不前进，下一条记录落地时跨度突然变大，显示就前跳；锚点被看门狗清掉或整页重建后重遇起点时，又会用本机挂钟重新锚定，显示回 1 秒。
+
+按用户裁定改为**宿主时间直接透传、页面不做跨机计算、零新增请求**：
+
+- **桥侧**（`lib/bridge.js`、`lib/session-stream.js`）：运行在宿主进程内的桥把自己的本机钟（与桌面端同一台机器、同一个时钟）作为 `hostNow` 附在**两条既有通道**上——SSE 的 `status` 帧（`buildStatusPayload`）和隧道降级的 `GET /api/session/events` 应答。SSE 流一打开立即补发一次 status 帧（原来首帧要等满 30 秒，冷进运行中的会话拿不到钟）。没有新增任何请求或轮询：手机本来就在收这两条流。
+- **页面侧**（`lib/pages.js`）：`noteHostClock` 记下「宿主钟读数＋收帧瞬间的本机读数」这一对，且只接受更大的宿主读数；显示用的「现在」＝宿主读数＋本机两次读数之间的单调增量（本机时钟只贡献 tick，从不与宿主绝对时间相减）。运行中用时＝`hostNow − 该回合 turn/start 的宿主戳`（`runningElapsedMs`，带只增不减的单调护栏，重放同批不回拨、整页重建后立刻得到正确值）。回合结束用时仍取 `turn/end − turn/start` 两个宿主戳之差；没有宿主跨度就不写用时（删掉 `Date.now()` 回退）。删除了 4f7ac3b 的重锚块与 `turnElapsedAt`。子代理条最后一处跨机减法（`Date.now() − createdAt`）改用同一把外推钟（`hostSpanSince`）。
+
+回归锁：`test/pages-steer-timeline.test.js` 的 CLOCK-1…5 沙箱改按新机制复钉（重进不归 1 秒、静默期续走、重放不回拨、1970 戳、回合结束释放）；`test/transcript-order.test.js` M6 的形状判据由 `hostLatest-turnElapsedHostStart` 改为 `noteHostClock(hostLatest)`；`test/stop-pending.test.js:323`、`test/pages-process-render.test.js`、`test/pages-status-light.test.js`、`test/pages-tunnel-poll.test.js`、`test/error-visibility.test.js`、`test/subagent-panel.test.js` 及五个只声明计时变量的沙箱同步。全量 `node --test --test-concurrency=1 test/*.test.js`（pwsh）= **1444 tests / 1442 pass / 0 fail / 2 skipped**。旁注：全套连跑时曾各见过一次伴生红（`diagnostics-panel` 的 UA 记忆、`sse-framing` 整文件），单跑与末轮全量均绿，与本改无关，留观。
+
 ### 回主页再进会话不再把用时打回 1 秒；中途插话的排队消息按到达时刻插进回合（2026-10-22）
 
 真机反馈（m03445／m03452）：「重启了，但是不对，这个时间每次返回主页再进去对话框里面，就会刷新成 1 秒。这个问题呢？」「然后排队的消息就是插入的消息吧，位置依然是不对的」。

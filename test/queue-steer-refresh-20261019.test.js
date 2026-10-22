@@ -185,7 +185,7 @@ function buildSandbox() {
      const processBlocks=()=>[];
      const L={};
      ${body}
-     let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null;
+     let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedHostStart=0,turnElapsedShown=0,turnElapsedTurn=null,turnRetry=null;
      return {
        visibleMessages, windowEvents,
        setStream(value){streamEvents=value},

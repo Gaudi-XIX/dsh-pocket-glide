@@ -70,7 +70,7 @@ function buildStatusOrgans(locale) {
     'applyInheritedSettings',
     'renderTunnelWarning',
     'renderDeviceExpiry',
-    extractFunction(js, 'applyLiveStatus') + '\n' + extractFunction(js, 'setStatusCopy') + '\nreturn { applyLiveStatus, setStatusCopy }'
+    extractFunction(js, 'noteHostClock') + '\n' + 'let hostClockAt=0,hostClockLocalAt=0\n' + extractFunction(js, 'applyLiveStatus') + '\n' + extractFunction(js, 'setStatusCopy') + '\nreturn { applyLiveStatus, setStatusCopy }'
   )
   const organs = factory(
     $,

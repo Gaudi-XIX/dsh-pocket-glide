@@ -83,6 +83,7 @@ function buildBarSandbox({ catalog = null, rows = new Map(), view = null, active
     ${extractFunction(js, 'stopSubagentTicker')}
     ${extractFunction(js, 'startSubagentTicker')}
     ${extractFunction(js, 'renderSubagentBar')}
+    const hostSpanSince=(stamp)=>Date.now()-stamp
     return {
       renderSubagentBar, updateSubagents, subagentStateOf, subagentDurationText, parentRowOfActive,
       get catalog(){return subagentCatalog},

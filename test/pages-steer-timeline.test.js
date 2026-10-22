@@ -43,7 +43,7 @@ function buildTranscriptSandbox() {
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
     `${body}
-     let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedAt=0,turnElapsedHostStart=0,turnElapsedTurn=null,turnRetry=null;
+     let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedHostStart=0,turnElapsedShown=0,turnElapsedTurn=null,turnRetry=null;
      const L={turnError:'error',turnAborted:'aborted',turnBlocked:'blocked',turnMaxTokens:'max',turnInterrupted:'interrupted',retryFailed:'retried {n}'};
      return { visibleMessages }`,
   )()
@@ -171,6 +171,10 @@ function buildClockSandbox(startNow) {
   const names = [
     'eventSeq',
     'eventTimeOf',
+    'noteHostClock',
+    'hostNowAt',
+    'runningElapsedMs',
+    'hostSpanSince',
     'clearAwaitingTurn',
     'armAwaitingTurn',
     'expireAwaitingTurn',
@@ -188,7 +192,7 @@ function buildClockSandbox(startNow) {
      const AWAITING_TURN_MAX_MS=9000,TURN_RUNNING_IDLE_MAX_MS=60000
      let awaitingTurnSeq=null,awaitingTurnTimer=null,agentRunning=false,lastHistoryKey='',activeSession='s1'
      let turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1,turnRunningTimer=null,turnRunningConfirming=false,pendingQuestion=null
-     let stopPending=false,turnElapsedAt=0,turnElapsedHostStart=0,turnElapsedTurn=null,turnRetry=null
+     let stopPending=false,hostClockAt=0,hostClockLocalAt=0,turnElapsedHostStart=0,turnElapsedShown=0,turnElapsedTurn=null,turnRetry=null
      const turnElapsedByTurn=new Map(),turnRetryMax=new Map()
      const stopTurnStatusTimer=()=>{}
      const setTimeout=()=>1,clearTimeout=()=>{}
@@ -198,9 +202,9 @@ function buildClockSandbox(startNow) {
      return {
        update(events){updateRunning(events)},
        advance(ms){now+=ms},
-       elapsed(){return Date.now()-turnElapsedAt},
+       elapsed(){return runningElapsedMs()},
        spent(key){return turnElapsedByTurn.get(key)},
-       clock(){return {turnElapsedAt,turnElapsedHostStart,turnElapsedTurn,turnRunningOpen}},
+       clock(){return {turnElapsedHostStart,turnElapsedShown,turnElapsedTurn,turnRunningOpen}},
      }`,
   )()
 }
@@ -264,6 +268,6 @@ test('CLOCK-5 turn/end stores the exact span the host recorded', () => {
   sandbox.advance(5_000)
   sandbox.update([turnEnd(9, hostStart + 700_000, 1)])
   assert.equal(sandbox.spent('1'), 700_000, 'the finished turn keeps the host-measured total, not the poll-skewed one')
-  assert.equal(sandbox.clock().turnElapsedAt, 0, 'and the live clock is released')
+  assert.equal(sandbox.clock().turnElapsedShown, 0, 'and the live clock is released')
   assert.equal(sandbox.clock().turnElapsedHostStart, 0, 'with its anchor')
 })

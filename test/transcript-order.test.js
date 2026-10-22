@@ -46,7 +46,7 @@ function buildSandbox() {
      const processBlocks=()=>[];
      const L={};
      ${body}
-     let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null;
+     let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedShown=0,turnElapsedTurn=null,turnRetry=null;
      return {
        mergeEntries, visibleMessages, messagesWithOptimistic, windowEvents,
        setStream(value){streamEvents=value},
@@ -496,7 +496,7 @@ function buildRunningSandbox() {
   assert(bound > 0, 'the page declares its fallback bound')
   const idle = Number((js.match(/TURN_RUNNING_IDLE_MAX_MS=(\d+)/) || [])[1])
   assert(idle > 0, 'the page declares the idle bound the run state retires on')
-  const names = ['eventSeq', 'eventTimeOf', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning', 'clearTurnRunningWatch', 'expireTurnRunning', 'confirmTurnRunning', 'finishTurnConfirm', 'watchTurnRunning']
+  const names = ['eventSeq', 'eventTimeOf', 'noteHostClock', 'hostNowAt', 'runningElapsedMs', 'hostSpanSince', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning', 'clearTurnRunningWatch', 'expireTurnRunning', 'confirmTurnRunning', 'finishTurnConfirm', 'watchTurnRunning']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(`
     const AWAITING_TURN_MAX_MS=${bound}
@@ -505,7 +505,7 @@ function buildRunningSandbox() {
     let hostRows=[],rpcRejects=false
     // The turn clock the run-state functions now write to: the elapsed stamps and
     // the retry counter live in page globals, so the sandbox hands them a home.
-    let stopPending=false,turnElapsedAt=0,turnElapsedHostStart=0,turnElapsedTurn=null,turnRetry=null
+    let stopPending=false,hostClockAt=0,hostClockLocalAt=0,turnElapsedHostStart=0,turnElapsedShown=0,turnElapsedTurn=null,turnRetry=null
     const turnElapsedByTurn=new Map(),turnRetryMax=new Map()
     const stopTurnStatusTimer=()=>{}
     const calls=[]
@@ -526,7 +526,7 @@ function buildRunningSandbox() {
       setHostError(value){rpcRejects=value},
       idle,
       state:()=>({awaitingTurnSeq,awaitingTurnTimer,agentRunning,lastHistoryKey,turnRunningSeq,turnRunningOpen,turnRunningSeenSeq,turnRunningTimer,turnRunningConfirming,pendingQuestion}),
-      clock:()=>({turnElapsedAt,turnElapsedTurn,turnRetry}),
+      clock:()=>({turnElapsedShown,turnElapsedHostStart,turnElapsedTurn,turnRetry}),
       calls,
     }
   `)()
@@ -536,13 +536,13 @@ test('M6 the wait is judged on the session log, never on two clocks', () => {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const slice = betweenA3('function updateRunning(events)', 'function todoProgress(', js)
   assert.ok(slice.includes('eventSeq(entry)>awaitingTurnSeq'), 'the judgement is a seq comparison')
-  // 2026-10-22: the elapsed clock anchors on the span between two host records
-  // (turn start -> newest one in hand) and spends it on the phone's own clock, so a
-  // rebuilt page no longer restarts a running turn at 1s. Only a span crosses over;
-  // no absolute host stamp is ever subtracted from Date.now() — that comparison is
-  // what left the status pinned when the two machines disagreed.
+  // 2026-10-22 (user ruling m00054: 「电脑端不是有时间吗？直接把那个时间传到手机上显示」):
+  // the page no longer computes anything from its own wall clock. The bridge (same
+  // machine as the host) hands down hostNow on frames it already sends, and a turn's
+  // duration is hostNow minus the turn/start stamp — two stamps from one clock. The
+  // phone only interpolates the tick between two readings.
   assert.ok(!/Date\.now\(\)\s*-\s*eventTimeOf/.test(slice), 'no absolute host stamp meets the phone clock')
-  assert.ok(slice.includes('hostLatest-turnElapsedHostStart'), 'the clock is a host span, spent locally')
+  assert.ok(slice.includes('noteHostClock(hostLatest)'), 'the clock is the desktop clock, transported not computed')
   assert.ok(!js.includes('awaitingTurnStartedAt'), 'the wall-clock slot is gone from the page')
   assert.ok(!js.includes('Date.now()-1000'), 'and so is the expression that armed it')
   const send = betweenA3('async function send()', 'function formatBytes(n)', js)
@@ -670,13 +670,13 @@ test('M6c a steer that joins an open turn keeps the run and the elapsed clock', 
   sandbox.update([{ event: { seq: 10, time: 1, type: 'turn/start', data: { turn: 6 } } }])
   assert.equal(sandbox.state().turnRunningOpen, true, 'the turn is open')
   sandbox.arm(11)
-  const before = sandbox.clock().turnElapsedAt
-  assert.ok(before > 0, 'the clock started with the turn')
+  const before = sandbox.clock().turnElapsedHostStart
+  assert.equal(before, 1, 'the clock is anchored on the host turn/start stamp (2026-10-22: the desktop clock is transported, not computed here)')
   sandbox.expire()
   assert.equal(sandbox.state().awaitingTurnSeq, null, 'the steer wait is still retired')
   assert.equal(sandbox.state().turnRunningOpen, true, 'the turn it joined is untouched')
   assert.equal(sandbox.state().agentRunning, true, 'so the status row stays on screen')
-  assert.equal(sandbox.clock().turnElapsedAt, before, 'and the elapsed clock is never restarted by a steer')
+  assert.equal(sandbox.clock().turnElapsedHostStart, before, 'and the elapsed anchor is never restarted by a steer')
 })
 
 test('WD1b the host still running keeps the turn open — the stop button survives a quiet minute', async () => {

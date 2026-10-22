@@ -60,7 +60,10 @@ function buildStatusSandbox() {
     // 2026-10-21: the line also carries the live turn clock and the retry notice,
     // both read from page globals. The sandbox leaves them idle so the classic
     // 正在停止/深度求索 copy is what these assertions see.
-    let turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null
+    // 2026-10-22: the clock is now the transported desktop clock (runningElapsedMs),
+    // stubbed idle here for the same reason.
+    let turnElapsedShown=0,turnElapsedTurn=null,turnRetry=null
+    const runningElapsedMs=()=>turnElapsedShown
     const L={deepDiving:'深度求索中',deepDivingFor:'深度求索中，用时{duration} ···',stopping:'正在停止…',retryError:'模型报错，正在重试 {retry}/{max}',durHour:'小时',durMin:'分',durSec:'秒'}
     const $=()=>box
     const esc=(v)=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -222,7 +225,7 @@ function buildBoundarySandbox() {
     let turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1
     let turnRunningConfirming=false
     let agentRunning=true,stopPending=true,lastHistoryKey='',pendingQuestion=null,activeSession='s1'
-    let turnElapsedAt=0,turnElapsedHostStart=0,turnElapsedTurn=null,turnRetry=null
+    let turnElapsedHostStart=0,turnElapsedShown=0,turnElapsedTurn=null,turnRetry=null
     const turnElapsedByTurn=new Map(),turnRetryMax=new Map()
     const stopTurnStatusTimer=()=>{}
     const AWAITING_TURN_MAX_MS=1000,TURN_RUNNING_IDLE_MAX_MS=1000
@@ -320,6 +323,6 @@ test('the boundary clear points ship in the page source', () => {
     'expireTurnRunning hands the verdict to the host consult');
   assert.match(js, /if\(!turnRunningOpen\)return;if\(turnRunningSeenSeq>seenAtStart\)\{watchTurnRunning\(turnRunningSeenSeq\);return\}if\(busy\)\{[\s\S]*?\}turnRunningOpen=false;stopPending=false;/,
     'finishTurnConfirm retires the stale stop only on a host that says idle');
-  assert.match(js, /if\(turnRunningOpen\)\{clearTurnRunningWatch\(\);turnRunningSeenSeq=turnRunningSeq;if\(fresh\)stopPending=false;[\s\S]*?if\(!turnElapsedAt\|\|turnElapsedTurn!==startedKey\)\{turnElapsedTurn=startedKey;turnElapsedHostStart=eventTimeOf\(entry\);turnElapsedAt=Date\.now\(\);turnRetry=null\}/,
-    'noteTurnBoundary retires the stop when a new turn starts and arms the turn clock');
+  assert.match(js, /if\(turnRunningOpen\)\{clearTurnRunningWatch\(\);turnRunningSeenSeq=turnRunningSeq;if\(fresh\)stopPending=false;[\s\S]*?if\(!turnElapsedHostStart\|\|turnElapsedTurn!==startedKey\)\{turnElapsedTurn=startedKey;turnElapsedHostStart=eventTimeOf\(entry\);turnElapsedShown=0;turnRetry=null\}/,
+    'noteTurnBoundary retires the stop when a new turn starts and anchors the clock on the host turn/start stamp');
 });

@@ -119,6 +119,7 @@ function buildPollSandbox(state = {}) {
     ${POLL_STATE}
     connectionMode=${JSON.stringify(state.mode ?? 'tunnel')}
     ${helpers}
+    function noteHostClock(){}
     const streamWatermarks=new Map()
     function noteStreamRecovery(){world.noteRecovery+=1}
     function notifyStreamDown(){world.notifyDown+=1}
