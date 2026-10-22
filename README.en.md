@@ -1,6 +1,6 @@
-# Pocket for DSH
+# Pocket DSH Glide (`dsh-pocket-glide`)
 
-**A phone client for your own DeepSeek Harness, as a plugin.**
+**A lightweight phone companion for your own DeepSeek Harness, as a plugin.**
 
 Pocket mounts a small HTTP bridge inside the DeepSeek Harness (DSH) desktop process, pairs
 with a phone browser over a QR code or a numeric password, and lets that phone read your
@@ -9,8 +9,8 @@ work on — not a hosted service, not a team gateway, not a mirror of the deskto
 
 | | |
 |---|---|
-| Package | `@gaudi-xix/dsh-pocket` |
-| Current version | 0.4.0 ([Changelog](CHANGELOG.md)) |
+| Package | `dsh-pocket-glide` |
+| Current version | 0.4.54 ([Changelog](CHANGELOG.md)) |
 | Host requirement | DeepSeek Harness desktop `>= 0.2.0-rc.1` (preview line) |
 | Runtime | Node `^22.19.0 \|\| >=24.0.0` — the plugin runs in the host's own process |
 | Licence | MIT ([LICENSE](LICENSE)) |
@@ -128,13 +128,31 @@ goes through a `link:` local directory dependency. What it costs: full desktop G
 functionality (file management, multi-workspace, plugin marketplace) is unavailable on the
 phone. If you need a desktop full-feature mirror, this repo is not for you.
 
-Market peers (Open WebUI, LobeChat, NextChat, Chatbox, LibreChat, assistant-ui) all follow
-the "mirror the whole Web UI" route and depend on a build chain (Vite / Next.js / SvelteKit)
-that cannot be dropped in without a build. This repo screens candidates against three
-criteria: ① do it only if the phone must have the AI present to complete it; ② no build
-step, no React bundle, pages are plain HTML produced by the host; ③ minimal maintenance
-burden — the runtime dependency surface is a single `pngjs`, and installation is a
-`link:` local path.
+DSH has several phone plugins, and they solve different problems. Stated from each
+project's own marketplace listing (not an evaluation): `shaobeichen/dsh-pocket` mirrors the
+DSH Web UI to the phone with a settings page; `JauLukNgai/dsh-on-phone` opens the web UI to
+a phone browser over Tailscale Serve; `Odefined/dsh-mobile-webui` fixes the dsh web GUI's
+phone viewport; `NOirBRight/dsh-mobile-pairing` pairs a QR offer with an Android client;
+`Clarklevis1995/dsh-plugin-mobile-gateway` fronts a WebSocket gateway with a native iOS
+client; `IceApriler/dsh-remote-mobile` pairs over Tailscale/LAN with QR and RSA;
+`Hongjun1-RGB/dsh-phone-access` reverse-proxies one session through a quick tunnel and
+pushes each new tunnel URL to WeChat; `David060323/dsh-phone-remote` patches
+`@linxin666/dsh-remote-web-ui`.
+
+The trade-off this repo takes instead:
+
+| Dimension | Common approach | What Pocket does | What it costs you |
+|---|---|---|---|
+| What the phone shows | The DSH web UI, mirrored | A separate, host-rendered session surface — not a scaled-down desktop layout | You do not see the whole desktop UI |
+| Exposure | Whatever the desktop UI shows | Allowlist of four operations: session list, session content, send, permission approval. Env vars, profiles, plugins, file tree never reach the phone | You cannot configure or browse files from the phone |
+| Client | Web only, or a native app | Web only: scan, open, no app, no account | No OS-level push; notifications ride on browser plus an external push channel |
+| Public path | Tailscale, quick tunnel, or a relay | LAN direct plus a self-hosted cloudflared quick tunnel (outbound, nothing to install on either side) | The public URL is random and changes on restart |
+| New URL | Copy it by hand (some push it, e.g. `dsh-phone-access` to WeChat) | New URL is pushed back to the phone (ServerChan / WxPusher / Bark) | You need one push credential |
+
+The second criterion — no build step, no React bundle, pages are plain HTML strings
+produced by the host, runtime dependency surface a single `pngjs` — is this repo's own
+engineering constraint rather than a market-wide norm: one CSS line takes effect without
+`pnpm build`.
 
 ### 3. The three criteria
 
@@ -191,7 +209,9 @@ Two steps, from a checkout of this repository.
 
 ```bash
 # 1. register the plugin in the profile the desktop host actually loads
-dsh plugin --profile desktop add link:/absolute/path/to/dsh-pocket
+dsh plugin --profile desktop add github:Gaudi-XIX/dsh-pocket-glide
+# or, from a local checkout:
+dsh plugin --profile desktop add link:/absolute/path/to/dsh-pocket-glide
 
 # 2. restart DeepSeek Harness
 ```
