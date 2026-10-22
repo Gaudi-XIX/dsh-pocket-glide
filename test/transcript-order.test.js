@@ -526,6 +526,7 @@ function buildRunningSandbox() {
       setHostError(value){rpcRejects=value},
       idle,
       state:()=>({awaitingTurnSeq,awaitingTurnTimer,agentRunning,lastHistoryKey,turnRunningSeq,turnRunningOpen,turnRunningSeenSeq,turnRunningTimer,turnRunningConfirming,pendingQuestion}),
+      clock:()=>({turnElapsedAt,turnElapsedTurn,turnRetry}),
       calls,
     }
   `)()
@@ -651,6 +652,25 @@ test('WD1 an idle log consults the host, and only a host that says "not running"
   assert.ok(sandbox.calls.some((call) => call[0] === 'status'), 'the status node comes off screen')
   assert.ok(sandbox.calls.some((call) => call[0] === 'prompt'), 'and the send/cancel pair is put back')
   assert.ok(sandbox.calls.some((call) => call[0] === 'poll'), 'the poll is re-armed at the idle rate')
+})
+
+test('M6c a steer that joins an open turn keeps the run and the elapsed clock', () => {
+  // 2026-10-22: the reader typed into a turn that was already running three times in
+  // one turn (session-7ad97a26 turn 6). Each steer arms this watchdog, no new
+  // turn/start ever arrives, so it expired 9s later on a turn that was still going —
+  // the wipe restarted the elapsed counter (1m04s upstairs, then 23s downstairs) and
+  // dropped the stop button. A steer is not a dead turn.
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, time: 1, type: 'turn/start', data: { turn: 6 } } }])
+  assert.equal(sandbox.state().turnRunningOpen, true, 'the turn is open')
+  sandbox.arm(11)
+  const before = sandbox.clock().turnElapsedAt
+  assert.ok(before > 0, 'the clock started with the turn')
+  sandbox.expire()
+  assert.equal(sandbox.state().awaitingTurnSeq, null, 'the steer wait is still retired')
+  assert.equal(sandbox.state().turnRunningOpen, true, 'the turn it joined is untouched')
+  assert.equal(sandbox.state().agentRunning, true, 'so the status row stays on screen')
+  assert.equal(sandbox.clock().turnElapsedAt, before, 'and the elapsed clock is never restarted by a steer')
 })
 
 test('WD1b the host still running keeps the turn open — the stop button survives a quiet minute', async () => {

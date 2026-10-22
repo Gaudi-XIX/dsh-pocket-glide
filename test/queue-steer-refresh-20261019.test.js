@@ -222,6 +222,10 @@ test('③ normal transcripts are untouched: rising clocks keep their seq order',
   assert.deepEqual(rendered.map((m) => m._seq), [1, 2, 3])
 })
 
+// A steered bubble cannot land ON a stamp-less row: that row is part of the unit
+// above it (an answer with its process card, its attachment card), so the bubble
+// goes above the whole unit or below it. Landing between the answer and its own
+// attachment was the 2026-10-20 report this guard replaced.
 test('③ a stamp-less row above is transparent, not a wall', () => {
   const sandbox = buildSandbox()
   sandbox.setStream([
@@ -232,6 +236,7 @@ test('③ a stamp-less row above is transparent, not a wall', () => {
   const rendered = sandbox.render()
   assert.deepEqual(rendered.map((m) => m._seq), [1, 3, 2],
     'the bubble walks over the stamp-less row and anchors under the oldest stamped one')
+  assert.equal(rendered[1].role, 'user', 'the bubble never wedges itself between a row and the unit it belongs to')
 })
 
 test('③ with no stamp anywhere above there is nothing to reorder on: seq order stands', () => {

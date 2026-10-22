@@ -512,9 +512,10 @@ function messageSandbox(locale) {
 
 // 2026-10-22 (m01925): the vertical stack the reader drew is
 //   干了啥 / 思考 / 回复 / 干了啥 / 思考 / 回复 ...
-// so the line covers ONE run of tool work (a segment), sits at the TOP of that
-// segment, and the segment's own thinking follows it.
-test('one run of tool work is one line, at the top of its segment', () => {
+// so the line covers ONE run of tool work (a segment). 2026-10-22 morning (m02105)
+// then struck the "at the top" half: nothing is hoisted any more — a run of tools
+// draws its line where that run arrived, thinking stays where it arrived.
+test('one run of tool work is one line, where that run arrived', () => {
   const { renderMessage, processRows } = messageSandbox('zh')
   const tools = [
     tool('read', 'done', { file_path: '/w/a.ts' }),
@@ -528,8 +529,20 @@ test('one run of tool work is one line, at the top of its segment', () => {
   assert.ok(html.includes('已读取文件 2 次'), 'the finished reads fold into a count')
   assert.ok(html.includes('执行了命令'), 'so does the command')
   assert.ok(/正在编辑文件/.test(html), 'and the action in flight is written at the tail of that same line')
-  assert.ok(html.indexOf('class="process-line"') < html.indexOf('class="thinking"'), 'the line comes first, the thinking follows it')
+  assert.ok(html.indexOf('class="process-line"') < html.indexOf('class="thinking"'), 'tools first: the line comes before the thinking that followed them')
   assert.ok(!html.includes('a.ts'), 'no path rides along')
+})
+
+test('a thought that arrived before the tools is never pushed under them', () => {
+  const { renderMessage } = messageSandbox('zh')
+  const html = renderMessage({
+    turnProcess: true,
+    turnKey: 't1',
+    streaming: false,
+    blocks: [think('先想想'), tool('read', 'done', { file_path: '/w/a.ts' })],
+  })
+  assert.ok(html.indexOf('class="thinking"') < html.indexOf('class="process-line"'), 'arrival order stands: the fold is drawn first')
+  assert.equal(html.split('class="process-line"').length - 1, 1, 'and the run still owns exactly one line')
 })
 
 test('two separate runs draw two lines, never one merged turn-wide line', () => {
