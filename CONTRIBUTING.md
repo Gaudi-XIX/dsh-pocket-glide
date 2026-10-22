@@ -21,7 +21,7 @@ Design constraints that decide most review comments:
 ## Working on the code
 
 ```bash
-git clone <this repository> && cd dsh-pocket
+git clone <this repository> && cd dsh-pocket-glide
 npm install
 npm test
 ```

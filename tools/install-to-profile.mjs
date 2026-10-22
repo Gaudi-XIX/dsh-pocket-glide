@@ -1,8 +1,8 @@
 /**
- * Register dsh-pocket in a DSH profile (default: `desktop`).
+ * Register dsh-pocket-glide in a DSH profile (default: `desktop`).
  *
  * What it edits — exactly two places in `<DSH_HOME>/profiles/<profile>/package.json`:
- *   1. `dependencies["@gaudi-xix/dsh-pocket"] = "link:<path to this checkout>"`
+ *   1. `dependencies["dsh-pocket-glide"] = "link:<path to this checkout>"`
  *   2. `dsh.profile.bundles` — append the same package name if absent
  * It backs the file up first, and it never touches anything else in the profile.
  *
@@ -41,9 +41,9 @@ import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-const PACKAGE_NAME = '@gaudi-xix/dsh-pocket'
+const PACKAGE_NAME = 'dsh-pocket-glide'
 /** Must match `package.json name`; the link target is this repo's source tree. */
-const LINK_PATH = 'link:/path/to/this/checkout/dsh-pocket'
+const LINK_PATH = 'link:/path/to/this/checkout/dsh-pocket-glide'
 /** Files that make a directory a loadable copy of this plugin. */
 const REQUIRED_SOURCE_FILES = ['package.json', 'lib/index.js', 'client/client.js', 'cordis.patch.yml']
 
@@ -76,7 +76,7 @@ function preflight() {
       `this script lives in ${sourceRoot}, but it would write ${LINK_PATH}; the two must be ` +
         'the same tree. LINK_PATH ships as a placeholder so that no local path is baked ' +
         'into the repo: set it to link: plus the absolute path of this checkout, keeping ' +
-        'the trailing /dsh-pocket directory name, before running the script.',
+        'the checkout directory name, before running the script.',
     )
   }
   if (!existsSync(PROFILE_PKG)) {

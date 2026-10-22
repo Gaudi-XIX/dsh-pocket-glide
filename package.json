@@ -1,7 +1,7 @@
 {
-  "name": "@gaudi-xix/dsh-pocket",
+  "name": "dsh-pocket-glide",
   "version": "0.4.54",
-  "description": "Pocket DSH — the phone connection plugin (pocket bridge) for DSH. The bridge runs inside the host process, not as a separate server and not as a desktop mirror: pair by QR/PIN, read sessions and history, send messages, stream replies. LAN listener plus an optional Cloudflare quick tunnel.",
+  "description": "Pocket DSH Glide — a deliberately small, touch-first phone plugin for a running DSH host: pair by QR/PIN, read sessions and history, send messages, stream replies, approve tool permissions. Runs inside the host process, not as a desktop mirror: no build step, one runtime dependency, LAN listener plus an optional Cloudflare quick tunnel.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -51,7 +51,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Gaudi-XIX/dsh-pocket.git"
+    "url": "git+https://github.com/Gaudi-XIX/dsh-pocket-glide.git"
   },
   "author": "Gaudi-XIX <49468224+Gaudi-XIX@users.noreply.github.com>",
   "keywords": [
@@ -61,12 +61,13 @@
     "pocket",
     "phone",
     "mobile",
+    "touch",
     "remote",
     "bridge",
     "cloudflare-tunnel"
   ],
-  "homepage": "https://github.com/Gaudi-XIX/dsh-pocket#readme",
+  "homepage": "https://github.com/Gaudi-XIX/dsh-pocket-glide#readme",
   "bugs": {
-    "url": "https://github.com/Gaudi-XIX/dsh-pocket/issues"
+    "url": "https://github.com/Gaudi-XIX/dsh-pocket-glide/issues"
   }
 }
