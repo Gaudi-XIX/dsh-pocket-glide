@@ -437,6 +437,73 @@ test('B-8 closing a session empties the per-session state the next visit would i
   assert.equal(state.streamWatermarks.has('s1'), false, 'and so is the watermark of the session being left')
 })
 
+test('B-8 a same-session rebuild keeps the drawn windows so the re-paint cannot collapse to one row', () => {
+  const body = extractFunction(js, 'closeSessionStream')
+  assert.match(
+    body,
+    /function closeSessionStream\(keepBuffer\)/,
+    'the rebuild path has to be able to ask for its buffers back',
+  )
+  const make = new Function(`
+    let sessionStream=null,streamRenderFrame=null,pendingSyncTimer=null,projectionsSyncTimer=null
+    let tokenStream=null,streamConnected=false,streamEvents=[],olderEvents=[]
+    let olderHasMore=false,olderBusy=false,olderExhausted=false
+    let streamProjections=null,sessionSelection=null,streamNeedsFullPaint=false,streamRevision=0
+    let activeSession='s1'
+    const turnOpenState=new Map(),streamWatermarks=new Map()
+    function clearSkeletonWatchdog(){}
+    function clearStreamStaleWatch(){}
+    ${body}
+    return {
+      close:closeSessionStream,
+      seed(){
+        tokenStream={text:'half written'}
+        streamConnected=true
+        streamEvents=[{key:'a'}]
+        olderEvents=[{key:'b'}]
+        olderHasMore=true
+        olderBusy=true
+        olderExhausted=true
+        streamProjections={items:[]}
+        sessionSelection={provider:'p',model:'m'}
+        streamNeedsFullPaint=true
+        streamRevision=9
+        turnOpenState.set('turn:1',true)
+        streamWatermarks.set('s1',42)
+      },
+      state:()=>({ tokenStream,streamConnected,streamEvents,olderEvents,olderHasMore,olderBusy,olderExhausted,
+        streamProjections,sessionSelection,streamNeedsFullPaint,streamRevision,turnOpenState,streamWatermarks }),
+    }
+  `)
+  const sandbox = make()
+  sandbox.seed()
+  sandbox.close(true)
+  const state = sandbox.state()
+  assert.deepEqual(state.streamEvents, [{ key: 'a' }], 'the live window survives a reconnect rebuild')
+  assert.deepEqual(state.olderEvents, [{ key: 'b' }], 'and so does the paged window')
+  assert.equal(state.olderHasMore, true, 'so the re-paint still knows there is history behind it')
+  assert.equal(state.olderBusy, true)
+  assert.equal(state.olderExhausted, true)
+  assert.deepEqual(state.streamProjections, { items: [] })
+  assert.deepEqual(state.sessionSelection, { provider: 'p', model: 'm' }, 'the session model pick is not a connection thing')
+  assert.equal(state.tokenStream, null, 'the half-written answer still goes — a reconnect re-sends it')
+  assert.equal(state.streamConnected, false)
+  assert.equal(state.streamNeedsFullPaint, false)
+  assert.equal(state.streamRevision, 0)
+  assert.equal(state.turnOpenState.size, 0)
+  assert.equal(state.streamWatermarks.has('s1'), false)
+
+  const watchdog = between(js, 'function armStreamStaleWatch(sessionId)', 'function showTranscriptRetry()')
+  assert.ok(watchdog.includes('closeSessionStream(true);schedulePoll();armStreamRetry(sessionId)'), 'the stale watchdog rebuilds in place')
+  const reopen = extractFunction(js, 'reopenSessionStream')
+  assert.ok(reopen.includes('closeSessionStream(true);openSessionStream(activeSession)'), 'so does the reopen path')
+  const open = extractFunction(js, 'openSession')
+  assert.ok(
+    open.includes('evictSessionCache()}if(activeSession&&activeSession!==id)resetEarlierParts();closeSessionStream(activeSession===id)'),
+    'a re-entry for the session already open must not wipe what is on screen; a real switch still does',
+  )
+})
+
 test('B-8 the two fill locks release themselves instead of being cleared from outside', () => {
   const closing = extractFunction(js, 'closeSessionStream')
   assert.ok(

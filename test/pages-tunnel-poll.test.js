@@ -36,6 +36,9 @@ function extractFunction(source, name) {
 
 const POLL_CONSTS = js.match(/const EVENTS_POLL_BASE_MS=[^\n]*/)[0]
 const POLL_STATE = js.match(/let connectionMode='lan',eventPollTimer=[^\n]*/)[0]
+// 哪些流式事件算「结构变了」是页面自己的判断，沙箱照抄原文而不是另写一份
+// （两份判定漂移过：沙箱少抄一行，整批帧就一个都不往渲染器送）。
+const FULL_PAINT_SET = js.match(/const FULL_PAINT_STREAM_EVENTS=[^\n]*/)[0]
 
 function buildPollSandbox(state = {}) {
   const world = {
@@ -46,6 +49,7 @@ function buildPollSandbox(state = {}) {
     closed: [],
     reruns: [],
     renders: 0,
+    fullPaints: 0,
     pendingSyncs: 0,
     projectionsSyncs: 0,
     historyCalls: 0,
@@ -119,7 +123,13 @@ function buildPollSandbox(state = {}) {
     function noteStreamRecovery(){world.noteRecovery+=1}
     function notifyStreamDown(){world.notifyDown+=1}
     function loadHistory(){world.historyCalls+=1}
-    function queueStreamRender(){world.renders+=1}
+    let pendingFrames=0
+    let streamRenderFrame=null,streamNeedsFullPaint=false
+    ${FULL_PAINT_SET}
+    const requestAnimationFrame=(fn)=>{setImmediate(fn);return ++pendingFrames}
+    const flushStreamRender=()=>{streamRenderFrame=null;streamNeedsFullPaint=false;world.renders+=1}
+    // 与页面同形的排队器：整批帧只排一帧渲染，多出来的帧并进那一帧。
+    function queueStreamRender(sessionId,fullPaint){streamNeedsFullPaint=streamNeedsFullPaint||fullPaint;world.lastFullPaint=!!streamNeedsFullPaint;if(streamRenderFrame!==null)return;streamRenderFrame=requestAnimationFrame(()=>flushStreamRender(sessionId))}
     function schedulePendingSync(){world.pendingSyncs+=1}
     function scheduleProjectionsSync(){world.projectionsSyncs+=1}
     function showSessionModel(entry){world.models.push(entry)}
@@ -132,6 +142,10 @@ function buildPollSandbox(state = {}) {
     ${organs}
     return {
       openRealtime, openEventPolling, pollSessionEvents, setConnectionMode, reopenRealtime, pauseEventPolling, stopEventPolling,
+      batchRenders(){const n=world.renders;world.renders=0;world.lastFullPaint=null;return n},
+      // requestAnimationFrame 在这里是 setImmediate：等一拍让排队的渲染真的跑完，再读计数。
+      settlePaints(){return new Promise((resolve)=>setImmediate(resolve))},
+      get lastBatchFullPaint(){return world.lastFullPaint},
       get connectionMode(){return connectionMode},
       set connectionMode(v){connectionMode=v},
       get eventPollSession(){return eventPollSession},
@@ -199,28 +213,75 @@ test('the poll rhythm: frames pin 1.5s, empty rounds double, 6s cap, frames rese
     seen.push(sandbox.world.timers.filter((t) => t.done).at(-1).ms)
   }
   assert.deepEqual(seen, [0, 3000, 6000, 6000], '1.5s base doubles on empty polls and caps at 6s')
-  // A round WITH frames resets to the base period.
-  sandbox.world.fetchQueue.push(eventsReply({ events: [{ seq: 1, kind: 'event', frame: { type: 'turn/start', seq: 3, data: {} } }], latestSeq: 1 }))
+  // 一次工具回合里的 step/start、step/end、tool/result 只是往最后一条消息里追加内容：
+  // 2026-10-22 起它们不再要求整屏重建（以前每个非 chunk 事件都整屏重排一次 #messages，
+  // 真机 69 次工具 ⇒ 250ms 一拍的整屏闪）。只有结构真的变了的 turn/user 事件才整屏重建。
+  sandbox.world.fetchQueue.push(eventsReply({
+    events: [
+      { seq: 1, kind: 'event', frame: { type: 'tool/result', seq: 3, data: {} } },
+      { seq: 2, kind: 'event', frame: { type: 'step/start', seq: 4, data: {} } },
+    ],
+    latestSeq: 2,
+  }))
   await sandbox.fireNext()
   assert.equal(sandbox.eventPollEmpty, 0)
+  await sandbox.settlePaints()
+  assert.equal(sandbox.lastBatchFullPaint, false, 'content-only frames patch the tail instead of repainting the transcript')
   const next = sandbox.world.timers.filter((t) => !t.done && !t.cleared).at(-1)
   assert.equal(next.ms, 1500, 'frames bring the poll straight back to 1.5s')
 })
 
-test('the cursor starts at -1 and follows latestSeq from each answer', async () => {
+test('a structural frame in the same batch as content frames asks for the repaint', async () => {
+  const sandbox = buildPollSandbox({ mode: 'tunnel', activeSession: 's1' })
+  sandbox.openEventPolling('s1')
+  const sequence = ['tool/result', 'step/start', 'assistant/message', 'turn/end']
+  sandbox.world.fetchQueue.push(eventsReply({
+    events: sequence.map((type, i) => ({ seq: i + 1, kind: 'event', frame: { type, seq: i + 1, data: {} } })),
+    latestSeq: sequence.length,
+  }))
+  // 2026-10-22：整批帧只排一帧渲染（首次 requestAnimationFrame 之前不再重复排队），
+  // 所以下面三个用例都用 batchRenders() 读「排了几帧」。
+  await sandbox.fireNext()
+  await sandbox.settlePaints()
+  assert.equal(sandbox.lastBatchFullPaint, true, 'turn/end is structural: the finished turn may have been regrouped')
+  assert.equal(sandbox.batchRenders(), 1, 'still one frame of rendering for the batch')
+})
+
+test('a frame batch without structural frames keeps the tail patch', async () => {
+  const sandbox = buildPollSandbox({ mode: 'tunnel', activeSession: 's1' })
+  sandbox.openEventPolling('s1')
+  const sequence = ['tool/result', 'step/start', 'model/selection']
+  sandbox.world.fetchQueue.push(eventsReply({
+    events: sequence.map((type, i) => ({ seq: i + 1, kind: 'event', frame: { type, seq: i + 1, data: { provider: 'p', model: 'm' } } })),
+    latestSeq: sequence.length,
+  }))
+  await sandbox.fireNext()
+  await sandbox.settlePaints()
+  assert.equal(sandbox.lastBatchFullPaint, false, 'content-only frames patch the tail instead of repainting the transcript')
+  assert.equal(sandbox.batchRenders(), 1, 'still one frame of rendering for the batch')
+})
+
+test('the cursor starts at -1 and follows what the answer actually carried', async () => {
+  // 2026-10-22：游标不再直接吃 latestSeq。latestSeq 是「交换机此刻的最新序号」，可能比这一批
+  // 真正带回的帧和窗口里已有的帧都更靠前——真机上模型/工具事件与 assistant/chunk 走两条记录流，
+  // 直接跳跃会把这一段事件永久留在窗口之外。跟随规则：latestSeq 与「本批 + 窗口」里已知的最大
+  // 帧序号取小；批次里没有帧时只留 latestSeq（那是心跳）。
   const sandbox = buildPollSandbox({ mode: 'tunnel', activeSession: 's1' })
   sandbox.openEventPolling('s1')
   await sandbox.fireNext()
   assert.match(sandbox.world.fetchUrls[0], /sinceSeq=-1$/, 'the first poll takes the whole window')
   sandbox.world.fetchQueue.push(eventsReply({ latestSeq: 41 }))
   await sandbox.fireNext()
-  assert.match(sandbox.world.fetchUrls[1], /sinceSeq=0$/, 'the first answer lifted the cursor to its latestSeq')
+  assert.match(sandbox.world.fetchUrls[1], /sinceSeq=0$/, 'a heartbeat lifted the cursor to its latestSeq')
+  sandbox.world.fetchQueue.push(eventsReply({ events: [{ seq: 30, kind: 'event', frame: { type: 'turn/end', seq: 30, data: {} } }], latestSeq: 44 }))
+  await sandbox.fireNext()
+  assert.match(sandbox.world.fetchUrls[2], /sinceSeq=41$/, 'and continues from the previous cursor')
+  assert.equal(sandbox.eventPollCursor, 41, 'a seq-hole is not crossed: the lagging frame stays in the window')
   sandbox.world.fetchQueue.push(eventsReply({ events: [{ seq: 44, kind: 'event', frame: { type: 'turn/end', seq: 44, data: {} } }], latestSeq: 44 }))
   await sandbox.fireNext()
-  assert.match(sandbox.world.fetchUrls[2], /sinceSeq=41$/, 'and continues from latestSeq')
-  assert.equal(sandbox.eventPollCursor, 44)
+  assert.equal(sandbox.eventPollCursor, 44, 'once the answer carries the frame the cursor moves on')
   await sandbox.fireNext()
-  assert.match(sandbox.world.fetchUrls[3], /sinceSeq=44$/, 'the next round resumes from the frames it just took')
+  assert.match(sandbox.world.fetchUrls[4], /sinceSeq=44$/, 'the next round resumes from the frames it just took')
 })
 
 test('hidden tabs do not poll, and a poll for a session no longer active is dropped', async () => {
@@ -258,8 +319,9 @@ test('token frames build, grow and clear the bubble exactly as the SSE path does
     latestSeq: 3,
   }))
   await sandbox.fireNext()
+  await sandbox.settlePaints()
   assert.equal(sandbox.tokenStream.text, '你', 'chunks append, replays dedupe')
-  assert.equal(sandbox.world.renders, 1)
+  assert.equal(sandbox.batchRenders(), 1, 'two chunks, one frame of rendering')
   sandbox.world.fetchQueue.push(eventsReply({ events: [{ seq: 4, kind: 'token', frame: { type: 'end', outcome: { kind: 'done' } } }], latestSeq: 4 }))
   await sandbox.fireNext()
   assert.equal(sandbox.tokenStream, null, 'end clears the bubble')
@@ -280,7 +342,7 @@ test('event frames land in the stream window, bump the revision and hold the wat
   assert.equal(sandbox.streamEvents.length, 3, 'durable records join the window (wrapped or bare)')
   assert.equal(sandbox.streamRevision, 3)
   assert.deepEqual(sandbox.world.models, [{ provider: 'p', model: 'm' }], 'model/selection reaches the model row')
-  assert.equal(sandbox.world.pendingSyncs, 2, 'non-chunk frames schedule a pending sync')
+  assert.equal(sandbox.world.pendingSyncs, 2, 'non-chunk frames schedule a pending sync (assistant/chunk honestly writes its own state)')
   assert.equal(sandbox.world.projectionsSyncs, 1, 'turn-relevant frames schedule a projections sync')
 })
 
@@ -417,7 +479,7 @@ test('visibility pauses the poll without losing the cursor, and the foreground p
   const sandbox = buildPollSandbox({ mode: 'tunnel', activeSession: 's1' })
   sandbox.openEventPolling('s1')
   await sandbox.fireNext()
-  assert.equal(sandbox.eventPollCursor, 0)
+  assert.equal(sandbox.eventPollCursor, 0, 'an answer with no frames leaves the cursor exactly where it was')
   sandbox.pauseEventPolling()
   assert.equal(sandbox.eventPollTimer, null, 'hidden: the timer is gone')
   assert.equal(sandbox.eventPollSession, 's1', 'the session and its cursor stay')
@@ -444,7 +506,7 @@ test('the page is wired: openSession goes through openRealtime and the SSE liste
   const streamSlice = js.slice(js.indexOf('function openSessionStream(sessionId)'), js.indexOf('async function showSessionList()'))
   assert.ok(streamSlice.includes('applyStreamEventFrame(sessionId,frame)'), 'the event listener shares the poller frame body')
   assert.ok(streamSlice.includes('applyTokenFrame(sessionId,frame)'), 'and so does the token listener')
-  const closing = js.slice(js.indexOf('function closeSessionStream()'), js.indexOf('function applyHistory('))
+  const closing = js.slice(js.indexOf('function closeSessionStream('), js.indexOf('function applyHistory('))
   assert.ok(closing.includes("if(typeof stopEventPolling==='function')stopEventPolling()"), 'leaving a session stops the poller too')
   assert.ok(js.includes('pauseEventPolling();stopListPoll();return}'), 'hidden pauses the polls (events + the landing list clock)')
   assert.ok(js.includes('reopenRealtime();'), 'foreground goes through the dispatcher')

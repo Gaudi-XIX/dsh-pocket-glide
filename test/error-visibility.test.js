@@ -639,7 +639,7 @@ test('AC-C3 the retry does not fire on another session or a hidden tab', () => {
 })
 
 test('AC-C3 closing the stream disarms the watch, so it cannot repeat', () => {
-  const closing = between('function closeSessionStream()', 'function applyHistory(')
+  const closing = between('function closeSessionStream(', 'function applyHistory(')
   assert.ok(closing.includes('clearStreamStaleWatch();'), 'no orphan interval after a session leaves')
   const armed = between('function armStreamStaleWatch(sessionId)', 'function showTranscriptRetry()', js)
   assert.ok(armed.startsWith('function armStreamStaleWatch(sessionId){clearStreamStaleWatch();'), 'and re-arming replaces the old watch')

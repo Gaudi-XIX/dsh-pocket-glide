@@ -273,7 +273,7 @@ test('AC-PERF an aborted RPC reports its own timeout and a reconnect never doubl
   // can never overlap.
   const watch = slice(js, 'function armStreamStaleWatch(sessionId)', 'function showTranscriptRetry()')
   assert.ok(
-    watch.includes('closeSessionStream();schedulePoll();armStreamRetry(sessionId)'),
+    watch.includes('closeSessionStream(true);schedulePoll();armStreamRetry(sessionId)'),
     'the stale path closes the stream, hands back to the poll, then re-arms',
   )
 
@@ -364,7 +364,7 @@ test('AC-PERF an aborted RPC reports its own timeout and a reconnect never doubl
   // session must not abort an in-flight RPC.
   assert.ok(!/sessionAbort|abortSession/i.test(js), 'no page-side session abort table ships')
   assert.ok(
-    !slice(js, 'function closeSessionStream()', 'function applyHistory(').includes('abort('),
+    !slice(js, 'function closeSessionStream(', 'function applyHistory(').includes('abort('),
     'leaving a session does not abort in-flight RPCs',
   )
 })
@@ -414,7 +414,7 @@ test('AC-UI1 every control the audit measured small now clears the 44px floor', 
     '.composer textarea{flex:1;height:44px;min-height:44px;',
     '.plus-search-open{display:flex;align-items:center;gap:7px;width:100%;height:44px;',
     '.plus-filter{width:100%;height:44px;',
-    '.todo-header{width:100%;height:44px;',
+    '.todo-header{display:flex;align-items:center;gap:6px;height:44px;',
     '.setting-pick{width:100%;height:46px;',
     '.chat-toolbar{position:absolute;inset:0 0 auto;z-index:2;min-height:44px;',
     '.plus-search-cancel{flex:none;min-width:44px;min-height:44px;',
@@ -580,9 +580,13 @@ test('AC-UI7 the QR is one image, zh-* is Chinese, and an unknown locale is not'
 
 test('AC-UI8 the two locale-only leaks the audit found are gone', () => {
   const js = assets.js
-  assert.ok(js.includes('bits.join(L.draftJoin)'), 'the draft summary joins with a locale token')
-  assert.ok(!js.includes("bits.join('，')"), 'not with a full-width comma an English reader cannot see')
-  assert.ok(js.includes('"draftJoin":'), 'and the token is in the label table')
+  // 2026-10-19: the summary is no longer a joined string at all. The optimistic
+  // bubble carries the chip list and renderBlock paints one span per chip, so
+  // there is no separator left for a locale to get wrong ("1 文件" used to be a
+  // second plain text block, which read as message body, not as an attachment).
+  assert.ok(js.includes("kind==='attachment-summary'"), 'the chip row is its own block kind')
+  assert.ok(js.includes(".filter(Boolean).map((bit)=>'<span class=\"draft-chip\">'"), 'one chip span per entry, no join')
+  assert.ok(!js.includes("join('，')") && !js.includes('join("，")'), 'nothing joins on a full-width comma an English reader cannot see')
   // The permission row used to render the upload copy while it waited, so the
   // sheet said "uploading" about something it was only loading.
   assert.ok(
@@ -984,7 +988,116 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   questionCollapsed 与 handler 的 collapse 分支（不落答案、不取消提问）、一条文案键 questionCollapse。
 //   实测 zh 354 860（css 53 521 + js 301 339）/ en 354 777，相对上一条基线（zh 353 876 / en 353 788，
 //   BUG-5 指针穿透补丁之后）净 +984 B（css +389 / js +595）。取 356 000（余量 ~1.1 KB）。
-const ASSET_BUDGET_BYTES = 356_000
+// 2026-10-19 排队消息落位复位（用户 m00544「刚刚给你发的图片就是证据」）：
+//   新增 orderUserBubblesByTime（user 气泡按自身 messageTime 与上方行比对复位，
+//   无时间戳的行当墙）+ queueAction 成功后即时拉正文（tunnel 档 scheduleEventPoll(0)）
+//   + 桌面刷新按钮强制重建隧道（手机页侧 switchMode 加 force 形参）。
+//   实测 zh 357 070（css 53 504 + js 303 566）/ en 356 987，相对上一条基线（zh 354 860 / en 354 777）
+//   净 +2 210 B（css -17 / js +2 227）。取 358 000（余量 ~930 B）。
+// 2026-10-19 上传反馈与附件胶囊（用户 m00002 三问：上传没进度像卡死 / 发出后多一条
+//   「1 文件」纯文本 / 慢）：
+//   draft 卡上传态改整卡进度（.draft-card.is-uploading 转圈、--p 比例填充、百分比与
+//   「已传/总量」两行、ready 右上绿勾 .draft-done），uploadGenericFile/retryDraft 改走
+//   新增 rpcUpload（XHR 才有 upload.onprogress）并加 45 s 静默看门狗；乐观气泡的计数串
+//   从第二段 text 改成 attachment-summary 块按 chips 数组逐个 span 渲染（.draft-chip），
+//   draftSummary 由「join 成串」改为「返回数组」，删掉不再使用的 draftJoin 标签。
+//   实测 zh 364 115（css 55 010 + js 309 105）/ en 364 033（css 55 010 + js 309 023），
+//   相对上一条基线（zh 357 070 / en 356 987）净 +7 045 B（css +1 506 / js +5 539）。
+//   取 365 000（余量 ~885 B）。
+// 2026-10-19 页面跳跃治理与全量首屏尾包预载（R1 离开跟随带不再拽回 + R2 移除重复贴底 + boot.tails 全量装载）：
+//   实测 zh 365 325（css 55 056 + js 310 269）/ en 365 243，
+//   相对上一条基线净 +1 210 B。取 367 000（余量 ~1.6 KB）。
+// 2026-10-20 工作区头徽标口径（提问不分已读未读 + 未读错误在 running 行也出现 + 三类全显）：
+//   实测 zh 375 131（css 55 217 + js 319 914）/ en 375 049（css 55 217 + js 319 832），
+//   相对上一条基线（另线「一 Bot 一行」的 zh 374 315 / en 374 233）净 +816 B；
+//   预算行沿用另线取的 376 000，本笔后余 869 B。
+// 2026-10-20 手机页一 Bot 一行（Chief 会话分段在手机显示多条）：
+//   renderWorkspaces 前的 raw list pass `mergeBotParts()`——同一 Bot 的多个 part
+//   （ctx 满后宿主自动新开一段，ds-bot parts.js；共标题共工作目录）折成一行，
+//   只留最新 part，避免一个 Bot 显示两三行。手机页无 part 概念（pages.js 的
+//   session.history 一律按单 sessionId 取），折叠键只能是「标题 + 工作目录」。
+//   实测 zh 374 315（css 55 217 + js 319 098）/ en 374 233（css 55 217 + js 319 016）；
+//   父提交 01efd52 实测 zh 370 242 / en 370 160，本笔净 +4 073 B。取 376 000（余量 ~1.7 KB）。
+// 2026-10-20 附件卡/过程卡随所属回答整体落位（orderUserBubblesByTime 改按显示单元移动）：
+//   实测 zh 375 696（css 55 217 + js 320 479）/ en 375 614（css 55 217 + js 320 397）；
+//   父提交 c587a1d 实测 zh 375 131 / en 375 049，本笔净 +565 B。预算 376 000 不动，余 ~300 B。
+// 2026-10-20 Goal 条三层常显卡（状态行+全文大框+底行按钮，chevron 折叠/上收，
+//   点大框直接编辑、返回箭头取消、失焦自动保存）：
+//   实测 zh 377 123（css 55 845 + js 321 278）/ en 377 043（css 55 845 + js 321 198）；
+//   父提交 c7ea6b0 实测 zh 375 696 / en 375 614（c7ea6b0 自述壳字节不变），本笔净 +1 427 B。
+//   取 377 500（余量 ~380 B）。
+// 2026-10-20 Goal 条收成单行 + 编辑框补样式（用户 m00423：上面小行与下面小行「合并到上面那行」，
+//   点出来的编辑框「肯定是错误的」）：
+//   ① 动词组整段搬进 .goal-head，下拉键成为 .goal-actions 的第一个子元素，
+//      右对齐改由 .goal-actions{margin-left:auto} 承担（.goal-fold 去掉 margin-left:auto），
+//      不再有独立底行；② 编辑态 textarea 原本只有 `.goal-bar .queue-edit-box{margin-bottom:2px}`，
+//      而真正的规则挂在 `.composer .queue-edit-box` 下——#goalBar 不在 .composer 里，
+//      于是吃不到任何样式、渲染成浏览器默认 textarea（截图里被裁断的方框就是它）。
+//      现补齐 `.goal-bar .queue-edit-box`（min-height:56px/max-height:40vh/resize:none/
+//      1px var(--line) 边框/var(--card) 底色/13px 行高 1.5），并删掉已无用的
+//      `.goal-bar.is-editing{display:block}`。
+//   实测 zh 377 328（css 56 050 + js 321 278）/ en 377 248（css 56 050 + js 321 198）；
+//   相对上一条基线（zh 377 123 / en 377 043，本笔前半段）净 +205 B（css +205 / js 0）。
+//   预算 377 500 不动，余 172 B（zh）/ 252 B（en）。
+// 2026-10-20 本笔 Goal 条合并布局＋他线 sessionSelection 重构（工作树合流）：
+//   实测 zh 377 578（css 56 050 + js 321 528）/ en 377 498（css 56 050 + js 321 448）；
+//   父提交 c7ea6b0 自述 zh 375 696 / en 375 614，本笔净 +1 882 B（css +482 / js +1 400）。
+//   取 377 800（余量 ~222 B）。
+// 2026-10-20 Goal 编辑框自适应长高（工作树在途，未提交）：编辑态 textarea 由
+//   min-height:56px/max-height:40vh/overflow-y:auto 改成 min-height:40px/overflow:hidden，
+//   高度交给新增的 goalEditGrow(box) 按行数与 scrollHeight 现算，oninput 每敲一下重算。
+//   顺带修掉 goalEditGrow 里 /\n/g 被模板字符串吃掉反斜杠导致的 app.js 语法错误
+//   （整份脚本不执行 ⇒ 手机页永远停在 splash，2026-10-20 15:14–15:40 那轮故障）。
+//   实测 zh 378 265（css 56 050 + js 322 215）/ en 378 185（css 56 050 + js 322 135）；
+//   相对上一条账面 zh 377 578 / en 377 498 净 +687 B（css 0 / js +687）。
+//   取 378 700（余量 435 B（zh）/ 515 B（en））。
+// 2026-10-20 R3 上滑不拽底（m00002/m00134）：paintMessages 贴底分支加 readerAway 一门，
+//   注释 6 行 + 逻辑 2 行。实测 zh 378 935（css 56 050 + js 322 885）/ en 378 855
+//   （css 56 050 + js 322 805）；相对上一条基线净 +670 B（js +670 / css 0）。
+//   取 379 100（余量 165 B（zh）/ 245 B（en））。
+// 2026-10-20 pt 重绘形状探针（m01729 裁定）：paintMessages 入口接 paintProbe，输出
+//   pt@perf|n|prev|post|fl 样本，区分形态 F（重绘后 sh 塌 0）与形态 I（内容暴缩）。
+//   注释 5 行 + 函数 1 行 + 接线 1 行。实测 zh 380 126（css 56 050 + js 324 076）/
+//   en 380 046（css 56 050 + js 323 996）；相对上一条基线净 +1 191 B（js +1 191）。
+//   取 380 200（余量 74 B（zh）/ 154 B（en））。
+// 2026-10-20 冷开取数四项（m01424 定稿）：boot 阶梯的计数从「答复落地才开始」改成
+//   「请求发出即开跑」——新增 countCrawl（在途自走的里程表，CRAWL_MS 110ms 一格、
+//   CRAWL_MAX_MS 8s 到点自停，countUp 从它当前所在的位置接管且不倒退）与
+//   countStepIndex（按 bootSteps 行数判断本方法落在第几行，5 行配对页 / 4 行重连页）。
+//   实测 zh 381 793（css 56 093 + js 325 700）/ en 381 713（css 56 093 + js 325 620）；
+//   相对上一条基线净 +1 667 B（js +1 624 / css +43）。
+//   取 381 950（余量 157 B（zh）/ 237 B（en））。
+// 2026-10-21 earlier-parts 更早对话段（bot.earlier）：openSession 预载更早各段并画在
+//   当前段之上——新增状态、渲染/加载函数（earlierItemHtml/earlierRowsHtml/
+//   earlierPartsHtml/fetchEarlierPage/paintEarlierFeed/startEarlierParts/resetEarlierParts）、
+//   i18n 两键与 .earlier-feed/.earlier-divider/.earlier-event 等 CSS。
+//   实测 zh 386 725（css 56 686 + js 330 039）/ en 386 651（css 56 686 + js 329 965）。
+// 2026-10-21 earlier-parts v2（Verifier 退回 2 必改 + 6 注意）：feed 顶部加「加载更早的
+//   对话」续拉行（earlierMoreRowHtml，earlierCursor/earlierDone 有了真读者）、
+//   transcript 空判探针改 .message:not(.earlier-msg) ×3、earlierGen 代数守卫、
+//   空 text fallback 不画空泡、.earlier-msg/.earlier-qa* 样式、清账 js 分项 3 B 偏差。
+//   实测 zh 387 688（css 56 836 + js 330 852）/ en 387 618（css 56 836 + js 330 782）。
+// 2026-10-21 earlier-parts v3（Verifier 第二轮退回 2 必改，均 1 行）：earlierDone 只认
+//   cursor（空页不再杀死续拉——host 的 more 按 record 条数算，工具密集段会返空页 +
+//   活 cursor）、fetch 的 finally 加代际判断（陈旧回包不再清掉新一代的 busy）。
+//   实测 zh 387 693（css 56 836 + js 330 857）/ en 387 623（css 56 836 + js 330 787）；
+//   相对 v2 净 +5 / +5 B。
+// 2026-10-21 earlier-parts v4（Verifier 第三轮退回 1 必改，渲染门 2 行）：容器与移除门
+//   改由「行或续拉行」共同决定（首页为空但 cursor 活时续拉行自己撑起容器，首屏在飞时
+//   转圈也能画出来）；实测 zh 387 732（css 56 836 + js 330 896）/ en 387 662
+//   （css 56 836 + js 330 826）；相对 v3 净 +39 / +39 B。
+//   取 388 200（余量 468 B（zh）/ 538 B（en））。
+// 2026-10-21 currentTranscript 带上已画的更早各段（跳跃 R6）：行数与盒内 .message
+//   节点失配时 patchLastStreamMessage 退化成整屏重绘，把续看更早各段的读者塌成一屏、
+//   浏览器钳 scrollTop=0（真机 01:14:30 现场 pt n=36 prev=100 post=19，sh 15734→2657）。
+//   earlierPlainRow + currentTranscript 的补行分支 + 测试实测 zh 388 435（css 56 836 +
+//   js 331 599）/ en 388 365（css 56 836 + js 331 529）；相对上一档净 +703 / +703 B。
+//   取 389 000（余量 565 B（zh）/ 635 B（en））。
+// 2026-10-21 两条新链路撑破上一档：① 进主页后小批连跑补拉剩余可见行（TAIL_BATCH_MAX /
+//   TAIL_ROUNDS_MAX / TAIL_REQUEUE_MAX + 分批递归，m02267）；② 启动数字改成请求发出即开跑
+//   （countCrawl）。实测 zh 390 426（css 56 836 + js 333 590）/ en 390 356（css 56 836 +
+//   js 333 520）；取 391 500（余量 1 074 B（zh）/ 1 144 B（en））。
+const ASSET_BUDGET_BYTES = 391_500
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {

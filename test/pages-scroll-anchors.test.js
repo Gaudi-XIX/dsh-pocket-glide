@@ -36,32 +36,39 @@ function extractFunction(source, name) {
 }
 
 function fakeBox({ scrollHeight = 5000, scrollTop = 0, clientHeight = 800 } = {}) {
-  return {
+  const box = {
     scrollHeight, scrollTop, clientHeight,
     innerHTML: '',
     getBoundingClientRect() { return { top: 0, bottom: this.clientHeight, height: this.clientHeight } },
     querySelectorAll() { return [] },
     querySelector() { return null },
   }
+  // paintMessages measures the reader against isNearBottom's settled-height cap,
+  // which reads the live box through $('messages'). Give the sandbox a live reader
+  // of the same object so the band is the one under test.
+  box.$ = () => box
+  return box
 }
 
 // ------------------------------------------------- 1. follow machine organs
 
 const scrollOrgans = (locale = 'zh') => {
   const js = assets[locale].js
-  const names = ['transcriptDistance', 'isNearBottom', 'anchorVisibleState', 'markHistoryTail']
+  const names = ['transcriptDistance', 'isNearBottom', 'canRearmFollow', 'anchorVisibleState', 'markHistoryTail']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   // 2026-10-12 P1: isNearBottom no longer trusts the raw 120px band alone — it caps the
   // band at half the settled transcript height, so a 120px band cannot mean "the reader
   // is still following" on a transcript that is barely taller than the viewport. That
   // pulls settledTranscriptHeight (and its lastScrollHeight fallback) into this sandbox.
+  // 2026-10-22：「还在带里」与「能否重新上膛」分成两个阈值——停下后要几乎贴底（24px）
+  // 才准重新跟随，否则流式每帧的几十像素就够把 120px 带沿来回穿越，屏幕连抖。
   return new Function(`
-    const SCROLL_FOLLOW_PX=120,ANCHOR_LATEST_SCREENS=1.5,ANCHOR_LEAVE_SCREENS=1,ANCHOR_PROMPT_SCREENS=1,CV_TAIL_KEEP=8;
+    const SCROLL_FOLLOW_PX=120,FOLLOW_REARM_PX=24,ANCHOR_LATEST_SCREENS=1.5,ANCHOR_LEAVE_SCREENS=1,ANCHOR_PROMPT_SCREENS=1,CV_TAIL_KEEP=8;
     let lastScrollHeight=0;
     function settledTranscriptHeight(){const box=$('messages');return box&&box.scrollHeight?box.scrollHeight:lastScrollHeight}
     function $(){return null}
     ${body}
-    return { transcriptDistance, isNearBottom, anchorVisibleState, markHistoryTail }
+    return { transcriptDistance, isNearBottom, canRearmFollow, anchorVisibleState, markHistoryTail }
   `)()
 }
 
@@ -71,6 +78,23 @@ test('the near-bottom band is the 120px follow threshold, measured from the bott
   assert.equal(isNearBottom({ scrollHeight: 5000, scrollTop: 4080, clientHeight: 800 }), true, '120px from the bottom still follows')
   assert.equal(isNearBottom({ scrollHeight: 5000, scrollTop: 4079, clientHeight: 800 }), false, '121px away is unlocked')
   assert.equal(isNearBottom({ scrollHeight: 800, scrollTop: 0, clientHeight: 800 }), true, 'a short transcript is always near bottom')
+})
+
+test('re-arming the follow is stricter than staying in it: parked readers are not re-stuck by a few dozen px', () => {
+  // 2026-10-22 用户口述（静止阅读时）：「往上滑的时候已经停止了，但是在抖动，屏幕很滑……
+  // 就是往下抖一下，再往上抖一下，再往上抖一下，然后就好像在跳跃似的」。
+  // 根因：跟随带 120px 既是「留下」也是「重新进入」的阈值，而流式每帧把 scrollHeight 抬高
+  // 几十像素，距底距离就在带沿上反复穿越——一次程序性滚动的重判把跟随重新打开 → 下一帧贴底
+  // （内容上移）→ 再下一帧锚点复原（内容下移）。真机遥测同日：jk 交替 ±286/±437/±466px、
+  // ts 钉底 154 次、rs 锚点复原 8 次。修法：停下后要回到 24px 以内（几乎贴底）才准重新跟随。
+  const { isNearBottom, canRearmFollow } = scrollOrgans()
+  // 5000-800=4200 是底部。距底 100px：仍在带里（可以继续跟随），但不足以重新上膛。
+  assert.equal(isNearBottom({ scrollHeight: 5000, scrollTop: 4100, clientHeight: 800 }), true, '100px away still counts as following')
+  assert.equal(canRearmFollow({ scrollHeight: 5000, scrollTop: 4100, clientHeight: 800 }), false, 'but a parked reader 100px away is not re-armed')
+  // 距底 20px：既在带里也可重新上膛（读者自己滑回底部就是这一档）。
+  assert.equal(canRearmFollow({ scrollHeight: 5000, scrollTop: 4180, clientHeight: 800 }), true, '20px from the bottom re-arms')
+  // 带本身比 24px 还小的短转录（settled/2 封顶）：按带宽走，否则永远回不来。
+  assert.equal(canRearmFollow({ scrollHeight: 40, scrollTop: 20, clientHeight: 20 }), true, 'a transcript shorter than the re-arm band falls back to the band')
 })
 
 test('anchor visibility: ONE gate for both buttons — they open together past the follow band, and ↑ never vanishes mid-climb', () => {
@@ -193,40 +217,39 @@ test('markHistoryTail tags everything but the last 8 messages; short transcripts
 
 const renderSandbox = () => {
   const js = assets.zh.js
-  const body = [
-    extractFunction(js, 'renderTurnProcess'),
-    extractFunction(js, 'renderMessage'),
-  ].join('\n')
+  const body = [extractFunction(js, 'renderMessage')].join('\n')
   return new Function(`
     const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
     const L={process:'过程',think:'思考'}
-    const transcriptView='verbose'
     const turnOpenState=new Map()
     function activityIcon(){return '<i></i>'}
-    function activityChevron(){return '<c></c>'}
     function renderBlock(){return '<div class="markdown">x</div>'}
     function renderMessageTail(){return ''}
-    function clusterToolBlocks(){return []}
+    function clusterToolBlocks(blocks){return blocks.map((block,index)=>({type:'block',block,index}))}
     function toolActivityCategory(){return 'tools'}
-    function stepTitleFor(){return ''}
-    function renderToolCard(){return ''}
+    function renderProcessLine(){return '<div class="process-line">已读取文件</div>'}
+    function processRows(){return [{category:'read',count:1,running:false,failed:false}]}
+    function processLineHtml(){return '<div class="process-line">已读取文件</div>'}
     ${body}
-    return { renderMessage, renderTurnProcess }
+    return { renderMessage }
   `)()
 }
 
-test('msg-hist lands on the message wrapper and on history turn-process details, never on the tail', () => {
-  const { renderMessage, renderTurnProcess } = renderSandbox()
+test('msg-hist lands on the message wrapper and on the flat process message, never on the tail', () => {
+  const { renderMessage } = renderSandbox()
   const history = renderMessage({ role: 'user', blocks: [{ kind: 'text', text: 'hi' }], _history: true })
   assert.match(history, /^<div class="message msg-hist user">/, 'class order keeps .message.user matching')
   const tail = renderMessage({ role: 'user', blocks: [{ kind: 'text', text: 'hi' }], _history: false })
   assert.match(tail, /^<div class="message user">/, 'untagged markup is byte-identical to the old shape')
   const streamed = renderMessage({ role: 'assistant', streaming: true, blocks: [{ kind: 'text', text: '…' }] })
   assert.doesNotMatch(streamed, /msg-hist/, 'streaming rows are never tagged')
-  const process = renderTurnProcess({ turnKey: 't1', streaming: false, blocks: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], _history: true })
-  assert.match(process, /<details class="turn-process msg-hist"/)
-  const tailProcess = renderTurnProcess({ turnKey: 't1', streaming: false, blocks: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], _history: false })
-  assert.match(tailProcess, /<details class="turn-process" /)
+  // 2026-10-21: the turn-process fold is gone. A process-only row is now a plain
+  // message wrapper whose children are the flat process lines, and the history
+  // tag still has to ride on that wrapper.
+  const process = renderMessage({ turnProcess: true, turnKey: 't1', streaming: false, blocks: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], ledger: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], _history: true })
+  assert.match(process, /^<div class="message assistant msg-hist">/)
+  const tailProcess = renderMessage({ turnProcess: true, turnKey: 't1', streaming: false, blocks: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], ledger: [{ kind: 'tool', id: 'x', name: 'read', status: 'done' }], _history: false })
+  assert.match(tailProcess, /^<div class="message assistant">/)
 })
 
 // ------------------------------------- 3. the machine through real paintMessages
@@ -236,6 +259,7 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
   const body = [
     'transcriptHasContent', 'olderButtonHtml', 'loadingShell', 'transcriptWaitHtml',
     'showTranscriptRetry', 'paintMessages', 'esc', 'markHistoryTail', 'readTranscriptAnchor', 'restoreTranscriptAnchor',
+    'transcriptDistance', 'isNearBottom',
   ]
     .map((name) => extractFunction(js, name))
     .join('\n')
@@ -250,8 +274,17 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
     const turnOpenState=new Map()
     const L={}
     const $=()=>box
+    const SCROLL_FOLLOW_PX=120,CV_TAIL_KEEP=8
+    let lastDistance=0,lastScrollHeight=0
+    function transcriptDistance(b){return b.scrollHeight-b.scrollTop-b.clientHeight}
+    function settledTranscriptHeight(){return box&&box.scrollHeight?box.scrollHeight:lastScrollHeight}
     function renderMessage(message){return '<div class="message '+message.role+'"></div>'}
     function syncScrollAnchors(){}
+    function startTurnStatusTimer(){}
+    function stopTurnStatusTimer(){}
+    // earlier-parts is an additive axis: the paint sandbox has no earlier feed
+    // loaded, so the prepend must render as an empty string.
+    function earlierPartsHtml(){return ''}
     ${body}
     return {
       paintMessages,
@@ -273,10 +306,23 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
   sandbox.paintMessages([{ role: 'user', blocks: [] }], false)
   assert.equal(box.scrollTop, 1000, 'unlocked: repaint keeps the reader where they are')
 
-  // explicit stick (send path) → bottom AND re-armed
+  // explicit stick (send path) while the reader sits far from the bottom:
+  // R3 (m00002/m00134) — the stick must NOT steal the position back. The old
+  // behaviour re-armed followStream and wrote scrollTop=scrollHeight, which is
+  // the "br then bt in the same frame" jump signature in the real log.
+  box.scrollTop = 1000
+  sandbox.follow = true
   sandbox.paintMessages([{ role: 'user', blocks: [] }], true)
-  assert.equal(box.scrollTop, box.scrollHeight, 'stickToBottom forces the bottom')
-  assert.equal(sandbox.follow, true, 'a forced stick re-arms the follow')
+  assert.equal(box.scrollTop, 1000, 'R3: a reader away from the bottom keeps their place even when the caller asks to stick')
+  assert.equal(sandbox.follow, false, 'R3: a forced stick does not re-arm a follow the reader left')
+
+  // a caller that asks to stick while the reader IS at the bottom still sticks
+  // and re-arms — the send path must keep working for a reader who is following.
+  box.scrollTop = 5000 - 800
+  sandbox.follow = true
+  sandbox.paintMessages([{ role: 'user', blocks: [] }], true)
+  assert.equal(box.scrollTop, box.scrollHeight, 'a forced stick at the bottom still lands there')
+  assert.equal(sandbox.follow, true, 'a forced stick at the bottom still re-arms the follow')
 
   // unlocked but within 90px of the bottom: the pre-paint near-bottom check no
   // longer overrules the unlock (this is the old behaviour's blind spot)
@@ -305,8 +351,12 @@ test('paintMessages tags the history tail through the real markHistoryTail', () 
     const $=()=>box
     function renderMessage(message){return '<div class="message '+message.role+'">'+(message._history===true?'H':'')+'</div>'}
     function syncScrollAnchors(){}
+    function startTurnStatusTimer(){}
+    function stopTurnStatusTimer(){}
     let followStream=true
     let transcriptAnchor=null,skipAnchorOnce=false
+    // earlier-parts prepends an empty feed in this sandbox (no earlier pages).
+    function earlierPartsHtml(){return ''}
     ${body}
     return { paintMessages }
   `)
@@ -411,9 +461,10 @@ test('isSessionUnread: the never-opened inference is suspended until the ledger 
 const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } = {}) => {
   const js = assets.zh.js
   const body = [
-    'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
+    'visibleSessions', 'blankRowVisible', 'bootRangeCap', 'taskState', 'taskGlyph', 'pad2',
     'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
-    'readLastMessageMap', 'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank',
+    'isNoticeUnread',
+    'readLastMessageMap', 'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank', 'wsHeadTimeAt',
     // T5: renderWorkspaces reads the tail line through tailTextOf — extract the real one.
     'tailTextOf',
     // The head notices (0.4.31): wsFlagsOf/wsFlagHtml are top-level on the page, so
@@ -429,7 +480,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     const L=${JSON.stringify({ noWorkspaces: 'none', noTasksHint: 'hint', newChat: 'new', untitled: 'untitled', clockMd: '{m}/{d}', clockYmd: '{y}-{m}-{d}', moreRows: '{n} more', wsNewDone: 'New', wsQuestion: 'Question', wsError: 'Error' })}
     const BLANK_ROW_VISIBLE_MS=${24 * 60 * 60 * 1000}
     const LIST_ROWS_MAX=${25}
-    const WS_FLAGS_MAX=${2}
+    const WS_FLAGS_MAX=${3}
     const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200
     const UNREAD_RECENCY_MS=${Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])}
     // 12h 窗与未读点无关：此档钉 ledger 语义，窗口豁免防 fixture 新旧把行藏进「更多」。窗口钉在 ROWS-RECENT。
@@ -445,6 +496,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     // the sandbox never fetches — an empty cache means no line, matching the page.
     const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
     function requestVisibleTails(){}
+    function requestTailBootRound(){}
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${body}
@@ -507,8 +559,8 @@ test('mergeOpenedMapFromBridge restores lost history without downgrading newer l
 
 test('the page wires the machine where the tests cannot reach: scroll, open, leave', () => {
   const js = assets.zh.js
-  assert.match(js, /followStream=isNearBottom\(live\)/, 'the scroll handler re-decides the follow from the live band')
-  assert.match(js, /activeSession=id;const summary=sessionSummaries\.find\(item=>item\.sessionId===id\);sessionBlank=summary\?\.blank\?\?true;noteSessionOpened\(id\);followStream=true;/, 'openSession stamps the ledger and re-arms the follow')
+  assert.match(js, /followStream=followStream\?isNearBottom\(live\):canRearmFollow\(live\)/, 'the scroll handler re-decides the follow with the hysteresis: stay on the band, re-arm only on the tighter point')
+  assert.match(js, /activeSession=id;resetEarlierParts\(\);const summary=sessionSummaries\.find\(item=>item\.sessionId===id\);sessionBlank=summary\?\.blank\?\?true;noteSessionOpened\(id\);followStream=true;/, 'openSession stamps the ledger and re-arms the follow (earlier-parts reset rides between the session switch and the first summary read)')
   assert.match(js, /poll=null;if\(activeSession\)noteSessionOpened\(activeSession\);/, 'leaving to the list stamps the ledger (activity seen live is read)')
   assert.match(js, /scheduleOpenedMapSync\(\);void pullOpenedMapRemote\(\);/, 'boot pulls the ledger back from the bridge after the first paint (0.4.35)')
   assert.match(js, /latest\.classList\.toggle\('show',state\.latest\);prompt\.classList\.toggle\('show',state\.prompt\)/, 'each anchor button is wired to its OWN state — no mutual exclusion in the DOM either')
@@ -518,7 +570,7 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   // The contract this assertion carries is unchanged and still holds: all of it
   // happens in ONE tick, so the re-decision, the anchor, the scroll anchors and the
   // top-edge pull can never be spread across frames and fight each other.
-  assert.match(js, /followStream=isNearBottom\(live\);if\(!followStream\)transcriptAnchor=readTranscriptAnchor\(live\);pendingFollowFrame=false\}else\{pendingFollowFrame=true\}syncScrollAnchors\(\);topEdgePull\(live\)/, 'the same rAF tick re-decides the anchors and the top edge（2026-10-12 P1 加入 programmaticScroll 静默窗：窗内的帧不许重上膛，改记 pendingFollowFrame）')
+  assert.match(js, /followStream=followStream\?isNearBottom\(live\):canRearmFollow\(live\);if\(!followStream\)transcriptAnchor=readTranscriptAnchor\(live\);pendingFollowFrame=false\}else\{pendingFollowFrame=true\}syncScrollAnchors\(\);topEdgePull\(live\)/, 'the same rAF tick re-decides the anchors and the top edge（2026-10-12 P1 加入 programmaticScroll 静默窗：窗内的帧不许重上膛，改记 pendingFollowFrame；2026-10-22 起重上膛走 canRearmFollow 的严格阈值）')
   // The deck's own geometry: the ↑ tile sits in the upper slot and ↓ in the lower one,
   // and ↑ chases the nearest ANSWER above the fold (user, 2026-10-13: 「我的意图应该是要回到
   // AI 发的最后那段总结性的话之前…不想往上翻」 — it used to land on the reader's own question,
@@ -537,7 +589,7 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   // followStream 因此永不重判 ⇒ 读者上滑被吞、下一帧又被钉回底（橡皮筋）。
   // 两处补口：链条自己有读者出口，窗口到点自己醒一次。
   assert.match(js, /if\(pinned!==undefined&&live\.scrollTop<pinned-2&&live\.scrollHeight-live\.scrollTop-live\.clientHeight>SCROLL_FOLLOW_PX\)\{if\(typeof followStream!=='undefined'\)followStream=false;[\s\S]{0,160}probeMark\('rl'\);return\}/, '2026-10-15 ③三轮：scrollTop 比上次写入值小且离底超跟随带＝读者动过手——解除 follow、记锚、打标 rl 并终止本链（内容长高只增 scrollHeight 不动 scrollTop，故该判据不误伤钳位）')
-  assert.match(js, /function programmaticScroll\(\)\{followReArmAllowedAt=Date\.now\(\)\+250;if\(followReArmTimer!==null\)return;followReArmTimer=setTimeout\(\(\)=>\{followReArmTimer=null;[\s\S]{0,220}probeMark\('ra'\);followStream=isNearBottom\(live\)/, '2026-10-15 ③三轮：静默窗到点自醒并重判 follow——原注释「窗长 250ms > 最长 settle 链」只对「一条链只跑 tries 次」成立，流式 patch 每 token 帧与 settleTailStick 每 120ms 都在给自己续期；pendingFollowFrame 那面旗只在 applyHistory 里消费，纯滑动时永远躺着')
+  assert.match(js, /function programmaticScroll\(\)\{followReArmAllowedAt=Date\.now\(\)\+250;if\(followReArmTimer!==null\)return;followReArmTimer=setTimeout\(\(\)=>\{followReArmTimer=null;[\s\S]{0,220}probeMark\('ra'\);followStream=followStream\?isNearBottom\(live\):canRearmFollow\(live\)/, '2026-10-15 ③三轮：静默窗到点自醒并重判 follow——原注释「窗长 250ms > 最长 settle 链」只对「一条链只跑 tries 次」成立，流式 patch 每 token 帧与 settleTailStick 每 120ms 都在给自己续期；pendingFollowFrame 那面旗只在 applyHistory 里消费，纯滑动时永远躺着。2026-10-22：重判分两档（在跟随带里继续跟；已停下要回到 24px 才重新上膛）')
   assert.match(js, /if\(btn\.id==='jumpLatest'\)\{box\.__settleTurn=\(box\.__settleTurn\|\|0\)\+1;transcriptAnchor=null;followStream=true;/, '2026-10-15 ③三轮：点 ↓ 先夺令牌并清锚点——上一条 ↑ 的 settlePromptJump 重瞄链必须立刻作废，否则两股相反写入交替（用户「点那个上下按钮的时候也有跳动」）；锚点也要清，它记的是点 ↓ 之前那一眼的最上行')
   // 2026-10-15 m02164③ 四轮：真机 03:43:47 遥测抓到点 ↓ 被拽回顶部——latest@scrollTop=0
   // → jk +11368 到底 → bf 内容长高 → jk -11368 甩回 798 → ol 连拽三次。根因：补页只发生在

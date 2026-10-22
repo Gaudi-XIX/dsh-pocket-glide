@@ -103,3 +103,28 @@ test('开关活过 SW 的 URL 改写，且 armed 可自证', () => {
   // 两套锚同时补偿＝来回推。关掉浏览器那套，只留自己那套。
   assert.match(css, /\.messages\{[^}]*overflow-anchor:none/, '滚动容器关掉浏览器 scroll anchoring')
 })
+
+// 形态 F（重绘后 sh=0）与形态 I（内容暴缩）在几何标记里长得一模一样：都是
+// sh 塌掉、top 跟着钳位。probeMark 只记像素，分不出「送进来的数组缩了」还是
+// 「数组没变但渲染产物为空」。pt 一条样本补上这三格，才谈得上定因。
+test('pt：重绘形状样本接在 paintMessages 上，字段够分清内容塌成 0 的两种成因', () => {
+  const js = mobilePageAssets({ locale: 'zh' }).js
+  assert.match(js, /function paintProbe\(n,fl\)\{/, '样本函数存在')
+  assert.match(js, /probeBuf\.push\('pt@'\+Math\.round\(performance\.now\(\)\)\+'\|'\+n\+'\|'\+prev\+'\|'\+post/,
+    '一行带 n＝传入条数、prev＝上次画出的条数、post＝这次画出的条数')
+  assert.match(js, /const post=b\.querySelectorAll\(':scope > \.message'\)\.length/,
+    'post 数的是真节点，不是数组长度——数组与 DOM 不一致本身就是要抓的信号')
+  assert.match(js, /prev=paintProbe\._n\|0;paintProbe\._n=post/, '跨调用记账：上屏条数留存给下一次对照')
+  // 默认关：不 armed 时不记、不建节点数
+  assert.match(js, /function paintProbe\(n,fl\)\{if\(typeof PROBE_ON==='undefined'\|\|!PROBE_ON\)return/,
+    '未 armed 直接 return（探针默认零行为）')
+  // 接线：在 innerHTML 之后、贴底分支之前，fl 位标四位都在
+  const call = js.match(/if\(typeof paintProbe==='function'\)paintProbe\(messages\.length,\(.*?\)\);/s)
+  assert.ok(call, 'paintMessages 里挂在 bindOpenState 之后（innerHTML 已重建，才数得出 post）')
+  const wired = call[0]
+  assert.match(wired, /box\.clientWidth>0\?1:0/, '位 1＝容器可见（分得清「本页重画空了」与「整块被换视图拆掉」）')
+  assert.match(wired, /subagentView\?2:0/, '位 2＝子代理视图（F 形态的历史嫌疑路径）')
+  assert.match(wired, /stickToBottom\?4:0/, '位 4＝调用方要求贴底（send／进会话）')
+  assert.match(wired, /followStream\?16:0/, '位 16＝跟随开关状态（同帧 br 与贴底冲突的证据）')
+  assert.ok(wired.length < 420, `接线串别越长越好（现 ${wired.length}）`)
+})

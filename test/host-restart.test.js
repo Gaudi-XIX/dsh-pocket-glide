@@ -1,5 +1,5 @@
 // 远程重启宿主（0.4.34）：手机主页头部电源钮调脚本——桥只负责「武装」圈外的
-// 一次性计划任务（scripts/dsh-restart-now.ps1 → DSH-ReviveOnce），杀/拉/推送
+// 一次性计划任务（tools/dsh-restart-now.ps1 → DSH-ReviveOnce），杀/拉/推送
 // 全是 revive 脚本现成的活；宿主进程树在同一 Job Object 里，从圈内既杀不死也
 // 拉不起，这是按钮只能当「遥控器」的物理原因。端点 POST /api/host/restart 的
 // 权限边界＝配对漏斗（同源＋在册手机会话，与 /api/opened-at 同门）。契约：
@@ -9,6 +9,7 @@
 // 部分 cancel 失败 502 不武装。2026-10-12 的「无强制口子」裁定由本条覆盖。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
 import { startBridge, httpFetch } from './helpers.js'
 
 const JSON_HEADERS = { 'content-type': 'application/json' }
@@ -155,8 +156,9 @@ test('idle sessions arm the restart script and answer with the fire delay', asyn
     const j = await res.json()
     assert.equal(j.ok, true)
     assert.equal(j.delaySec, 8)
-    assert.deepEqual(scripts, ['F:\\defws\\scripts\\dsh-restart-now.ps1'],
-      'the button calls the existing script — no second restart mechanism')
+    const expectedScript = fileURLToPath(new URL('../tools/dsh-restart-now.ps1', import.meta.url))
+    assert.deepEqual(scripts, [expectedScript],
+      'the button calls the packaged script — no second restart mechanism')
   } finally { await t.stop() }
 })
 

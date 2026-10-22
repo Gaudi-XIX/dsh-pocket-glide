@@ -75,13 +75,15 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
     const $=(id)=>container
     const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
     function requestVisibleTails(){}
+    function requestTailBootRound(){}
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${[
-      'visibleSessions', 'blankRowVisible', 'taskState', 'taskGlyph', 'pad2',
+      'visibleSessions', 'blankRowVisible', 'bootRangeCap', 'taskState', 'taskGlyph', 'pad2',
       'formatMessageClock', 'timeFor', 'titleFor', 'renderWorkspaces', 'readOpenedMap', 'isSessionUnread',
+      'isNoticeUnread',
       'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'wsRunning', 'wsGlyphOf', 'sessionModelLabel',
       'readLastMessageMap', 'pruneLastMessageMap', 'noteSessionMessageAt',
-      'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank',
+      'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank', 'wsHeadTimeAt',
       // T5: the renderer paints a tail line from the prefetch cache and hands the
       // visible rows to requestVisibleTails. The sandbox never fetches: an empty
       // cache and a no-op pull match a landing with nothing prefetched yet.
@@ -135,8 +137,9 @@ test('rank: error beats question beats finished-unread', () => {
   ]
   assert.deepEqual(
     headFlags(listSandbox({ summaries: all, ledger: readLongAgo })),
-    [L.wsError, L.wsQuestion],
-    'the failed turn leads and the head shows every kind it found (capped by WS_FLAGS_MAX)',
+    [L.wsError, L.wsQuestion, L.wsNewDone],
+    // 2026-10-20 用户裁定：三类都要显示出来（旧 WS_FLAGS_MAX=2 会把第三类切掉）。
+    'the failed turn leads and the head shows every kind it found',
   )
   const withoutError = all.filter((item) => item.sessionId !== 'a')
   assert.deepEqual(headFlags(listSandbox({ summaries: withoutError, ledger: readLongAgo })), [L.wsQuestion, L.wsNewDone], 'then a waiting turn, then the unread finish')
@@ -169,6 +172,64 @@ test('T2 an error the reader already saw stops nagging the head (2026-10-14 手�
   )
   const markup = listSandbox({ summaries: failed, ledger: { a: ago(0.5) } })
   assert.ok(markup.includes('task-row is-error'), 'the row still shows its error glyph — the fact is visible, the nag is gone')
+})
+
+test('a question keeps nagging the head until it is answered, read or not (2026-10-20 徽标口径 (a))', () => {
+  // User ruling (m00623(a), verbatim): 「提问：理论上讲，提问不分已读未读，只要有提问就
+  // 都要显示出来」. This REPLACES the m00126② gate that this test used to pin — a read
+  // question went quiet there, and the user called that wrong on the phone. The only
+  // exclusion left is the focused chat: the reader is answering it right there.
+  const asking = [row({ sessionId: 'a', awaitingQuestion: true, updatedAt: ago(1) })]
+  assert.equal(asking[0].running, undefined, 'the row is NOT flagged running — only awaiting')
+  assert.deepEqual(headFlags(listSandbox({ summaries: asking, ledger: {} })), [L.wsQuestion], 'never opened → the head names it')
+  assert.deepEqual(headFlags(listSandbox({ summaries: asking, ledger: { a: ago(30) } })), [L.wsQuestion], 'opened BEFORE the question landed → named')
+  assert.deepEqual(headFlags(listSandbox({ summaries: asking, ledger: { a: ago(0.5) } })), [L.wsQuestion], 'opened AFTER it landed and still unanswered → still named')
+  assert.deepEqual(
+    headFlags(listSandbox({ summaries: asking, ledger: { a: ago(0.5) }, activeSession: 'a' })),
+    [],
+    'the one exception: the chat being answered on screen never badges itself',
+  )
+  // gate (b) is the opposite: a read ERROR goes quiet, even though the question
+  // beside it does not — the two kinds are not one rule.
+  const readError = [row({ sessionId: 'e', error: true, updatedAt: ago(1) })]
+  assert.deepEqual(headFlags(listSandbox({ summaries: readError, ledger: { e: ago(0.5) } })), [], 'a read error is quiet (gate b)')
+  assert.deepEqual(headFlags(listSandbox({ summaries: readError, ledger: { e: ago(30) } })), [L.wsError], 'an unread error is named')
+})
+
+test('an error still badges a row the host left running (2026-10-20 真机复验)', () => {
+  // Verbatim (user, m00607): 「我刚刚专门挑了一个错误的对话，它报错了，我没读，工作区标题
+  // 栏上面不显示」. The host keeps running:true on the turn that failed (turn/end with
+  // kind error does not clear it), and isSessionUnread bails out at the top for any
+  // running row — so the badge vanished. Error now rides isNoticeUnread.
+  const failed = [row({ sessionId: 'a', error: true, running: true, updatedAt: ago(1) })]
+  assert.deepEqual(headFlags(listSandbox({ summaries: failed, ledger: {} })), [L.wsError], 'running + failed + never opened → the head says so')
+  assert.deepEqual(headFlags(listSandbox({ summaries: failed, ledger: { a: ago(30) } })), [L.wsError], 'running + failed + opened before → still unread')
+  assert.deepEqual(headFlags(listSandbox({ summaries: failed, ledger: { a: ago(0.5) } })), [], 'and once read it goes quiet like any other error')
+  // The running veto still owns the finished-unread notice: a row that is busy has
+  // not finished anything to announce.
+  const busy = [row({ sessionId: 'b', running: true, updatedAt: ago(1) })]
+  assert.deepEqual(headFlags(listSandbox({ summaries: busy, ledger: {} })), [], 'a running row is not a fresh finish')
+})
+
+test('a sidebar head has only two fallback stories: in progress, or nothing running', () => {
+  // User ruling (m00126③): 「最终的显示状态应该只有两种：要么是有正在进行的对话，要么是
+  // 整个工作区完全没有正在进行的对话」. The old fallback leaked a ROW's state into the
+  // head (states[0] → error/awaiting glyphs) as soon as any notice was read.
+  const mixed = [
+    row({ sessionId: 'a', error: true, updatedAt: ago(50) }),
+    row({ sessionId: 'b', updatedAt: ago(51) }),
+  ]
+  const readAll = { a: ago(0.5), b: ago(0.5) }
+  const markup = listSandbox({ summaries: mixed, ledger: readAll })
+  assert.deepEqual(headFlags(markup), [], 'everything read → no notices')
+  assert.ok(markup.includes('ws-last is-done'), 'and the head reports the only other state: nothing running')
+  assert.ok(!markup.includes('ws-last is-error'), 'an error row does not become the head\'s story')
+  assert.ok(!markup.includes('ws-last is-awaiting'), 'nor does a waiting row')
+  // One row still running → the head says so, regardless of what the others are.
+  const busy = [...mixed, row({ sessionId: 'c', running: true, updatedAt: ago(52) })]
+  const busyMarkup = listSandbox({ summaries: busy, ledger: readAll })
+  assert.ok(!busyMarkup.includes('ws-last is-done'), 'a running row anywhere stops the completion claim')
+  assert.ok(!busyMarkup.includes('ws-last is-error'), 'and the head still does not adopt a row\'s error')
 })
 
 test('finished-but-unread counts fresh finishes, read ones quiet down', () => {
@@ -296,6 +357,51 @@ test('a row whose last message is newer outranks one whose host clock is newer',
 test('a session this phone never opened still shows its host clock', () => {
   const markup = listSandbox({ summaries: [row({ sessionId: 'unopened', updatedAt: ago(4) })] })
   assert.match(wsTime(markup), /^\d{2}:\d{2}$/, 'no ledger entry means updatedAt, never a blank — absolute 24h wall clock')
+})
+
+// The clock answers "when did this workspace last speak". Pinning answers "which
+// conversation do I want to read first" — a reading-order override, not a claim
+// about time. It must never reach the header clock.
+test('pinning an old conversation does not drag the header clock back with it', () => {
+  // Verbatim (user, 2026-10-20):「手机 Pocket 各个工作区里显示的时间，会被置顶的会话所代替。
+  // 如果我置顶了比如前天的会话，它就会只显示前天的时间……显示逻辑好像会被置顶顶掉」.
+  // `tasks` is ordered pinned-first and only then by recency, so tasks[0] IS the
+  // two-day-old pinned row here — the pre-fix head printed its clock.
+  const stale = ago(60 * 48)
+  const markup = listSandbox({
+    summaries: [row({ sessionId: 'fresh', updatedAt: ago(2) }), row({ sessionId: 'pinnedOld', updatedAt: stale })],
+    pinned: ['pinnedOld'],
+  })
+  assert.deepEqual(
+    idsInOrder(markup).slice(0, 2).sort(),
+    ['fresh', 'pinnedOld'],
+    'both rows are listed, the pinned one first',
+  )
+  const clock = wsTime(markup)
+  assert.ok(clock, 'the header still shows a clock')
+  assert.equal(
+    clock,
+    wsTime(listSandbox({ summaries: [row({ sessionId: 'fresh', updatedAt: ago(2) })] })),
+    'and it is the workspace\'s newest clock, identical to a workspace holding only that row — pinning changes nothing about it',
+  )
+  assert.notEqual(clock, wsTime(listSandbox({ summaries: [row({ sessionId: 'pinnedOld', updatedAt: stale })] })), 'not the pinned row\'s two-day-old clock')
+})
+
+test('the header clock follows the newest row even when that row is not pinned', () => {
+  const markup = listSandbox({
+    summaries: [row({ sessionId: 'fresh', updatedAt: ago(1) }), row({ sessionId: 'older', updatedAt: ago(30) })],
+    pinned: ['older'],
+  })
+  const onlyFresh = wsTime(listSandbox({ summaries: [row({ sessionId: 'fresh', updatedAt: ago(1) })] }))
+  assert.equal(wsTime(markup), onlyFresh, 'the unpinned newest row is what the header reads')
+})
+
+test('a workspace whose only real rows carry no clock still shows no header clock', () => {
+  // Blank rows are filtered before this point and a placeholder summary must not
+  // lend the header a fake clock, so the fallback is 0 and the span is dropped —
+  // the old `tasks.length?` guard printed an empty <span> instead.
+  const markup = listSandbox({ summaries: [{ sessionId: 'ghost', missingSummary: true, updatedAt: 0 }] })
+  assert.ok(!markup.includes('ws-last-time'), 'no clock, no element')
 })
 
 test('which bubble the row inherits: the last one that finished', () => {

@@ -84,14 +84,14 @@ test('AC-A1 the page-wide watermark is gone from the script', () => {
 // ---------------------------------------------------------------------------- A-3
 
 test('A-3 leaving a session releases that session watermark', () => {
-  const closing = between('function closeSessionStream()', 'function applyHistory(')
+  const closing = between('function closeSessionStream(', 'function applyHistory(')
   assert.ok(closing.includes('streamWatermarks.delete(activeSession)'), 'the watermark goes with the stream')
   assert.ok(
     closing.indexOf('pendingSyncTimer=null;if(activeSession)streamWatermarks.delete(activeSession)') >= 0,
     'the release is the last thing closeSessionStream does',
   )
   assert.ok(
-    js.includes('closeSessionStream();closeSessionSettings();activeSession=null'),
+    js.includes('closeSessionStream();resetEarlierParts();closeSessionSettings();activeSession=null'),
     'and it runs while activeSession still names the session being left',
   )
   assert.ok(
@@ -200,7 +200,7 @@ test('AC-A7 the failed retry block survives an empty repaint', () => {
 
 test('AC-A7 the watchdog judges painted content and ends on a tappable retry', () => {
   const watchdog = between('function armSkeletonWatchdog(sessionId,attempt=0)', 'function schedulePoll()')
-  assert.ok(watchdog.includes("querySelector('.message')"), 'it asks whether anything was painted')
+  assert.ok(watchdog.includes("querySelector('.message:not(.earlier-msg)')"), 'it asks whether anything was painted')
   assert.ok(!watchdog.includes("querySelector('.loading')"), 'and no longer whether a skeleton is up')
   assert.ok(watchdog.includes('if(attempt>=3){showTranscriptRetry();return}'), 'three tries, then a button')
   assert.ok(watchdog.includes('||sessionBlank'), 'a blank session is not retried into a false failure')
@@ -235,6 +235,10 @@ function buildPaintSandbox(state = {}) {
     const L=${JSON.stringify(L)}
     const $=()=>box
     function renderMessage(message){return '<div class="message '+message.role+'">'+(message.blocks||[]).map((b)=>b.text||'').join('')+'</div>'}
+    // earlier-parts prepends an empty feed in this sandbox (no earlier pages).
+    function earlierPartsHtml(){return ''}
+    function startTurnStatusTimer(){}
+    function stopTurnStatusTimer(){}
     ${body}
     return {
       olderButtonHtml, paintMessages, showTranscriptRetry, transcriptHasContent, transcriptWaitHtml,
@@ -424,7 +428,7 @@ test('AC-D7 the reset list, asserted at its present value', () => {
   // pair as "not done", never as "done".
   assert.equal(after.fillBusy, true, 'fillBusy is NOT reset here today')
   assert.equal(after.olderRunBusy, true, 'olderRunBusy is NOT reset here today')
-  const closing = between('function closeSessionStream()', 'function applyHistory(')
+  const closing = between('function closeSessionStream(', 'function applyHistory(')
   assert.ok(!closing.includes('fillBusy'), 'the source says the same')
   assert.ok(!closing.includes('olderRunBusy'), 'and so for the older-page loop')
   assert.ok(

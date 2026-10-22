@@ -45,7 +45,7 @@ const SPINNER = /class="spin"/;
 // ------------------------------------------------------- turn-status line
 
 function buildStatusSandbox() {
-  const line = { textContent: '', removed: false, remove() { this.removed = true; } };
+  const line = { textContent: '', removed: false, dataset: {}, remove() { this.removed = true; } };
   const box = {
     _line: null,
     _html: '',
@@ -57,8 +57,16 @@ function buildStatusSandbox() {
     'box',
     `
     let agentRunning=true,pendingQuestion=null,stopPending=false
-    const L={deepDiving:'深度思考中…',stopping:'正在停止…'}
+    // 2026-10-21: the line also carries the live turn clock and the retry notice,
+    // both read from page globals. The sandbox leaves them idle so the classic
+    // 正在停止/深度求索 copy is what these assertions see.
+    let turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null
+    const L={deepDiving:'深度求索中',deepDivingFor:'深度求索中，用时{duration} ···',stopping:'正在停止…',retryError:'模型报错，正在重试 {retry}/{max}',durHour:'小时',durMin:'分',durSec:'秒'}
     const $=()=>box
+    const esc=(v)=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    const formatElapsed=(ms)=>Math.round(ms/1000)+'s'
+    const startTurnStatusTimer=()=>{},stopTurnStatusTimer=()=>{},syncTurnStatusLabel=()=>{}
+    ${extractFunction(js, 'statusLabel')}
     ${extractFunction(js, 'statusLineHtml')}
     ${extractFunction(js, 'syncTurnStatus')}
     return {
@@ -77,7 +85,7 @@ function buildStatusSandbox() {
 
 test('the status line reads 正在停止… the moment stopPending flips', () => {
   const box = buildStatusSandbox();
-  assert.match(box.stopHtml(), /深度思考中…/, 'running label while not stopping');
+  assert.match(box.stopHtml(), /深度求索中/, 'running label while not stopping');
   box.setStop(true);
   assert.match(box.stopHtml(), /正在停止…/, 'stopping label the instant the flag flips');
 
@@ -86,7 +94,7 @@ test('the status line reads 正在停止… the moment stopPending flips', () =>
   assert.match(box.insertedHtml, /正在停止…/, 'inserted with the stopping copy');
   box.setStop(false);
   box.sync();
-  assert.equal(box.line.textContent, '深度思考中…', 'an existing line is rewritten in place, not left stale');
+  assert.equal(box.line.textContent, '深度求索中', 'an existing line is rewritten in place, not left stale');
 });
 
 test('the status line still yields to questions and settles with the turn', () => {
@@ -165,8 +173,10 @@ test('the cancel handler goes optimistic before the rpc and reverts on refusal',
   assert.notEqual(start, -1, 'the handler is wired');
   const body = js.slice(start, js.indexOf(";$('questionComposer')", start));
   assert.match(body, /if\(!activeSession\|\|stopPending\)return/, 'a pending stop cannot double-fire');
-  assert.match(body, /stopPending=true;syncPromptUi\(\);syncTurnStatus\(\)/,
+  assert.match(body, /stopPending=true;[\s\S]*?syncPromptUi\(\);syncTurnStatus\(\);try\{clearAwaitingTurn/,
     'the ack happens before the rpc leaves');
+  assert.match(body, /stopPendingTimer=setTimeout\(\(\)=>\{stopPendingTimer=null;if\(!agentRunning\)return;stopPending=false;/,
+    'a cancel the host never answers cannot leave the button disabled forever');
   assert.match(body, /clearAwaitingTurn\(\);await rpc\('session\.cancel'/, 'the rpc itself is unchanged');
   assert.match(body, /catch\(e\)\{stopPending=false;syncPromptUi\(\);syncTurnStatus\(\);showError/,
     'a refused stop reverts instead of leaving a stuck spinner');
@@ -201,6 +211,7 @@ function buildBoundarySandbox() {
     : Promise.resolve({});
   const make = new Function(
     'eventSeq',
+    'eventTimeOf',
     'clearTurnRunningWatch',
     'syncPromptUi',
     'syncTurnStatus',
@@ -211,6 +222,9 @@ function buildBoundarySandbox() {
     let turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1
     let turnRunningConfirming=false
     let agentRunning=true,stopPending=true,lastHistoryKey='',pendingQuestion=null,activeSession='s1'
+    let turnElapsedAt=0,turnElapsedHostStart=0,turnElapsedTurn=null,turnRetry=null
+    const turnElapsedByTurn=new Map(),turnRetryMax=new Map()
+    const stopTurnStatusTimer=()=>{}
     const AWAITING_TURN_MAX_MS=1000,TURN_RUNNING_IDLE_MAX_MS=1000
     ${extractFunction(js, 'expireAwaitingTurn')}
     ${extractFunction(js, 'expireTurnRunning')}
@@ -234,6 +248,11 @@ function buildBoundarySandbox() {
       const e = entry && (entry.event || entry);
       const s = e && e.seq;
       return typeof s === 'number' ? s : -1;
+    },
+    (entry) => {
+      const e = entry && (entry.event || entry);
+      const t = e && e.time;
+      return typeof t === 'number' && t > 0 ? t : 0;
     },
     noop, noop, noop, noop, rpc,
   );
@@ -301,6 +320,6 @@ test('the boundary clear points ship in the page source', () => {
     'expireTurnRunning hands the verdict to the host consult');
   assert.match(js, /if\(!turnRunningOpen\)return;if\(turnRunningSeenSeq>seenAtStart\)\{watchTurnRunning\(turnRunningSeenSeq\);return\}if\(busy\)\{[\s\S]*?\}turnRunningOpen=false;stopPending=false;/,
     'finishTurnConfirm retires the stale stop only on a host that says idle');
-  assert.match(js, /if\(turnRunningOpen\)\{clearTurnRunningWatch\(\);turnRunningSeenSeq=turnRunningSeq;stopPending=false\}/,
-    'noteTurnBoundary retires the stop when a new turn starts');
+  assert.match(js, /if\(turnRunningOpen\)\{clearTurnRunningWatch\(\);turnRunningSeenSeq=turnRunningSeq;if\(fresh\)stopPending=false;[\s\S]*?if\(!turnElapsedAt\|\|turnElapsedTurn!==startedKey\)\{turnElapsedTurn=startedKey;turnElapsedHostStart=eventTimeOf\(entry\);turnElapsedAt=Date\.now\(\);turnRetry=null\}/,
+    'noteTurnBoundary retires the stop when a new turn starts and arms the turn clock');
 });

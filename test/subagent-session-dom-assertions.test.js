@@ -225,6 +225,7 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'fieldText')}
     ${extractFunction(js, 'sessionModelLabel')}
     ${extractFunction(js, 'isSessionUnread')}
+    ${extractFunction(js, 'isNoticeUnread')}
     ${extractFunction(js, 'readLastMessageMap')}
     ${extractFunction(js, 'lastMessageAtOf')}
     ${extractFunction(js, 'lastMessageTimeOf')}
@@ -242,10 +243,12 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     // empty cache and a no-op pull match a landing with nothing prefetched yet.
     const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
     function requestVisibleTails(){}
+    function requestTailBootRound(){}
     ${extractFunction(js, 'tailTextOf')}
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${extractFunction(js, 'visibleSessions')}
     ${extractFunction(js, 'blankRowVisible')}
+    ${extractFunction(js, 'bootRangeCap')}
     ${extractFunction(js, 'taskState')}
     ${extractFunction(js, 'taskGlyph')}
     ${extractFunction(js, 'pad2')}
@@ -259,6 +262,7 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'wsFlagHtml')}
     ${extractFunction(js, 'wsRunning')}
     ${extractFunction(js, 'wsGlyphOf')}
+    ${extractFunction(js, 'wsHeadTimeAt')}
     ${extractFunction(js, 'renderWorkspaces')}
     return {
       renderWorkspaces,
@@ -299,7 +303,7 @@ test('R1.2 focus is picked from the projected rows only', () => {
 
 test('R1.2 the workspace list paints the projected row and nothing else', () => {
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['sub1', 's1'] }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/work', sessionIds: ['sub1', 's1'] }],
     summaries: buildRenderSandbox().visibleSessions([
       WS_ROW('sub1', { origin: 'subagent', projections: { values: { title: 'CHILD-SECRET' } } }),
       WS_ROW('s1'),
@@ -322,7 +326,7 @@ test('R1.2 a projected-away id lands on the empty state, not on a ghost row', ()
   // renderWorkspaces must synthesise a blank entry, filter it, and show the empty hint —
   // that filter is the only thing standing between a stale id and a dead row.
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['sub1'] }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/work', sessionIds: ['sub1'] }],
     summaries: buildRenderSandbox().visibleSessions([]),
   });
   sandbox.renderWorkspaces();
@@ -358,8 +362,8 @@ test('R1.3 mutation: unprojected rows ghost and leak — the projection is load-
   ];
   const sandbox = buildRenderSandbox({
     workspaces: [
-      { workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['sub1', 's1'] },
-      { workspaceId: 'w2', title: 'other', path: 'F:/defws/tmp', sessionIds: ['sub1'] },
+      { workspaceId: 'w1', title: 'DSH', path: 'F:/work', sessionIds: ['sub1', 's1'] },
+      { workspaceId: 'w2', title: 'other', path: 'F:/work/tmp', sessionIds: ['sub1'] },
     ],
     summaries: rawRows, // NOT passed through visibleSessions()
   });
@@ -386,7 +390,7 @@ test('R1.3 mutation: unprojected rows ghost and leak — the projection is load-
 
 test('R1-audit a locally created blank session is a visible row, not a ghost', () => {
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['new1'] }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/work', sessionIds: ['new1'] }],
     summaries: [{ sessionId: 'new1', updatedAt: Date.now(), running: false, blank: true, awaitingQuestion: false }],
   });
   sandbox.renderWorkspaces();
@@ -396,7 +400,7 @@ test('R1-audit a locally created blank session is a visible row, not a ghost', (
 
 test('R1-audit follow-up a days-old blank shell is not a row again', () => {
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['old1'] }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/work', sessionIds: ['old1'] }],
     summaries: [{ sessionId: 'old1', updatedAt: Date.now() - 3 * BLANK_ROW_VISIBLE_MS, running: false, blank: true, awaitingQuestion: false }],
   });
   sandbox.renderWorkspaces();
@@ -469,7 +473,7 @@ test('STATUS-4b a failed turn is not disguised by a question still on screen (20
 
 test('STATUS-5 a held writer paints done end to end (the unknown pill is retired)', () => {
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['held1'] }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/work', sessionIds: ['held1'] }],
     summaries: [{ sessionId: 'held1', updatedAt: Date.now(), running: false, agentAvailable: false }],
   });
   sandbox.renderWorkspaces();
@@ -504,7 +508,7 @@ test('PRESET-1 agentPresetOf reads the projection map with three states', () => 
 
 test('PRESET-2 the settings row feeds the projection into the preset state', () => {
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ['s1'] }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/work', sessionIds: ['s1'] }],
     summaries: [{ sessionId: 's1', updatedAt: Date.now(), running: false, projections: { values: { agentPreset: 'codex-plan' } } }],
   });
   // taskState must not be confused by a projections-bearing row (the state chain
@@ -614,7 +618,7 @@ const manyRows = (n, prefix = 's') => Array.from({ length: n }, (_, i) => WS_ROW
 test('ROWS-1 a collapsed workspace builds no rows at all', () => {
   const rows = manyRows(3, 'a');
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: rows.map((r) => r.sessionId) }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/work', sessionIds: rows.map((r) => r.sessionId) }],
     summaries: rows,
     expanded: [],
   });
@@ -633,7 +637,7 @@ test('ROWS-2 an expanded workspace shows EVERY in-window row — the 25-row ceil
   // must NOT be restored: the window, not a row count, is the only limit.
   const rows = manyRows(LIST_ROWS_MAX + 7, 'b');
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: rows.map((r) => r.sessionId) }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/work', sessionIds: rows.map((r) => r.sessionId) }],
     summaries: rows,
   });
   sandbox.renderWorkspaces();
@@ -653,7 +657,7 @@ test('ROWS-3 stale rows wait behind the more row; paging discloses them a page a
   const stale = manyRows(2, 'old').map((r) => ({ ...r, updatedAt: Date.now() - RECENT_WINDOW_MS * 2 }));
   const ids = [...fresh, ...stale].map((r) => r.sessionId);
   const sandbox = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ids }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/work', sessionIds: ids }],
     summaries: [...fresh, ...stale],
     recentWindowMs: RECENT_WINDOW_MS,
   });
@@ -663,7 +667,7 @@ test('ROWS-3 stale rows wait behind the more row; paging discloses them a page a
 
   // A page larger than the hidden tail still finishes it in one tap.
   const revealed = buildRenderSandbox({
-    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/defws', sessionIds: ids }],
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/work', sessionIds: ids }],
     summaries: [...fresh, ...stale],
     revealed: [['w1', fresh.length + MORE_ROWS]],
     recentWindowMs: RECENT_WINDOW_MS,

@@ -442,6 +442,21 @@ test('subagent view cancel button markup, styles, and lifecycle', () => {
   assert.ok(css.includes('.subagent-stop'), 'CSS includes .subagent-stop positioning and style')
   assert.ok(css.includes('body.subagent-open .messages{padding-bottom:calc(72px + env(safe-area-inset-bottom))}'), 'CSS gives message list clearance when subagent-open')
 
+  // 2026-10-20：子代理只读视图里 #composer 被 display:none，syncComposerHeight() 于是把
+  // --composer-h 写成 15px（只剩 padding），所有「按 --composer-h 定位」的固定层都掉到底部，
+  // 与 18px 底距、44px 高的停止钮叠在一起。实测量得停止钮与 ↓ 跳转钮相交 32×31，且
+  // elementFromPoint 在 ↓ 按钮圆心返回的是 #subagentCancel（点「回到最新消息」实际会停任务）。
+  // 修法：子代理态把这两层也钉到与消息列表同宽的 72px 让位带（18+44+10）。
+  const stopBand = 'bottom:calc(72px + env(safe-area-inset-bottom))}'
+  assert.ok(
+    css.includes(`body.subagent-open .scroll-anchors{${stopBand}`),
+    'scroll-anchor FABs move above the subagent stop button',
+  )
+  assert.ok(
+    css.includes(`body.subagent-open #chatError{${stopBand}`),
+    'the fixed error toast moves above the subagent stop button too',
+  )
+
   assert.ok(js.includes("const subStop=$('subagentCancel')"), 'syncPromptUi resolves subagentCancel')
   assert.ok(js.includes('const visible=!!subagentView&&agentRunning;subStop.hidden=!visible'), 'subagentCancel is shown only when in subagentView and agentRunning')
   assert.ok(js.includes("$('subagentCancel').onclick=$('cancel').onclick"), 'subagentCancel is wired to cancel handler')

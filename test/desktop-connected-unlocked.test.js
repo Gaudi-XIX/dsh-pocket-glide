@@ -9,6 +9,7 @@
 //   B 把 #pendingPairings 放回 .pairing-content   -> B 红
 //   C 给 body 重新加 phone-connected 并按连接态隐藏 .pairing-content -> C 红
 //   D 连上时给两个连接模式键去掉 disabled / 去掉 switchMode 的 phoneConnected 早退 -> D 红
+//     （2026-10-19 放宽：force 强制重建不再被该早退拦——桥侧 park 手机，见「桌面刷新=强制重建」）
 //
 // D 的取向是用户 2026-10-12 09:3x 定的（原话：这个风险还不如不让切换呢）：
 // 连接态切模式会真把隧道切掉，正走公网的手机会掉线 —— 该风险大于「提前填固定地址」的收益，
@@ -140,8 +141,11 @@ test('D the connection-mode keys are disabled while a phone is connected', () =>
   }
   assert.match(PAGES_SOURCE, /function syncModeControls\(connected\)\{phoneConnected=connected;const disabled=connected\|\|modeSwitching/,
     'a live phone disables the keys, as does an in-flight switch')
-  assert.match(PAGES_SOURCE, /async function switchMode\(enableTunnel\)\{if\(phoneConnected\|\|modeSwitching\)return/,
-    'and switchMode refuses to swap the tunnel out from under a connected phone')
+  // A plain mode switch still refuses to pull the carrier out from under a live
+  // phone; the desktop refresh button reaches switchMode with force:true and is
+  // exempt from that gate — the bridge parks the handset instead of failing it.
+  assert.match(PAGES_SOURCE, /async function switchMode\(enableTunnel,force\)\{if\(modeSwitching\|\|\(!force&&phoneConnected\)\)return/,
+    'and switchMode refuses to swap the tunnel out from under a connected phone, unless it is a forced rebuild')
 })
 
 test('E a live phone does not stop the desktop from saving the tunnel hostname', async () => {

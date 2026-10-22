@@ -34,10 +34,17 @@ test('the projection drops only the fields no client code reads', () => {
   assert.equal('meta' in compact[1].data, false)
   assert.equal('header' in compact[2].data, false)
 
-  // Everything the renderer touches survives untouched.
-  assert.deepEqual(compact[0].data.message, assistantMessage.data.message)
+  // 2026-10-20 m01424⑤: a tool row ships as a title only. The body
+  // (call arguments / result content) never travels; the identity the renderer
+  // matches on (call id, tool name, the fact that a result arrived) does.
+  assert.deepEqual(compact[0].data.message, {
+    role: 'assistant',
+    content: [{ type: 'tool-call', id: 'c1', name: 'edit' }]
+  })
   assert.deepEqual(compact[0].data.step, 2)
-  assert.deepEqual(compact[1].data.message, toolResult.data.message)
+  assert.deepEqual(compact[1].data.message, {
+    content: [{ type: 'tool-result', toolCallId: 'c1', content: [] }]
+  })
   assert.deepEqual(compact[2].data.reason, 'first')
   assert.equal(compact[0].seq, 10)
   assert.equal(compact[1].type, 'tool/result')
@@ -47,6 +54,7 @@ test('the projection drops only the fields no client code reads', () => {
 
   // The input is never mutated: the same records go to the desktop path.
   assert.deepEqual(raw[0].data.stream, [{ type: 'reasoning-chunks', dt: [1, 2, 3] }])
+  assert.deepEqual(raw[0].data.message, assistantMessage.data.message, 'the stripped tool body survives on the desktop copy')
   assert.deepEqual(raw[1].data.meta.files, [{ path: 'a.js' }])
   assert.deepEqual(raw[2].data.header.tools, [{ name: 'edit' }])
 })
@@ -55,7 +63,35 @@ test('the projection also reaches records wrapped in an event envelope', () => {
   const compact = compactSessionRecords([{ type: 'event', event: assistantMessage }])
 
   assert.equal('stream' in compact[0].event.data, false)
-  assert.deepEqual(compact[0].event.data.message, assistantMessage.data.message)
+  assert.deepEqual(compact[0].event.data.message, {
+    role: 'assistant',
+    content: [{ type: 'tool-call', id: 'c1', name: 'edit' }]
+  })
+})
+
+// 2026-10-20 host crash (crash-2026-10-20T13-22-57Z / 13-37-21Z host.log):
+// `ReferenceError: changed is not defined` was thrown for the flat `tool/call`
+// shape (`data.callId` + `data.arguments`, no `message`) — `changed` was
+// declared inside the message-content branch and the flat-key loop below it
+// assigned to it anyway. The throw happened inside the follow WebSocket
+// handler and killed the whole host (two crashes, ~4 s apart after each boot).
+test('a flat tool/call record drops its arguments instead of throwing', () => {
+  const flat = { type: 'tool/call', seq: 7, data: { turn: 1, step: 2, callId: 'c9', name: 'read', arguments: { path: 'x' } } }
+
+  const [compact] = compactSessionRecords([flat])
+
+  assert.deepEqual(compact.data, { turn: 1, step: 2, callId: 'c9', name: 'read' }, 'the body is gone, the identity stays')
+  assert.deepEqual(flat.data.arguments, { path: 'x' }, 'the host-side record is never mutated')
+})
+
+test('a tool/result record carrying a plain-text-content message is dropped, not thrown on', () => {
+  // The same scope bug fired for any `tool/*` record whose message content was
+  // an array, changed or not — this is the second shape that reaches the walk.
+  const row = { type: 'tool/result', seq: 8, data: { callId: 'c9', message: { content: [{ type: 'tool-result', toolCallId: 'c9', content: [{ type: 'text', text: 'ok' }] }] } } }
+
+  const [compact] = compactSessionRecords([row])
+
+  assert.deepEqual(compact.data.message, { content: [{ type: 'tool-result', toolCallId: 'c9', content: [] }] })
 })
 
 test('the projection leaves non-record values alone', () => {

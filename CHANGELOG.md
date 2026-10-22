@@ -1,8 +1,210 @@
 # Changelog
 
 本档只记**版本级的对外变化**：装机、使用与行为契约。逐笔施工账（谁在哪个包改了什么、证据在哪）
-在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
+在 `git log` 与 flow change 卡（`F:\work\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
+
+## 未发布（工作树）
+### 回主页再进会话不再把用时打回 1 秒；中途插话的排队消息按到达时刻插进回合（2026-10-22）
+
+真机反馈（m03445／m03452）：「重启了，但是不对，这个时间每次返回主页再进去对话框里面，就会刷新成 1 秒。这个问题呢？」「然后排队的消息就是插入的消息吧，位置依然是不对的」。
+
+- **用时被打回 1 秒**：返回主页再进会话是一次整页重建，页面把整段日志重新喂给 `visibleMessages` / `updateRunning`，跑着的回合被重新见到一次它的 `turn/start`——而旧实现每次都在那一刻把计时起点设成 `Date.now()`，于是**同一个回合每进一次页面就从 1 秒重来**。改为**只借宿主的「跨度」**：记下该回合 `turn/start` 记录自带的时间戳（`turnElapsedHostStart`），每次轮询用「手上最新记录的时间戳 − 起点时间戳」算出宿主机已经走过的时长，再用本机时钟从那一刻继续走（`turnElapsedAt = Date.now() - span`）。这样跨机器比较的只有两个宿主戳相减得到的**时长**，没有任何「宿主绝对时间 − 手机墙钟」的减法（那条比较正是 10-13 把状态钉死的成因）。重锚只在宿主跨度大于本机已走时长时前进，故轮询重放同一批记录**不会**把显示往回拨。回合结束时同样按 `turn/end` 与 `turn/start` 两个宿主戳之差记账，不再受轮询间隔影响。
+- **排队/插入消息的位置**：插入消息（steer）是被宿主塞进**已经在跑的回合**里的，它的 seq 落在该回合内部；旧实现靠 `orderUserBubblesByTime` 按时间戳搬家，结果把气泡抬到整个过程卡之上（用户原话「他把我后面补充的消息，就顶到了思考条和工具条之上去了」）。改为**在回合内部按到达点内联**：`visibleMessages` 给每个内容块记下自己的 `seq` 与宿主时间戳，把落在该回合里的用户消息按同一把尺子插进去，并**在插入处把过程卡切断**（气泡上方一段、下方一段）；这些内联气泡标 `_inTurn`，一律不再交给外层的时间戳搬家，跨回合的顶层气泡仍保留 2026-10-19 的「按时间回到写下它的时刻」契约。
+
+回归锁：新增 `test/pages-steer-timeline.test.js`（STEER-3…7 钉内联切割与顺序、CLOCK-1…5 钉重进页面读真实跨度／本机续走／重放不回拨／1970 宿主戳不钉死／回合结束记宿主演进量）。同时更新 `test/stop-pending.test.js`（起点现在多记一个宿主戳）、`test/transcript-order.test.js`（M6 的判据由「这里完全不读宿主时间戳」改为「只读两个宿主戳之差，绝不与 Date.now() 相减」）、`test/visible-interleave.test.js`（STEER-1 的气泡改钉在过程卡之下）。全量 `node --test --test-concurrency=1 test/*.test.js`（pwsh）= **1441 tests / 1439 pass / 0 fail / 2 skipped**。
+
+### 静止阅读时不再「抖动」：重新开始跟随要几乎贴到底，带沿不再来回穿越（2026-10-22）
+
+真机反馈（用户口述）：「是在会话里面往上滑的时候已经停止了，但是在抖动，屏幕很滑……就是往下抖一下，再往上抖一下，再往上抖一下，然后就好像在跳跃似的」。
+
+根因是**跟随带同时当了「留下的阈值」和「重新进入的阈值」**：流式期间每帧都把 `scrollHeight` 抬高几十像素，静止读者的「距底距离」就在 120px 带沿上反复穿越。一次程序性滚动（`programmaticScroll` 的 280ms 自醒、或滚动监听的 250ms 静默窗到点）按 `isNearBottom` 重判，就把 `followStream` 重新打开 → 下一帧贴底（内容上移）→ 再下一帧锚点复原（内容下移），屏幕上就是连抖。同日真机遥测：`jk`（250ms 内 ≥200px 位移）交替出现 **±286 / ±437 / ±466px**，而 `ts`（贴底写入）154 次、`rs`（锚点复原）8 次——两条写入链在同一条时间线上交替。
+
+改法（只动 `lib/pages.js`）：新增 `FOLLOW_REARM_PX=24` 与 `canRearmFollow(box)`——**已经在跟随时**仍用 `isNearBottom` 的带宽判「是否离开」，**已经停下时**必须回到 24px 以内才准重新跟上（短转录按带宽走，免得永远回不来）。`programmaticScroll` 的自醒与滚动监听的重判都改成 `followStream=followStream?isNearBottom(live):canRearmFollow(live)`。读者自己滑回底部能落到 24px 内，而流式把内容撑高 30px 不会把他重新粘住。
+
+回归锁：`test/pages-scroll-anchors.test.js` 新增「re-arming the follow is stricter than staying in it」（距底 100px 仍在带里但不能重新上膛／20px 可以／短转录按带宽回落），并把两处「重判 follow」的字面钉同步到新表达式。
+
+### 用时口径与文案对齐电脑端：回合级、1 秒下限、秒分时三段、运行中「深度求索中，用时 X」（2026-10-22）
+
+真机反馈（m02782 截图 m02784：回合跑了很久，底部只有「深度思考中… 7s」；m03045「总时间。其实就跟电脑端里面显示的时间是一样的」）⇒ 口径改为与桌面 DSH 完全一致，从 app.asar 逆出桌面三处计时原文后逐条搬：
+
+- **格式改桌面 formatRunDuration**：小时段仅在有小时时出，分钟段从第 60 秒起出，秒段永出。`7秒 / 1分20秒 / 1小时2分0秒`。原手机格式是 `1m20s / 1h00m`，与桌面不一致；新增单位词 `durHour`（zh `小时`／en `h `）、`durMin`（`分`／`m `）、`durSec`（`秒`／`s`）。
+- **1 秒下限**：桌面回合折叠头用 `Math.max(1e3, turn.end.time - turn.start.time)`，运行中用 `Math.max(1e3, now - startTime)`。手机两处同搬：`statusLabel` 与 `visibleMessages` 里把耗时挂到消息上时（`rendered[lastText].turnElapsed=Math.max(1000,spent)`），0.9 秒的回合不再显示 `0秒`。
+- **运行中文案改桌面 chat.deepDivingFor**：`深度求索中，用时12秒 ···`（原 `深度思考中… 12s`）；`deepDiving` 本体同步改「深度求索中」去掉省略号。回合结束仍走消息尾时钟位：`18:42 · 已完成，用时1分20秒`（`turnElapsed` 标签改「已完成，用时{elapsed}」）。2026-10-22 下午按 m03443「并且『用时几秒』这个数字前面有空格，数字后面没有空格」去掉 `用时` 与数字之间的空格——桌面原文（`lib/step-process.generated.js:109 "message.turnProcess.took": "已完成，用时 "`）确实带一个尾随空格，但那是为西文 `1m20s` 之间留间隔，中文数字紧跟汉字更自然。
+- 计时起止仍是手机侧 `Date.now()`（既有纪律：宿主事件时间戳绝不与本机墙钟相减），但起止差与桌面 `end.time - start.time` 数值等价。→ **2026-10-22 晚已改**：仍不做「宿主绝对时间 − 手机墙钟」，但改为借「两个宿主戳之差」当跨度、由本机时钟续走，否则回主页再进会话会把跑着的回合打回 1 秒（见本节上方第一条）。
+
+回归锁：`test/turn-footer-meta.test.js` 的 `A11b formatElapsed` 逐值钉住桌面三段式（0/9秒/1分0秒/1分20秒/1小时0分0秒/1小时5分30秒/负数归零）与尾戳 `已完成，用时1分20秒`；`test/pages-process-render.test.js` 的状态行用例改钉 `深度求索中，用时… 12秒`；`test/stop-pending.test.js` 的沙箱标签随页面同步。全量 `node --test --test-concurrency=1 test/*.test.js` = 1430 tests / 1426 pass / 2 fail，两例仍是 `test/tunnel.test.js` 的 MSYS GNU tar 环境伪红。
+
+
+### 手机端不再整片闪：流式期只换最后一条消息，整屏重建只在结构真的变了时（2026-10-22）
+
+真机反馈（m03046，截图 m03088）：一次 69 次工具调用、14 个串行 step 的回合里，会话页每 250ms 把整个 `#messages` 清空重排一次——用户看到的是整片闪。三条路径叠出来的：
+
+- **轮询比键把流算进「变了」**：`applyHistory` 的 `key` 含 `messages`，而流式期轮询手里那批比屏上少一截流（`tokenStream` 与还没合并的事件），于是每个安静的工具回合也判「变了」→ 整屏重建。现在流式期（`streamConnected && agentRunning`）比键里消息位置换成 `null`，屏上那棵树归 `flushStreamRender` 管；`flushStreamRender` 里的 `lastHistoryKey=''` 一并删掉（那行会让下一拍轮询必触发一次整屏重建），回合结束后由 `applyHistory` 自己按新内容判一次。
+- **每个事件都要求整屏重建**：`applyStreamEventFrame` 过去对除 `assistant/chunk` 之外的**每个**事件都传 `fullPaint=true`——69 次 `tool/result`、`step/start` 只是往最后一条消息里追内容，走 `patchLastStreamMessage` 换那一条就够。现在只在 `FULL_PAINT_STREAM_EVENTS = {turn/end, user/message, turn/start}` 时才整屏重建。
+- **同一帧排两队**：`queueStreamRender` 开头补 `if(streamRenderFrame!==null)return;`，同一 `requestAnimationFrame` 回调里重复调用不再各排一队。
+
+隧道轮询的游标也只跟到这一批真正带回的序号（`frames.length ? seenSeq : body.latestSeq`）：`latestSeq` 是交换机此刻的最新序号，可能落在这一批还没送到的帧之后（模型/工具事件与 `assistant/chunk` 是两条记录流），直接跳过去会把中间那段永久漏在窗口外。
+
+回归锁：`test/pages-tunnel-poll.test.js` 的沙箱不再自写一份「哪些事件算整屏」——`FULL_PAINT_SET` 直接照抄页面原文那一行（两份判定漂移过：沙箱少抄一行，整批帧就一个都不往渲染器送，6 条断言集体转红却报不出原因）；两个「整批只排一帧」用例断言 `lastBatchFullPaint`（内容帧 false、`turn/end` true），游标用例断言只跟本批真实序号、`latestSeq` 越过时也不跳。`test/nav-reload.test.js` 钉 `applyHistory` 比键的新首项。全量 `node --test` 全表（pwsh 下）= 1430 tests / 1428 pass / 0 fail / 2 skipped；同一套在 Git-bash 下 `test/tunnel.test.js` 两例转红——MSYS GNU tar 把 `-C C:\…` 当远程主机，属环境伪红。
+
+**工具行按到达顺序混排不置顶，一段只出一行，失败按次数说清楚**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值，手机须完全关闭重开。用户 2026-10-22 上午真机两条：「除了思考之外的内容，还是固定为一行，并且还固定置顶了」「聚合的方法不对，显示的时序也不对。应该根据实际情况，工具就是工具，思考就是思考，反正这个顺序」；下午第三条：「如果有失败的，会错误地显示『调用 x 次工具（失败）』，实际应该说『调用了 m 次工具（失败 x 次）』」）。
+
+- **① 按事件真实顺序混排、不置顶**：`renderMessage` 的 turnProcess 分支改为顺序遍历 `blocks`——连续的工具块攒成一次 `toolRun`，遇到思考/正文就先把它落成一行（`processRows` → `processLineHtml`）再渲染该块。于是「工具行、思考块、正文」各在各的位置：工具在前就是工具在前，思考在前就是思考在前，工具行不再被抬到段首。（08:1x 那版是 `parts.unshift(line)`，把工具行钉死在段首，被用户打回。）
+- **② 一段工具工作只出一行且带「正在干啥」**：`processRows` 里同一类目的已完成与进行中合成**一行**（`{count, running, failed, broken}`），行尾由 `processLineText` 接动词（如「已调用工具 8 次，正在运行命令」）。旧行为是 done 一行 + running 再起一行，真机上就是「已调用工具 4 次」下面紧跟「已调用工具 2 次」。
+- **③ 失败按次数说**：过程行标记从「（失败）」改为「（失败 N 次）」——线上是「已调用工具 8 次（失败 2 次）」。新增标签 `toolFailedCount`（zh `失败 {count} 次`／en `{count} failed`）取代 `failMark`；`processLineText` 的入参键同步改成 `failedTemplate`（**不能叫 `failedCount`**：标签表里同时有 `count`/`failedCount`/`toolFailedCount` 三键，取 `table.failedCount` 会拿到模板串而不是次数，这条踩过）。条目内部用 `broken` 记失败条数，行级 `broken` 缺省时按 1 计数——**不得回落到整行 `count`**，否则首个失败行会打印「5 次（失败 5 次）」。
+- **回归锁**：`test/pages-process-render.test.js`（30 test）新增「一类失败带次数」「两行同类相加总数与失败数」「省略细分时只算一条」「模板取 `failedTemplate` 而标签表是 `toolFailedCount`」四组；`processRows`/`processLineHtml` 的桩在 `test/pages-scroll-anchors.test.js`、`test/visible-interleave.test.js` 同步。
+- **回归**：全量 `node --test --test-concurrency=1 test/*.test.js` = **1428 tests / 1424 pass / 2 fail**（2026-10-22 13:2x，bash 跑法）；两例均为 `test/tunnel.test.js` 造 .tgz 时 MSYS GNU tar 把 `-C C:\…` 当远程主机（`tar (child): Cannot connect to C: resolve failed`），在 PowerShell 下跑该文件全绿，属环境伪红、与本笔无关。
+
+**阶梯「会话内容」那行改数真实消息条数，且一行一进入就把数字交出来**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据同上一条。用户 2026-10-22 两条小调整：「那个会话消息那儿不应该写『10 组消息』，而是看能不能真实地把消息的条数写出来」「有没有可能刚进入那一行，就把后面对应的数字显示出来」）——同日前一条（闸门寄存 + 按序揭示）的两点就地修正。
+
+- **①「10 组消息」改成真实条数**：新增纯函数 `countTailMessages(tails)`，按记录类型只数 `user/message` 与 `assistant/message`（与 `visibleMessages()` 渲染同判据；`assistant/chunk`／`tool/call`／`tool/result`／`turn/end`／`deliverables/presented` 都不算消息），计数格文案变 `N 条消息`／`N msg`（原 `N 组消息`／`N ready`）。原来数的是 tail 集合里非 `error` 的 key 数（≤`BOOT_PRELOAD_TAILS=10`），那是「预载了几份尾包」，写在「正在同步会话内容」这一行会被读成「十条消息」。
+- **② 闸门提前到「进入那一行」**：删掉 `reveal(i,p)`，改由行级钩子 `openRow(n)` 在 `setStep(n)` 同一刻 `releaseCount(n)`，`stageRunner(openRow)` 取代 `stageRunner(setStep)`。每行一被点亮就当场交出本行真数，不再等这一行走完；`gateLadder()` 开启闸门时顺带放行第 0 行（它一出现就是 `is-active`）。答案若比揭示更晚回来，`countUp` 那一笔直接画进已放行的行（`paintCount` 从 0 爬到真值，`COUNT_UP_MS=450` 的「哒哒哒」保留）。
+- **回归锁**：`test/boot-count-up.test.js`（15 test）新增「闸门一开第 0 行立即出数」与「会话行数消息而非尾包份数」（含 `countTailMessages` 四组输入：3 条消息／全工具记录 0／`undefined`／空对象），原「按序交出」契约改为「进入行即交出」；`test/pages-panel-ux.test.js` 的等待形状断改为 `await stage(n,()=>reads[m])` 并新增 `openRow`、`stageRunner(openRow)` 两条；`test/script-embedding.test.js` 两处 `stageRunner(setStep)` 改串为 `stageRunner(openRow)`。
+- **踩坑备案**：断言不能写「页面脚本里不含『组消息』」——`countTailMessages` 的中文注释本身含「10 组消息」，会随共享块一起打进页面，只能匹配带引号的 `' 组消息'`。
+- **回归**：全量 `node --test --test-concurrency=1 test/*.test.js` = **1421 tests / 1419 pass / 0 fail / 2 skipped**（2026-10-22 08:3x，pwsh 跑法）。
+
+**过程行改按「一段工具工作一行」，思考独占一条竖串，用时从 0 一直走，停止键点了就停**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值；手机须完全关闭重开才拿得到新壳。用户 2026-10-22 凌晨真机走查四条：①「怎么把所有的工具调用都压缩成一行了」——他要的竖串是「干了啥，干了啥 → 思考 → 回复 → 干了啥，干了啥 → 思考 → 回复 → 干了啥，干了啥，正在干啥 → 运行态提示，时间」；②「跑马灯一样已经过去的思考」不该闪；③「用时不停清零」，应「从 0 起一直往后走，过 60 秒变 1 分钟的形式」；④「运行中不能停止」）。
+
+- **① 过程行按段合并、置顶该段**：`renderMessage` 的 turnProcess 分支不再逐 cluster 出一行，而是把这一段里所有工具块过 `processRows()`（按类目首次出现顺序聚合，同类 done 与 running 分两行）交给 `processLineHtml()` 出**一行**，且**排在该段思考之前**；回复正文仍是独立消息。于是竖串是「一行过程 → 思考（可点开）→ 回复 → 下一段……」，最后一段的行尾写「正在编辑文件」。（第一版曾把整回合的工具压成一行放在段首，用户 2026-10-22 打回：那样第二段就没有自己的「干了啥」了。）
+- **② 只有最新的思考走扫光**：过程消息里只有 `blocks` 的最后一块在流式时拿到 `streaming=true`（`message.streaming&&block===tail`），其余一律 `data-state="ok"`；跑马灯（`.thinking[data-state=running] .activity-summary:after`）因此只跟着正在写的那一段闪，写过的立刻静下来。
+- **③ 用时不再被清零（根因与 ④ 同一个）**：`noteTurnBoundary()` 原来只在 `seq<turnRunningSeq` 时早退，而 `updateRunning()` 每次轮询都把同一批事件重放一遍 ⇒ 同一个 `turn/start`（`seq` 相等）每秒重跑一次函数体，`turnElapsedAt=Date.now()` 被反复重置（永远显示 0 秒），`stopPending=false` 也被反复抹掉。修法：`fresh=seq>turnRunningSeq`，只有新回合才清 `stopPending`，且计时只在 `!turnElapsedAt||turnElapsedTurn!==startedKey` 时起算。格式沿用 `formatElapsed`（`45s`／`1m20s`／`1h05m`）。
+- **④ 停止键点了就不再被抹掉**：同一条 `fresh` 守卫；另外给 `session.cancel` 加 8 秒看门狗（`stopPendingTimer`）——桥若一直不回，转圈最多转 8 秒就复位成可再停，不再永久卡成禁用态。
+- **回归锁**：`test/pages-process-render.test.js` 新增 `messageSandbox` 与两组用例（一段工具工作一行、行在思考之前、两段各出各的行；只有最新思考带 `data-state="running"`）；`test/visible-interleave.test.js` 的 LEDGER-1 改为 SEGMENT-1（每段只带自己那段的工具、没有回合级 ledger）；`test/stop-pending.test.js` 改钉新形状（`if(fresh)stopPending=false` ＋ 计时的 `if(!turnElapsedAt||turnElapsedTurn!==startedKey)` 守卫 ＋ 看门狗）；`test/turn-footer-meta.test.js` A15 改为钉「页脚是 `.message` 的最后一个子节点，且 turnProcess／turn-error 分支先走」。
+- **回归**：全量 `node --test --test-concurrency=1 test/*.test.js` = **1419 tests / 1414 pass / 2 fail**，两例仍是 `test/tunnel.test.js` 造 `.tgz` 的 MSYS GNU tar 环境伪红（见下条备案）。整套里每轮会随机再红 1 个与本线无关的文件（`device-registry`／`notify`／`inner-auth` 各出现一次，单跑全绿），属套装环境抖动。
+
+**过程只留一行、思考独占一条竖串、回合用时实时跳、模型重试说清楚**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值；手机须完全关闭重开才拿得到新壳。用户 2026-10-21 三轮收敛后定案：①「所有工具调用只保留最上面那一个窗口」，点开、下拉二级菜单、点进工具明细「这整个都不需要了」；②「思考单独拿出来放上面」，形成一竖串「一个思考 → 一个回复内容 → 一个时间戳」，思考可点开；③ 桌面端传来的 `transcriptView` 四档在手机上「直接坍缩」，固定一种形态；④ 桌面端模型重试次数与最终报错要透传到手机（「模型不是有时候会重试几次，然后会推一个报错信息吗」）；⑤ 顺序按事件发生先后，不重排（用户选 B 方案「它出现在哪就是哪」），工具行要同时写「已经干了什么几次」和「正在干什么」）。
+- **改法（只动 `lib/pages.js`，桥零改动）**：宿主事件本来就在流到页面，缺的只是渲染。
+  - 删掉外层 `<details class="turn-process">` 折叠容器与整套工具明细器官（`renderToolCard`/`renderToolDiff`/`renderToolRaw`/`diffRowsHtml`/`toolClusterState`/`toolArgsOf`/`pretty`/`diffLineSplit`/`toolSummaryLine`/`stableLiveTitle`/`liveThinkingLine`），新增 `renderProcessLine()`：一行、不可点、无箭头、无 `details`，文本由新纯函数 `processLineText()` 从「类目＋次数＋进行中/失败」推出——「已读取文件 2 次」「已读取文件 3 次，正在编辑文件」「修改了文件（失败）」。（**合并粒度由下条 2026-10-22 修正为「一段工具工作一行」**，不是整回合一行。）
+  - 思考块对任何档位都渲染（原来 compact 整块隐藏、verbose 默认展开），默认收起、点开看正文。
+  - `transcriptView` 从渲染路径彻底移除（状态声明／boot 赋值／`extractMobileSettings`／`applyInheritedSettings` 六处全删）；桥仍下发该键，页面侧不再读，也不留设置控件残壳。
+  - 用时并入底部 `turn-status` 行（`deepDiveShimmer` 原样）：`深度思考中… 12s`，1s 定时器只改该节点文本；`turn/start` 起算、`turn/end` 结算，结算值挂到该回合最后一条消息，尾部时间戳变 `18:42 · 用时 1m20s`（`formatElapsed`：`45s`／`1m20s`／`1h05m`）。计时一律手机侧 `Date.now()`——注释里那条「绝不可拿宿主时间戳与本机墙钟比」照旧生效。
+  - 重试透传：`applyStreamEventFrame` 认 `llm/retry` → `noteLlmRetry()` 取 `retry`/`maxRetries`，状态行变琥珀色 `模型报错，正在重试 2/3 · 12s`（`.turn-status[data-warn="1"]`）；重试耗尽后该行消失、`turn/end` 错误横幅 detail 前缀 `重试 3 次后失败：<宿主原文>`。宿主 `failure.message` 原样透传，不改写、不与桌面文案对齐。
+  - **事件 turn 归属修正**：宿主把 `turn` 放在事件信封（`event.turn`），页面原先一律读 `event.data.turn` ⇒ turn 键恒为 `''`（多回合会并成一回合、重试计数与时用都取不到）。新增模块级 `turnKeyOf()`（信封优先、`data` 兜底），供 `stepKey`／`ensureTurn`／`turn/end` 重试前缀共用。
+- **回归锁**：`test/pages-process-render.test.js` 整文件重写（26 test）——动词/计数/失败措辞、单行 `div` 无 `details`/`summary`/chevron、**参数与结果永不外泄**（`file_path`/正文/`diff-line`/`tool-raw` 全不得出现）、退役符号清单、`statusSandbox` 覆盖跳秒与 `2/3` 重试与 `data-warn`；`turn-footer-meta` 新增 A11b（`18:42 · 用时 1m20s` ＋ `formatElapsed` 七档边界）；`turn-end-errors` 新增重试前缀两条；`pages-send-mode`／`pages-scroll-anchors`／`stop-pending`／`transcript-order`／`verify-footer-turns`／`pages-image-file`／`block-placeholder`／`visible-interleave`／`queue-steer-refresh`／`stream-watermark` 的沙箱与锚点同步。
+- **壳自检**：`mobilePageAssets({locale:'zh'})` → js 308,614B / css 53,750B，`new Function()` 解析 OK；退役令牌（`transcriptView`／`turn-process`／`renderToolCard`／`cluster-rows`／`tool-raw`／`diff-line`）全 0。
+- **回归**：全量 `node --test --test-concurrency=1 test/*.test.js` = **1415 tests / 1411 pass / 2 fail**（两例是 `test/tunnel.test.js` 造 `.tgz` 的 MSYS GNU tar 环境伪红，与本线无关，已在上一条里备案）。
+
+**输密码前那张「多余」的落地卡不见了，阶梯的三个假数字也不会再一模一样**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-21 报障两条：①「这个页面我感觉像是多余的」（后澄清「我多余页面的意思是指冷启动第一次输PIN码之前弹出来的那个页面」）；②「这里怎么数字都是一样的，并且数字明显是错的，并且应该一步一步来（我只单的前端显示，后端肯定是提前加载）」——指重连页四步阶梯右侧计数 14/14/14 三个数完全相同）。
+
+- **BUG① 根因**：冷启动手机扫隧道二维码落在 `/`（未鉴权）→ `lib/bridge.js:4989-4990` 渲染 `renderMobileReconnectPage(fresh=true)` → 页内 `MODE==='auto'` 立刻 `startRetry()` POST `/pair/retry`，而隧道档的 `/pair/retry` 是**写死的空转**（`lib/bridge.js:4735-4741` 自注 "deliberate no-op: it only tells the phone to ask for the PIN"）→ 只回 `{pinRequired:true}` → `showPin()` 才把标题换成「输入连接密码」并亮出密码框。也就是说：那张「连接 Pocket + Curiouser and curiouser! + Pocket 一级准备」的卡片只是**为了被下一帧替换掉而存在**。
+- **BUG① 改法（只动页内，不碰桥）**：新增 `pinFirst = fresh && interactive && connectionMode === 'tunnel'`；命中时首帧就是密码态（heading=`T.pinHeading`、guidance=`T.pinHint`、`#pinBox` 不带 `hidden`、直接 focus），页尾改成 `if(PIN_FIRST){…focus…}else if(MODE==='auto')startRetry();` —— 那趟注定只回 `pinRequired` 的空转不再跑。同时删掉卡片上那两行文艺副标题：正牌首屏 splash 早在 app 壳 `lib/pages.js:704`（`#workspaces > .ws-splash`）里，落地卡上的是复制品（`git log -S"Curiouser"` 实证两处是 10-18「方案C 首屏 splash」那批复制的）。局域网档不照搬：那边的 `/pair/retry` 有真恢复语义（能续就续，续不了才要重新扫码）。
+- **BUG② 根因**：`sharedStageScript()` 里有个假里程表 `countCrawl(i,fmt)`（`CRAWL_MS=110`、`CRAWL_MAX_MS=8000`）：请求一发出就按 `elapsed/110` 每帧自增写进计数格，与真实条数毫无关系；而三条腿（workspace.list / session.list / /api/boot）是**同一微任务里并发起跑**的 ⇒ 三个里程表同刻启动、同帧推进 ⇒ 数字必然一模一样（截图里的 14 ≈ 请求发出后约 1.5s 的帧数）。真实条数要等 `countUp`（`COUNT_UP_MS=450`）接管才写入，截图那一刻还没接管。
+- **BUG② 改法**：① 整段删掉 `countCrawl` / `CRAWL_MS` / `CRAWL_MAX_MS`——**再也不会有「请求还没回来数字先狂涨」**；② 计数改成闸门寄存：`countUp` 在闸门开启后、且该行还没被揭示时，只把 `{target,fmt}` 寄存在元素上（`el._pending`），直到该行被揭示（`releaseCount`）才交出；③ 三条腿**仍旧同时发出**（后端照旧提前加载，用户原话也确认了这一点），但前端按行序揭示：`const reads=[…三条腿…]; reads.forEach(p=>p.catch(()=>{})); await stage(0,()=>reveal(0,reads[0])); await stage(1,…); await stage(2,…)`（**该 `reveal` 形状已被上面 2026-10-22 那条改成 `await stage(n,()=>reads[m])` ＋ `openRow` 进入行即交出**）。于是「一行在它的答案到达之前保持空白——空白等于还在量，比假数诚实」，且走到哪行亮哪行、每行只交自己那一行的真数。
+- **计数语义**（三条腿读的是同一份 catalogue 的不同切片，本来就不同，修好后各是各的数）：第 1 行＝工作区条数；第 2 行＝本次同步回来的会话条数（`limit=SESSION_LIST_ROWS=30`，宿主 `session/list` 不返回总数，见 `lib/bridge.js:6581-6625` 只回 `{items,fingerprint}`）；第 3 行＝预载尾包的会话数（`parsed.tails` 去 `error` 后，≤`BOOT_PRELOAD_TAILS=10`）。**（第 3 行与揭示时机已被上面 2026-10-22 那条修正：改数真实消息条数、改为一进入该行即交出，`reveal` 已删。）**
+- **顺带修掉的观感错序**：旧写法下先到的腿会把后到的行标成 `is-done`（划线）而计数还空着；改成按行序揭示后，一行划线时它的数字已经在那儿了。
+- **回归锁**：`test/boot-count-up.test.js` 重写为闸门契约（13 test：无假里程表、闸门寄存、按序交出、闸门默认关、两页各一份器官）；`test/guided-rpc-formatter.test.js` 末条静态锁反转为「两页脚本不含 countCrawl」＋「每个 `countUp(stepCountEl(` 都传函数」；`test/pages-panel-ux.test.js` 的「三读同批」改为钉新形状（`const reads=[…`＋`reads.forEach(p=>p.catch(()=>{}))`＋`await stage(n,()=>reveal(n,reads[m]))`＋`gateLadder()`）；`test/pages-render-fixes.test.js` T5b 三分支（fresh+tunnel 直出密码框、fresh+lan 仍「连接 Pocket」、非 fresh 仍「连接已断开」）。
+- **计量账**：只动两个引导页文档、不进 app 壳，`ASSET_BUDGET_BYTES` 不变，运行壳摘要不受影响（`sharedStageScript()` 只被这两页引用，app 壳 `renderMobilePage` 在 `lib/pages.js:488` 不含它）。
+- **回归**：全量 `node --test --test-concurrency=1 test/*.test.js` = **1423 tests / 1421 pass / 0 fail / 2 skipped**（2026-10-21 20:2x）。注意跑法：DSH 的 bash 把 MSYS 的 GNU tar 排在 `C:\Windows\System32\tar.exe` 之前，`test/tunnel.test.js` 两档造 `.tgz` 的用例会报 `tar (child): Cannot connect to C: resolve failed`（GNU tar 把 `C:\…` 当远程主机）——那是**环境伪红**，与本线无关；把 `C:\Windows\System32` 提到 PATH 最前即全绿（46 tests / 45 pass / 1 skipped）。
+
+**四步卡死的真根因：引导页 `rpc()` 的爬升参数丢了箭头，一调用就 `ReferenceError`**（⏳ 待重启生效：运行桥 43127 仍是 10:36 那次的旧实例。用户 2026-10-21 报障「Pocket 手机连接页面出了大问题，一直停留在这个页面」，红字「暂时无法连接桌面端，请确认 Pocket 正在运行。」＋四步停在第 4 行）。
+
+- **根因（一行）**：`sharedStageScript()` 里 `countCrawl(crawlIdx,method==='workspace.list'?(zh?v+' 个工作区':v+' ws'):(zh?v+' 个会话':v+' sess'))`——第二个参数本该是 `v=>…`，箭头在 `e19957d`「冷开取数四项」里丢了，`v` 从没定义，于是**每次 rpc() 都在请求发出之前就抛 `ReferenceError`**。
+- **为什么一直没暴露**：`countStepIndex()` 只在页面有 `#bootSteps` 时返回行号（即仅两个引导页），app 壳不含这段脚本；有活会话的手机直接进 `/`、永远不渲染引导页——只有「刚掉会话、正要重连」那一刻才踩，正好是最需要它工作的时候。
+- **为什么截图是「前两行划掉却没数字、第三行 10 组消息、第四行转圈」**：`runStages()` 是 `Promise.all([stage0(rpc workspace.list),stage1(rpc session.list),stage2(/api/boot)])` 三条并发；两条 rpc 立刻 reject，stage(2) 直连 `/api/boot` 成功、`setStep(3)` 把前三行标完成、`countUp` 写出「10 组消息」；`Promise.all` 在第一个 rejection 上抛 → catch → 旧码 `fail(T.unavailable)`。前两行空计数正是「请求根本没发出去」的指纹。
+- **证据**：Edge headless 用隧道头（`cf-connecting-ip`＋`cf-ray`）＋手机 UA 在本地把整条链路跑通，页面 `client diag` 当场上报 `{"tag":"runStages","detail":"ReferenceError: v is not defined\n at rpc (…/disconnected:40:183)…"}`（`pocket.log` 2026-10-21T04:52:56Z）。
+- **改法**：恢复 `v=>`（两处）。**回归锁**：新增 `test/guided-rpc-formatter.test.js`——把生成的页面脚本（不是源码片段）放进桩 DOM 里真跑 `rpc()`，断言请求真的发出、工作区/会话计数分别落到第 1/2 行（四步页）与第 2/3 行（五步页）、en 档用英文；另有一条静态锁：`countCrawl()` 的每个调用点都必须传函数。
+- **计量账**：只动引导页文档，不进 app 壳，`ASSET_BUDGET_BYTES` 与运行壳 `V=pocket-049bcd0cf21d` 不受影响。
+- **回归**：全量 `node --test` = **1424 tests / 1422 pass / 0 fail / 2 skipped**（2026-10-21 13:0x）。
+
+**引导四步不再一错即死：读失败原地重试，失败后留下能用的重试**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-21 报障：手机停在重连页不动，红字「暂时无法连接桌面端，请确认 Pocket 正在运行。」＋「回电脑旁重新扫码」，而电脑端一切正常）。
+
+- **证据链**：11:28 配对成功、11:28:34 已生成 app 页 boot 载荷（`boot 310ms bytes=866305`）；11:30 截图里第 4 行「正在准备页面」是活动步、只有第 3 行有「10 组消息」计数 ⇒ 阶梯已被 stage(2) 的 `countUp` 推到第 4 行，而 stage(0)/(1) 的 rpc 早已 reject；reject 落进 `submitPin` 的 catch，把标题复位成「输入连接密码」并把**任何**非超时错误映射成 `T.unavailable`。此后页面不再发任何请求（11:47:48 mux 掉线后再无日志），也没有重试入口——人只能回电脑旁。
+- **改法（共享块 `sharedStageScript()` ＋ 两页模板）**：① 新增 `withRetry(work,attempts=2)`：读失败原地重试一次、退避 350ms；`consentGate`/`unauthorized` 不重试（答案不会变）。② `rpc()` 把 401 标成 `e.unauthorized`（原来 401 被当普通 HTTP 错误，统一报成「连不上桌面」）。③ reconnect 页 `runStages()` 包 try/catch：须知跳转直接去 `/consent`；401 清空 PIN 回密码框（新文案 `superseded`）；其余 → 新文案 `stageFailed`「页面没打开成功，请点重试。」＋动态「重试」按钮原地重跑，不再踢回「回电脑旁重新扫码」。`startRetry` 的 catch 补同款动态重试钮（隧道档也有得点了）。
+- **文案纠错**：PIN 页在密码已通过之后失败，仍显示「暂时无法连接桌面端，请先启动 Pocket。」——加 `verified` 标记，改报 `stageFailed`「连接中断，请点连接重试。」。
+- **另有一处会真卡死**：第 5 步收尾等 `requestAnimationFrame` 两帧，后台 WebView 里 rAF 会被浏览器暂停，最后一格可以无限转；两页都改成 rAF＋600ms 定时器二选一。
+- **计量账**：本笔只动两个引导页文档、不进 app 壳，`ASSET_BUDGET_BYTES` 不变，运行壳摘要 `V=pocket-049bcd0cf21d` 不受影响。
+- **回归锁**：`test/pages-panel-ux.test.js` 的「三读同批」断言改为不依赖 `withRetry` 拼写（`(?:withRetry\(\(\)=>)?rpc(...)`），批次形状与单调阶梯判据不变；全量 `node --test` = **1418 tests / 1416 pass / 0 fail / 2 skipped**（2026-10-21 12:2x）。两页内联脚本另做 `new Function()` 解析检查，均 OK。
+
+**贴底重钉链首趟就认出读者已滑走（R4，跳跃残留的最后一根橡皮筋）**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-20 22:43 原话：「刚刚又跳了」）。
+
+- **真机证据**（22:42:34，device r2AhHude1h，壳 pocket-909ab20f393f）：`pt@737157|62|14|32|21 bt@737158|5128|5863|735` 整屏重绘写到底 → 读者上滑 `sc…→4577`（−551px）→ 仅 121ms 后 `ts@737279|5128` 把他**钉回 5128** → 再 123ms 才 `rl@737402` 解除。读者出口（`rl` 门）在链条第二趟才生效，首趟无条件写回盒底。
+- **R1/R2/R3 都守不住这里**：R3 的 `readerAway` 门守的是 `paintMessages` 那一次贴底写本身（bt/bf 分支）；`bt` 写完之后交给 `settleTailStick(box,4)` 的四趟重钉链（对付 content-visibility 估行转真行时 scrollHeight 继续长），链条入口那趟 `pinned` 是 undefined，`if(pinned!==undefined&&…)` 整个跳过——首趟必钉。
+- **改法**（一行，净增 43 B）：`settleTailStick` 入口拿令牌那趟顺手 `if(pinned===undefined)pinned=box.scrollTop`——调用它之前那次贴底写刚把 scrollTop 写成底，此刻值就是合法基准。判据本身不动：内容长高只增 scrollHeight 不动 scrollTop，所以「scrollTop 变小」仍只可能是读者动手；合法重钉场景（进会话/发送后）不受影响，视口变高钳位（dist=0<120）与塌盒（无可滚范围）两条边界照旧。
+- **计量账**：`ASSET_BUDGET_BYTES` 保持 381_950；改后实测 zh 381 836（css 56 093 + js 325 743）/ en 381 756，余量 **114 B**。
+- **回归锁**：`test/pick-toggle-anchor-restore.test.js` 新增「入口即记下 pinned——贴底写后第一趟读者已滑走就不再钉回」＋原四条 tail stick 用例逐条复跑全绿。全量 `node --test --test-concurrency=1 test/*.test.js` = **1375 tests / 1373 pass / 0 fail / 2 skipped**（2026-10-20 23:1x）。
+
+**启动页三步计数改为爬升，不再整块蹦出**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-20 原话：「先显示数字，一个数字过一个数字，哒哒哒的效果」）。
+
+- **范围**：配对页与重连页共用的引导阶梯（`sharedStageScript()`），三处计数——工作区数、会话数、消息组数——由「答案到手就整串写死」改成 0→N 爬升；「已连接」「就绪」这类文字标签仍直写，不动画（`setCount` 保留原语义）。两页各一套阶梯，改在共享块里，一次覆盖两面。
+- **机制**：新增 `countUp(el,target,fmt)`（`COUNT_UP_MS=450`，缓出曲线 `1-(1-p)^3`，`requestAnimationFrame` 逐帧）与 `stepCountEl(i)`（按序号取行内的 `.boot-step-count`）。**发射后不管**——`stageRunner` 不 await 它，动画不会拖住任何一步的推进，也拦不住最后的 `location.replace('/')`。计数元素本就带 `font-variant-numeric:tabular-nums`，滚动时宽度不变、版心不抖。
+- **三条边界**：① 数据没回来前该行**保持空白**，不预填 0——不显示没人量过的数值（选项 B「先填 0」被否，公网慢时停在「0 个工作区」会被读成真的没有）；② 实测值确实是 0 时直接写终值，因为那是真读数不是缺字段；③ `prefers-reduced-motion:reduce` 下直接写终值、不滚。
+- **计量账**：本笔只动两个引导页文档，**不进 app 壳**——`ASSET_BUDGET_BYTES` 保持 376_000，实测壳字节仍为 zh 375 696（css 55 217 + js 320 479）/ en 375 614，与 `aedb4f9` 读数一致。
+- **回归锁**：新增 `test/boot-count-up.test.js` 7 条——把共享块里的器官原样抽出、套桩 DOM 实跑，验证「逐帧推进且末帧等于终值」「reduced-motion 立刻出终值」「0 直写」「行不存在不抛」「setCount 文字不参与动画」「两页各带一份器官」「行模板发出时是空 span 不预填」。全量 `node --test --test-concurrency=1 test/*.test.js` = **1351 tests / 1349 pass / 0 fail / 2 skipped**。
+
+**工作区头徽标口径按真机复验改正**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-20 真机复验两条：①「我刚刚专门挑了一个错误的对话，它报错了，我没读，工作区标题栏上面不显示」②「如果有已完成的消息，标题栏上面还是显示'正在进行中'，这和我的设定就不符」）。
+
+- **用户新口径（m00623，取代同日 m00126②）**：「工作区标题栏的显示规则应该是：只要这个工作区里面有以下内容，都要显示出来：1. 未读的新消息 2. 未读的错误 3. 提问」＋「(a) 提问：理论上讲，提问不分已读未读，只要有提问就都要显示出来。(b) 错误和已完成：肯定是分已读和未读的」。即提问徽标**不设已读门禁**（上一节写的「提问已读即静」被真机判为错），错误与已完成都过未读门禁，三类同时出现时都要画出来。
+- **① 未读错误在 running 行上也出现**：`isQuestionUnread` 改名 `isNoticeUnread`（逻辑一字未改：与 `isSessionUnread` 同构，只差「不按 running 一票否决」），`wsFlagOf` 的 error 分支由 `isSessionUnread` 改走它。根因：报错的那一轮宿主经常仍把行标成 `running:true`（`turn/end` 的 error 不落 `running=false`），而 `isSessionUnread` 首句 `if(!summary||summary.running||summary.blank)return false` 直接否决 ⇒ 徽标消失。running 否决只该管「新完成」提醒（还在忙就别喊完成了），不该管错误。
+- **② 提问不论读过与否都显示**：`wsFlagOf` 的 awaiting 分支去掉未读门禁，只保留 `activeId` 排除（人正在那个会话里回答，徽标不该再喊）。
+- **③ 三类徽标不再被截断**：`WS_FLAGS_MAX` 2→3。cap=2 时一个工作区同时有「未读错误＋提问＋未读新完成」会静默丢掉第三类，与用户「都要显示出来」直接冲突。
+- **未动的**：`taskState` 仍对 error 返回 `'error'`、行的红字形不撤（「不能把错误改成已完成」是行的状态，「不能一直显示错误」是头的提醒，两者分离）；`wsGlyphOf` 的兜底两态、`wsHeadTimeAt` 的头时钟均按上一节，本笔未改。
+- **计量账**：`ASSET_BUDGET_BYTES` 保持 376_000（本笔不动该常量）。本笔后实测壳字节 zh 375 131（css 55 217 + js 319 914）/ en 375 049（css 55 217 + js 319 832），相对「一 Bot 一行」基线（zh 374 315 / en 374 233）净 +816 B，余量 869 B。
+- **回归锁**：`test/workspace-head-notices.test.js` 改写 2 条旧口径用例（rank 那条由 `[error, question]` 改为三类全出；「提问已读即静」那条按 (a) 反转为「读过也显示」并补 (b) 的读后错误仍静）＋新增 1 条「running 行上的未读错误仍出徽标、running 行不算新完成」；`test/pages-scroll-anchors.test.js` 沙箱 `WS_FLAGS_MAX` 同步为 3、抽取名单改 `isNoticeUnread`；`test/subagent-session-dom-assertions.test.js` 抽取名单同步改名。全量 `node --test --test-concurrency=1 test/*.test.js` = **1342 tests / 1340 pass / 0 fail / 2 skipped**（共享工作树含他线在途改动，非净检出）。
+- **已知边界（未修）**：错误标记由 `lib/session-stream.js` 的进程内 store 累积（`sessionErrorStores` 是 WeakMap，容量 16），**宿主重启后、重启前发生的错误无法回溯显示**；某会话自重启起没被 follow 流订阅过就不会有 `lastError`，头也不出错误徽标。
+
+**工作区头三处显示裁定**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-20 三问：①「如果我置顶了比如前天的会话，它就会只显示前天的时间」②「已经阅读过的错误会话，不能在会话里面把错误改成已完成……置顶里面应该关注的是没有看的提问、没有看的错误、没有阅读的新回答」③「最终的显示状态应该只有两种」）。
+- **① 置顶不拖回工作区头时钟**：新增 `wsHeadTimeAt`，头时钟取全部行中最新时间戳而非置顶行，置顶只影响阅读顺序、不冒充「最后说话时间」，无时钟时不输出空 span。
+- **② 提问已读即静**：新增 `isQuestionUnread`（与 `isSessionUnread` 同构但去掉 running/blank 早退），awaiting 提问读过即不再进工作区头徽标；error 仍由 `isSessionUnread` 门控，状态与徽标分离。**（此条口径已被上一节推翻：2026-10-20 真机复验裁定提问不分已读未读，该函数改名为 `isNoticeUnread` 且 awaiting 分支去掉门禁；原文保留仅为记录演变。）**
+- **③ 工作区头仅两态**：`wsGlyphOf` 收敛混态回落，只剩「正在进行的对话」与「整个工作区没有正在进行的对话」两态；空白工作区保留现状空白虚线，不算完成。
+- **计量账**：`ASSET_BUDGET_BYTES` 367_000→371_000，HEAD+本笔实测 zh 367 944（css 55 217 + js 312 727）/ en 367 862，余量 ~3.1 KB。
+- **回归锁**：`test/workspace-head-notices.test.js` 新增 5 条（本批 74/74），净检出全量 `node --test --test-concurrency=1 test/*.test.js` = 1324 pass / 0 fail / 4 skipped。
+
+**乐观回声按「形状指纹」退休**（2026-10-20。用户报障原话：「图片发送以后，好像会有那种图片消失又重复出现、消失又出现的 bug」，当日两次真机连发两张图 165 KB / 319 KB 复现）。
+
+- **动机**：乐观回显的退休判据原先只比文字 `durableUserPromptText(message)!==item.text`。纯图消息的文字是空串，所以「两条都只带一张图的发送」在判据眼里是同一句话——谁的 durable 副本先落地，就把**另一条还没到的回声**一起退掉，屏幕上那次发送消失；等它自己的副本落地再画出来。附件的 `attachmentId` 不能拿来当判据：宿主回显时会把图片重写一份（规范化副本、新 id），两边永远对不上。
+- **判据**：新增 `promptShape(message)`，把「一条发送」归约成 `图片数|文件数|文字长度|文字`。文字取第一个 `text` 块（回声自身没有 blocks，回落到 `message.text`）；图片/文件数先数 blocks，再把 `message.chips`（`'1 图片'` / `'1 Images'` / `'1 文件'` / `'1 File'`）里的数字按「含『图』或英文 image」归到图片、其余归到文件累加。`messagesWithOptimistic` 的淘汰判据由文字相等改成指纹相等，水位推进（`item.afterSeq` 每帧上移到已见过的最新同形副本）**原样保留**——去掉它会让 matches≥2 的回声永久不退休、变成卡死的重复气泡（`test/transcript-order.test.js` 的 M17 用例正是钉这一点的）。
+- **本笔不声称修好闪烁**：上面这条只消灭「相似发送互相误退休」这一类。真机上「图片消失又出现」的机制另有出处且本笔未动——`paintMessages` 每帧 `box.innerHTML` 整段重建会话 DOM（任何非 `assistant/chunk` 流事件都触发全量重画，见 `queueStreamRender(…, type!=='assistant/chunk')`），而 `/api/session-attachment` 带 `cache-control: private, no-store`，每个 `<img>` 重建后都要重新下载/解码。手机端这条待另修。
+- **计量账**：预算不动（`ASSET_BUDGET_BYTES` 保持 371_000）。相对 HEAD 净增 zh +2 298 B / en +2 298 B，实测壳字节 zh 370 242（css 55 217 + js 315 025）/ en 370 160（css 55 217 + js 314 943），余量 zh 758 B / en 840 B。
+- **回归锁**：新增 `test/pages-optimistic-retirement.test.js` 6 条（不同图数不误退休 / 无附件不误退休 / 图片副本不退休纯文件回声 / 自己的副本仍退休（防修过度）/ 多帧渲染不翻转 / 同形两回声仍会被第一份副本一起退休——**已知形状盲区，明文钉住**）；`test/transcript-order.test.js` 沙箱补注入 `promptShape` 并把 M17 静态锁改钉规则而非稠密表达式；`test/pages-render-fixes.test.js` BUG3 沙箱同步补注入。红前置自证：把 `lib/pages.js` 还原成 HEAD、只留测试，`test/pages-optimistic-retirement.test.js` = **6 tests / 2 pass / 4 fail**（帧序列那条 `['kept','retired','retired','retired']` ≠ `['kept','kept','retired','retired']`）。净检出全量 `node --test --test-concurrency=1 test/*.test.js` = **1334 tests / 1332 pass / 0 fail / 2 skipped**。
+
+**附件响应改为可缓存（闪烁的另一半）**（⏳ 待重启生效：`lib/bridge.js` 属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。承接上一节「本笔不声称修好闪烁」里点名的真机机制——那一节修的是「相似发送互相误退休」，这一节修的是「每帧重建把图片重新下载一遍」。2026-10-20 用户报「图片发送以后，图片消失又重复出现」）。
+
+- **机制**：`paintMessages` 每帧用 `box.innerHTML` 整段重建会话，任何非 `assistant/chunk` 的流事件（tool/call、tool/result、step/\*、job/\*）都触发全量重画，于是每个 `<img>` 都是新元素；而 `/api/session-attachment` 原先带 `cache-control: private, no-store`，新元素没有可复用的字节，手机就在每个非 chunk 事件后把 165 KB / 319 KB 的图重新下载一遍再解码——屏幕上正是「消失一下又出现」。
+- **修法**：附件响应头 `private, no-store` → **`private, max-age=86400`**。attachmentId 是内容寻址的，宿主该行在会话期内字节不变，答案可安全从浏览器缓存重放；`private` 保证字节不落共享缓存。选一天窗口与上方静态资源分支（`public, max-age=86400`）同档。**不改 service worker**：壳的 `BYPASS` 正则（`lib/pages.js` 内 `/^\/(api|…)/`）已把 `/api` 整段排除在 SW 拦截外，`/api/session-attachment` 从来只走浏览器 HTTP 缓存，所以改响应头正是对的杠杆。
+- **未动的两处 no-store**：同文件 `session-file`、`session-export` 两条路由的 `private, no-store` 保持原样——它们不是会话内反复重画的 `<img>` 源，改它们没有这块收益，且导出/下载本就不该缓存。
+- **计量账**：`lib/bridge.js` 不在壳内，壳字节与 `ASSET_BUDGET_BYTES` 均不动。
+- **回归锁**：`test/plus-panel.test.js` 附件路由断言同步为 `private, max-age=86400`（同文件 export 路由的 no-store 断言不动）。`node --test test/plus-panel.test.js` = **19 tests / 19 pass / 0 fail**。
+- **仍存的另一半**：本节让重画的 `<img>` 命中浏览器缓存、不再重下载，但「每帧 `innerHTML` 整段重建」本身没动——彻底不重建 DOM（图片元素增量保留）是更大的改动，留待后续。真机是否仍闪，须重启宿主＋手机完全关闭重开后实测。
+
+## 0.4.54 — 2026-10-22
+
+**回合用时按宿主跨度重锚、排队消息按到达点内联；静止阅读不再抖动；过程行重排与计数按真数**（⏳ 待重启生效：`lib/pages.js` 与 `lib/bridge.js` 都属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值）。自 0.4.53 之后并入工作树的对外变化，逐条见上方「未发布（工作树）」节的四条小标题；此处只记版本级契约：
+
+- **计时契约**：回合用时只读**宿主两个时间戳之差**得到的跨度，再用本机时钟从那一刻续走；任何实现都不得出现「宿主绝对时间 − 手机墙钟」的减法。
+- **插话契约**：steer 出来的排队消息在回合内部按 seq 内联，并在插入处切断过程卡；它不再参与跨回合顶层气泡的时间戳重排。
+- **跟随契约**：重新跟随要几乎贴到底才认账，带沿不得来回穿越；静止阅读时不产生纵向抖动。
+- **计数契约**：阶梯计数按真实消息数一步一交，同一 Bot 的多个会话在主页折成最新一行。
+- **回归锁**：`test/pages-steer-timeline.test.js`、`test/tail-screen-fit.test.js`、`test/boot-count-up.test.js`、`test/queue-steer-refresh-20261019.test.js` 等新文件随本节首次对外；全量 `node --test --test-concurrency=1 test/*.test.js` = **1440 tests / 1436 pass / 0 fail / 4 skipped**（2 条 skip 为钉在开发仓 sha 上的红先用例，公开发布树无该 sha，按 `test/helpers/pre-fix-baseline.mjs` 的口径显式跳过而非静默通过）。
+- **计量账**：`ASSET_BUDGET_BYTES` 保持 **391 500** 不动。实测壳字节 zh 389 071（css 53 502 + js 335 569）/ en 388 962（css 53 502 + js 335 460），余量 2 429 B（zh）/ 2 538 B（en）。
+
+## 0.4.53 — 2026-10-19
+
+**上传有转圈与进度、附件占位改胶囊、桥侧开始记上传耗时**（⏳ 待重启生效：`lib/pages.js` 与 `lib/bridge.js` 都属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值。用户 2026-10-19 真机上传 1.17 MB PDF 后三问：①「上传中我觉得要有一个圆圈或者什么上传进度，不能这种硬卡在这儿。我不知道你是卡死了，还是确实正在上传」②「发出去以后……会有'图片 1'、'文件 1'之类的占位，为什么会有这个东西发出去？」③「这个上传进度很慢啊，是 Cloudflare 的原因还是别的什么」）。
+
+- **① 上传中不再是一张静止的卡**：draft 卡在 `uploading` 态由「半透明遮罩＋静止文字『上传中…』」改为转圈（`.draft-ring`）＋百分比＋`已传 / 总量` 两行，底部蓝条按 `--p` 填充；`ready` 后右上角补一枚绿勾（`.draft-done`），不再需要靠卡片「不变」来推断成功。百分比的真实来源是 `xhr.upload.onprogress`——`fetch()` 没有上传进度事件，故新增 `rpcUpload()` 走 XHR，**只有 `file.upload` 走它，其余调用仍走原 `rpc()`**。进度用**原地补丁**写进已在屏的那张卡而不是重建 `draftStrip`：每 tick 重建 DOM 会让转圈动画归零、卡片每秒被丢弃数十次，那正是这个功能要消灭的抖动。
+- **① 慢 ≠ 卡死：45 秒静默看门狗**：`rpcUpload` 内 5 s 一次巡检，`Date.now()-lastByteAt >= 45 000` 才 abort。判据是**静默时长而非总时长**——一个 20 MB 文件在弱网慢慢爬仍在走，掐掉它恰好制造了用户分不清的那次「卡死」。硬超时 `RPC_SLOW_TIMEOUT_MS*4`（12 min）只兜病理情况。上传体发完后等回执那段不再有任何进度事件，`xhr.upload.onload` 重置静默时钟，让回执独享一个完整窗口。
+- **② 「1 文件」占位不是发出去的**：它是乐观行把计数串当**第二段纯文本**渲染出来的（发送内容 `content` 里从来没有它，宿主侧也没有）。现在 `draftSummary()` 返回数组而非 join 好的串，乐观行带 `attachment-summary` 块，`renderBlock` 把每一条渲染成胶囊（`.draft-chip`），与已落定消息里的附件样式一致。顺带删掉已无人使用的 `draftJoin` 标签，消掉一处「英文用户看到全角逗号」的本地化泄漏。
+- **③ 慢在哪一段，桥侧开始记账**：`/api/rpc` 对成功的 `file.upload` 落一条 `rpc upload ok trace=… device=… bytes=… arrival=…ms host=…ms`——`arrival` 是手机字节穿过隧道进桥，`host` 是桥交宿主并拿回执。在此之前，成功上传**在日志上是完全静默的**（只有失败才有行），所以「是 Cloudflare 还是别的」无法从盘上取证。
+- **计量账**：`ASSET_BUDGET_BYTES` 358_000 → **365_000**。实测壳字节 zh 363 564（css 55 010 + js 308 554）/ en 363 482（css 55 010 + js 308 472），相对上一条基线（zh 357 070 / en 356 987）净 +6 494 B（css +1 506 / js +4 988），余量约 1 436 B。（0.4.53 收尾时 HEAD 又并入「提问弹窗两钮／上滑不拽底」一笔，实测量随之变为 zh 363 951 / en 363 869，净 +6 881 B，余量 1 049 B；本条数字为上传批落盘时的读数。）
+- **回归锁**：`test/mobile-assets.test.js` AC-UI8 守卫按新形态重写（拦「英文用户看到中文标点」的用意不变，改为断言 `attachment-summary` 分支、chips 逐个成 span、且源码里没有 `join('，')`）。全量 **1314 tests / 1312 pass / 0 fail / 2 skipped**。
+
+## 0.4.52 — 2026-10-19
+
+**刷新按钮在「手机已连上」时不再静默失效**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面。2026-10-19 重启后实测发现 0.4.51 的强制重建仍被一层页面门拦住：`switchMode` 首句 `if(phoneConnected||modeSwitching)return`——手机在线时点「刷新」静默无操作，桥侧 `force` 日志（`tunnel rebuilt on desktop refresh`）命中为 0，即原始报障「点刷新链接二维码都不刷新」在连接态下的完整成因。桥侧 force 重建本就允许把在线手机 park 掉而非拒绝（同隧道意外死亡处置），页面这一层与服务端口径不符，按「服务端已允许的，页面不得自行再加一层」删去）。
+
+- **force 豁免连接态早退**：`switchMode(enableTunnel,force)` 首句改为 `if(modeSwitching||(!force&&phoneConnected))return`——普通切模式在连接态仍照旧拒绝（2026-10-12 裁定的风险口径不变），但桌面刷新按钮的强制重建放行；桥侧 park 手机会话（不登出），手机拿新链接重配即可。
+- **回归锁**：`test/desktop-connected-unlocked.test.js` D 例的源码锚点同步为新守卫；`test/queue-steer-refresh-20261019.test.js` ① 例加两条断言（普通切换仍被连接态拦、旧守卫写法不残留）。全量 **1314 tests / 1312 pass / 0 fail / 2 skipped**。
+
+## 0.4.51 — 2026-10-19
+
+**刷新按钮＝强制重建公网隧道 ＋ 排队消息即时上屏与按写入时间复位落位**（⏳ 待重启生效：`lib/bridge.js` 与 `lib/pages.js` 都属宿主装载面，手机要完全关闭重开才拿得到新壳；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算的 zh `pocket-bab0c067b098` / en `pocket-1f45ea709999`。用户 2026-10-19 三项报障，裁定「改成强制重建」「修复」「刚刚给你发的图片就是证据」）。
+
+- **刷新按钮恢复「重建临时通道」语义**：桌面配对页的刷新按钮自初版（`0435cbb`）起只做两件事——隧道没起就开隧道，隧道已起就只轮换配对 token 并重载页面（`c880f70` 2026-10-01 的改动，动因是 LAN 语境下「TTL 内重载画出一模一样的码」）。但公网模式下配对地址由隧道实例派生，轮换 token 动不了它 ⇒ 按钮在用户眼里完全失效（用户原话：「之前的刷新按钮，意思就是重新手动重建一次临时的通道，二维码和链接都会刷新」）。现在：`bridge.toggleTunnel(enable, force)` 收到 `force` 且隧道活着时，先把在线手机会话 park（与隧道意外死亡同一处置：不登出、下次请求回配对门）、停掉旧隧道、清空隧道态，再走一次全新的 launch ⇒ 新域名、新二维码、新链接；`POST /desktop/tunnel/status` 的兄弟路由 `/desktop/tunnel/toggle` 接受 `{force:true}`（只认严格 `true`），桌面页 `switchMode(enableTunnel,force)` 透传。切模式 tab 仍不带 force，不会被误判成要换域名；LAN 档没有隧道可重建，刷新保持「轮换 token + 重载」。
+- **排队消息点「立刻发送」即时上屏**：此前 `queueAction` 成功后只重拉 projections（队列坞与 GoalBar），正文要等下一帧 events——公网隧道模式没有 SSE，事件轮询 1.5 s 起步、无新帧时指数退避到 6 s，再叠公网往返，即用户说的「显示出来的速度非常之慢」。现在成功后立刻踢一次轮询并清掉历史去重键、强制拉一次会话正文，气泡在同一个动作里上屏。
+- **排队消息不再落到会话最底部**：宿主把 steer 出来的消息 splice 进正在跑的回合，事件 seq 是最新的，而会话渲染严格按 seq 排序 ⇒ 排队期间写的消息会被画在「当时正在流式的答复」下方（用户截图：19:02 的气泡落在 19:04 的答复底下）。seq 是宿主的排序口径、本层不能重写，但气泡自带写入时刻：新增按时间戳复位的重排——只有当某条用户气泡的时刻早于它上方相邻行时才上移，没有时间戳的行（过程卡、活回合）当墙，非用户行一条都不动。
+- **计量账**：`ASSET_BUDGET_BYTES` 356_000 → **358_000**。实测壳字节 zh 357 070（css 53 504 + js 303 566）/ en 356 987，相对上一条基线（zh 354 860 / en 354 777）净 +2 210 B（css −17 / js +2 227），余量约 930 B。
+- **回归锁**：新增 `test/queue-steer-refresh-20261019.test.js` 8 例（force 重建换新 URL 与新二维码、plain enable 仍复用、强制重建后手机是 park 而非登出、refreshQr/switchMode 源码契约、steer 后即时踢轮询与拉正文、四种落位场景）。白盒沙箱抽取名单补 `orderUserBubblesByTime`（5 个测试文件）；`goal-queue-dock` 的队列动作沙箱补 `connectionMode`/`scheduleEventPoll`/`loadHistory` 并断言踢动序列。全量 **1314 tests / 1312 pass / 0 fail / 2 skipped**。
 
 ## 0.4.50 — 2026-10-19
 
@@ -1671,7 +1873,7 @@ localStorage——quick tunnel 每换一个新域名就是新 origin，本地已
 ## 0.4.0 — 2026-10-08
 
 本版为「九卡特性批」：九张 change（两轨并行）+ 独立审查（渲染层 P1 修复 + 桥安全 PASS-with-notes 两条 P3 顺手修）。
-逐卡账在 `F:\defws\.agents\flow\changes\2026-10-07-*`（各卡 planning-context + HANDOFF）。
+逐卡账在 `F:\work\.agents\flow\changes\2026-10-07-*`（各卡 planning-context + HANDOFF）。
 
 ### 新增（用户可见）
 

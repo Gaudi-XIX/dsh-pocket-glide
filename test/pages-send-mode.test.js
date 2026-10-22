@@ -50,22 +50,22 @@ test('the stream asks for what only THIS session has already shown', () => {
   assert.ok(html.includes('const sinceSeq=streamWatermark(sessionId)'), 'and it comes from the per-session map')
 })
 
-test('mobile page folds one whole turn into a single turn-process container', () => {
+test('mobile page paints one flat process line per tool run, with nothing to open', () => {
   const html = renderMobilePage({ locale: 'zh' })
-  // Closed AND live turns render the same <details class="turn-process"> fold
-  // (0.4.40: the live phase speaks the desktop's shape — one container from the
-  // moment it appears; the flat .turn-process-live stack is retired).
+  // 2026-10-21 (reader report): the outer turn-process fold is gone. A run of
+  // tool calls is now a single non-clickable line that says what happened —
+  // "已读取文件 3 次，正在修改文件" — and there is no second level to open at all.
   assert.ok(html.includes('turnProcess:true'), 'closed and live process messages must be flagged turnProcess')
-  // Anchor rewritten by 2026-10-07-feat-pocket-smart-scroll-anchors (W3-卡6): the
-  // details class now concatenates an optional msg-hist virtualization mark, so the
-  // exact literal `class="turn-process"` no longer occurs in the source. The
-  // intent — a closed turn renders a foldable details prefixed turn-process — is
-  // kept by matching the emission prefix instead.
-  assert.ok(html.includes('<details class="turn-process'), 'closed turn renders a foldable details')
-  assert.ok(html.includes('data-live="1" data-state="running"'), 'live turn renders the same fold, marked live with the running state')
-  assert.ok(!html.includes('turn-process-live'), 'the flat live stack is retired')
-  // Only verbose opens the fold.
-  assert.ok(html.includes("transcriptView==='verbose'"), 'fold opens only in verbose view')
+  assert.ok(!html.includes('<details class="turn-process'), 'no fold container is emitted any more')
+  assert.ok(html.includes('class="process-line"'), 'the process line is a plain div')
+  assert.ok(!html.includes('data-open-key="turn:'), 'and it is not a disclosure: nothing to tap')
+  assert.ok(html.includes("' data-live=\"1\"'"), 'a live run is marked so the reader sees it moving')
+  assert.ok(!html.includes('turn-process-live'), 'the flat live stack stays retired')
+  // The desktop four-step display preference is no longer a render input: the
+  // phone has exactly one shape (user 2026-10-21: the inherited view level is to
+  // be collapsed away, one fixed form).
+  assert.ok(!html.includes('transcriptView'), 'the inheritable view mode is gone from the page script')
+  assert.ok(!html.includes('tool-raw'), 'the tool detail organs are gone with it')
 })
 
 test('fold headers drive the flip by hand, not through the native webview toggle', () => {

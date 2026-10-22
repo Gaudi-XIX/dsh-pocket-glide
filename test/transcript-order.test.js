@@ -39,13 +39,14 @@ function chunkEvent(seq, turn, step, text) {
 
 function buildSandbox() {
   const { js } = mobilePageAssets({ locale: 'zh' })
-  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'stepKey', 'windowEvents', 'visibleMessages', 'durableUserPromptText', 'messagesWithOptimistic']
+  const names = ['eventSeq', 'mergeEntries', 'contentBlocks', 'turnKeyOf', 'stepKey', 'windowEvents', 'visibleMessages', 'orderUserBubblesByTime', 'durableUserPromptText', 'promptShape', 'messagesWithOptimistic']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
     `let olderEvents=[],streamEvents=[],lastDurableMessages=[],optimisticPrompts=[];
      const processBlocks=()=>[];
      const L={};
      ${body}
+     let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null;
      return {
        mergeEntries, visibleMessages, messagesWithOptimistic, windowEvents,
        setStream(value){streamEvents=value},
@@ -177,7 +178,10 @@ test('the transcript offers a tap target for older messages', () => {
   // literal `box.innerHTML=olderButtonHtml()+messages.map(renderMessage).join('')+status`
   // (change 2026-10-02-fix-pocket-audit-remediation, tasks WP-A1 A-7②) — the older
   // row still leads and the messages still follow it.
-  assert.ok(html.includes("box.innerHTML=olderButtonHtml()+(messages.length?messages.map(renderMessage).join(''):transcriptWaitHtml(box))+status"))
+  // 2026-10-21 earlier-parts: the merged earlier conversation feed (bot.earlier)
+  // prepends before the older row — an additive axis that leaves the older-pull
+  // join untouched.
+  assert.ok(html.includes("box.innerHTML=earlierPartsHtml()+olderButtonHtml()+(messages.length?messages.map(renderMessage).join(''):transcriptWaitHtml(box))+status"))
   assert.ok(html.includes('function renderOlderButton()'), 'the row must be re-synced without a full repaint')
 })
 
@@ -216,7 +220,7 @@ test('a blank skeleton is retried instead of being left on screen', () => {
   // `if(!$('messages').querySelector('.loading'))return`
   // (change 2026-10-02-fix-pocket-audit-remediation); a session the desktop
   // reports as blank needs no content, so it is not retried into a false failure.
-  assert.ok(js.includes("if($('messages').querySelector('.message')||sessionBlank)return"), 'the watchdog stops once content paints')
+  assert.ok(js.includes("if($('messages').querySelector('.message:not(.earlier-msg)')||sessionBlank)return"), 'the watchdog stops once content paints')
   assert.ok(!js.includes("if(!$('messages').querySelector('.loading'))return"), 'the skeleton is no longer the stop signal')
   assert.ok(js.includes('if(attempt>=3){showTranscriptRetry();return}'), 'three silent retries end in a tappable retry')
   assert.ok(js.includes('armSkeletonWatchdog(id)'), 'openSession must arm it')
@@ -492,13 +496,18 @@ function buildRunningSandbox() {
   assert(bound > 0, 'the page declares its fallback bound')
   const idle = Number((js.match(/TURN_RUNNING_IDLE_MAX_MS=(\d+)/) || [])[1])
   assert(idle > 0, 'the page declares the idle bound the run state retires on')
-  const names = ['eventSeq', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning', 'clearTurnRunningWatch', 'expireTurnRunning', 'confirmTurnRunning', 'finishTurnConfirm', 'watchTurnRunning']
+  const names = ['eventSeq', 'eventTimeOf', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning', 'clearTurnRunningWatch', 'expireTurnRunning', 'confirmTurnRunning', 'finishTurnConfirm', 'watchTurnRunning']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(`
     const AWAITING_TURN_MAX_MS=${bound}
     const TURN_RUNNING_IDLE_MAX_MS=${idle},idle=TURN_RUNNING_IDLE_MAX_MS
     let awaitingTurnSeq=null,awaitingTurnTimer=null,agentRunning=false,lastHistoryKey='',activeSession='s1',turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1,turnRunningTimer=null,turnRunningConfirming=false,pendingQuestion=null
     let hostRows=[],rpcRejects=false
+    // The turn clock the run-state functions now write to: the elapsed stamps and
+    // the retry counter live in page globals, so the sandbox hands them a home.
+    let stopPending=false,turnElapsedAt=0,turnElapsedHostStart=0,turnElapsedTurn=null,turnRetry=null
+    const turnElapsedByTurn=new Map(),turnRetryMax=new Map()
+    const stopTurnStatusTimer=()=>{}
     const calls=[]
     const setTimeout=(fn,ms)=>{calls.push(['timeout',ms]);return 1}
     const clearTimeout=handle=>{calls.push(['clear',handle])}
@@ -517,6 +526,7 @@ function buildRunningSandbox() {
       setHostError(value){rpcRejects=value},
       idle,
       state:()=>({awaitingTurnSeq,awaitingTurnTimer,agentRunning,lastHistoryKey,turnRunningSeq,turnRunningOpen,turnRunningSeenSeq,turnRunningTimer,turnRunningConfirming,pendingQuestion}),
+      clock:()=>({turnElapsedAt,turnElapsedTurn,turnRetry}),
       calls,
     }
   `)()
@@ -526,7 +536,13 @@ test('M6 the wait is judged on the session log, never on two clocks', () => {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const slice = betweenA3('function updateRunning(events)', 'function todoProgress(', js)
   assert.ok(slice.includes('eventSeq(entry)>awaitingTurnSeq'), 'the judgement is a seq comparison')
-  assert.ok(!slice.includes('event.time'), 'no host timestamp is read here at all')
+  // 2026-10-22: the elapsed clock anchors on the span between two host records
+  // (turn start -> newest one in hand) and spends it on the phone's own clock, so a
+  // rebuilt page no longer restarts a running turn at 1s. Only a span crosses over;
+  // no absolute host stamp is ever subtracted from Date.now() — that comparison is
+  // what left the status pinned when the two machines disagreed.
+  assert.ok(!/Date\.now\(\)\s*-\s*eventTimeOf/.test(slice), 'no absolute host stamp meets the phone clock')
+  assert.ok(slice.includes('hostLatest-turnElapsedHostStart'), 'the clock is a host span, spent locally')
   assert.ok(!js.includes('awaitingTurnStartedAt'), 'the wall-clock slot is gone from the page')
   assert.ok(!js.includes('Date.now()-1000'), 'and so is the expression that armed it')
   const send = betweenA3('async function send()', 'function formatBytes(n)', js)
@@ -642,6 +658,25 @@ test('WD1 an idle log consults the host, and only a host that says "not running"
   assert.ok(sandbox.calls.some((call) => call[0] === 'status'), 'the status node comes off screen')
   assert.ok(sandbox.calls.some((call) => call[0] === 'prompt'), 'and the send/cancel pair is put back')
   assert.ok(sandbox.calls.some((call) => call[0] === 'poll'), 'the poll is re-armed at the idle rate')
+})
+
+test('M6c a steer that joins an open turn keeps the run and the elapsed clock', () => {
+  // 2026-10-22: the reader typed into a turn that was already running three times in
+  // one turn (session-7ad97a26 turn 6). Each steer arms this watchdog, no new
+  // turn/start ever arrives, so it expired 9s later on a turn that was still going —
+  // the wipe restarted the elapsed counter (1m04s upstairs, then 23s downstairs) and
+  // dropped the stop button. A steer is not a dead turn.
+  const sandbox = buildRunningSandbox()
+  sandbox.update([{ event: { seq: 10, time: 1, type: 'turn/start', data: { turn: 6 } } }])
+  assert.equal(sandbox.state().turnRunningOpen, true, 'the turn is open')
+  sandbox.arm(11)
+  const before = sandbox.clock().turnElapsedAt
+  assert.ok(before > 0, 'the clock started with the turn')
+  sandbox.expire()
+  assert.equal(sandbox.state().awaitingTurnSeq, null, 'the steer wait is still retired')
+  assert.equal(sandbox.state().turnRunningOpen, true, 'the turn it joined is untouched')
+  assert.equal(sandbox.state().agentRunning, true, 'so the status row stays on screen')
+  assert.equal(sandbox.clock().turnElapsedAt, before, 'and the elapsed clock is never restarted by a steer')
 })
 
 test('WD1b the host still running keeps the turn open — the stop button survives a quiet minute', async () => {
@@ -858,8 +893,14 @@ test('M17 the send records what retirement needs', () => {
   // by the closing brace — otherwise every new field turns this red.
   assert.ok(send.includes('sameTextAtSend,afterSeq'), 'and travels with the echo')
   const echo = betweenA3('function messagesWithOptimistic(durable)', 'function latestEventSeq()', js)
-  assert.ok(echo.includes('return!(matches===1&&(floor>=0||item.sameTextAtSend===0))'), 'retirement is the narrow rule, not the first match')
-  assert.ok(echo.includes('const floor=item.afterSeq'), 'the gate reads the watermark as it was before this paint')
+  // 2026-10-20 shape-aware retirement: the gate now carries the candidate count
+  // AND the shape fingerprint, and the watermark it compares against is read from
+  // the item before this paint moves it up. Pin the *rule* (narrow single
+  // candidate, shape-aware, watermark read before it advances) rather than the
+  // old dense expression, or every refactor of the predicate turns this red.
+  assert.ok(echo.includes('matches===1&&(item.afterSeq>=0||item.sameTextAtSend===0)'), 'retirement is the narrow rule, not the first match')
+  assert.ok(echo.includes('promptShape(item)'), 'and it only retires a send of the same shape')
+  assert.ok(echo.includes('if(seq>(item.afterSeq??-1))matches+=1'), 'the gate reads the watermark as it was before this paint')
   assert.ok(echo.includes('item.afterSeq=newest'), 'and the watermark then moves up to what the phone has seen')
   assert.ok(!echo.includes('!durable.some('), 'and the "any match wins" filter is gone')
 })

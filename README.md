@@ -86,7 +86,7 @@ Pocket 的选择是做明确的减法：桌面端负责完整的代码生产与�
 * **宿主依赖**：DeepSeek Harness `v0.2.0-rc.1` 及以上，Node.js `^22.19.0 || >=24.0.0`；
 * **架构形态**：宿主进程内加载（In-Process Cordis Plugin），不是独立进程，随 DSH 启动而起、随退出而止，无独立后台常驻守护进程；
 * **改动生效**：改 `lib/**` 或新增 bundle 必须**重启 DeepSeek Harness**（junction 是活的，插件随宿主启动装载）；手机端还要**完全关闭重开**页面才能拿到新壳，下拉刷新拿到的仍是旧壳；
-* **架构细则**：形态、桥的宿主内生命周期、目录与关键常量见 [`docs/SPEC-ARCHITECTURE.md`](docs/SPEC-ARCHITECTURE.md)；
+* **架构细则**：形态、桥的宿主内生命周期、目录与关键常量见仓库内 `docs/SPEC-ARCHITECTURE.md`（开发树；本仓公开副本不带 `docs/`，需要时可向维护者索取）；
 * **网络端口**：默认监听 `0.0.0.0:43127`（占用自动顺延至 `43128`，支持通过 `DSH_MOBILE_PORT` 环境变量显式指定）；
 * **外网访问**：内置出站型 Cloudflare Quick Tunnel，无需公网 IP 与路由器端口映射。
 

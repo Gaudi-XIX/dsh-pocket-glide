@@ -33,10 +33,11 @@ function extractFunction(source, name) {
 
 function buildSandbox() {
   const { js } = mobilePageAssets({ locale: 'zh' })
-  const names = ['eventSeq', 'contentBlocks', 'stepKey', 'visibleMessages']
+  const names = ['eventSeq', 'contentBlocks', 'turnKeyOf', 'stepKey', 'visibleMessages', 'orderUserBubblesByTime']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(
     `${body}
+     let turnElapsedByTurn=new Map(),turnRetryMax=new Map(),turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null;
      return { visibleMessages }`,
   )()
 }
@@ -91,6 +92,29 @@ test('INTERLEAVE-1 segments alternate with replies in arrival order', () => {
     ['user', 'process#0', 'reply:第一步完成', 'process#1', 'reply:第二步也完成'],
     'each reply cuts the process group; the next tool call opens a new segment',
   )
+})
+
+// 2026-10-22 (m01925): the reader drew the stack as
+//   干了啥 / 思考 / 回复 / 干了啥 / 思考 / 回复 ...
+// so a process group owns exactly the tool calls of its own segment — the
+// segment boundary is what breaks the line, nothing merges across a reply.
+test('SEGMENT-1 each process segment owns only the tools of its own run', () => {
+  const sandbox = buildSandbox()
+  const out = sandbox.visibleMessages([
+    userEvent(1, '跑两步'),
+    toolCall(2, 1, 1, 'c1', 'read_file'),
+    toolResult(3, 1, 1, 'c1'),
+    textChunk(4, 1, 1, '第一步完成'),
+    toolCall(5, 1, 2, 'c2', 'edit_file'),
+    toolResult(6, 1, 2, 'c2'),
+    textChunk(7, 1, 2, '第二步也完成'),
+    turnEnd(8, 1),
+  ])
+  const groups = out.filter((message) => message.turnProcess)
+  assert.equal(groups.length, 2, 'one group per run of tool work')
+  const names = groups.map((message) => message.blocks.filter((block) => block.kind === 'tool').map((block) => block.name))
+  assert.deepEqual(names, [['read_file'], ['edit_file']], 'no tool crosses into a later segment')
+  assert.equal(groups.some((message) => 'ledger' in message), false, 'there is no turn-wide ledger behind the grouping')
 })
 
 test('INTERLEAVE-2 a text block inside a tool step still cuts before the next tool', () => {
@@ -274,4 +298,72 @@ test('MERGE-4 a tool that follows its own narration still opens the next segment
     ['user', 'reply:想一想|我这就去查', 'process#0', 'reply:又一想|查到了'],
     'thought+narration in one message, then the tool segment, then the next merged reply',
   )
+})
+
+// ---------------------------------------------------------------------------
+// 2026-10-22 (real session session-7ad97a26 turn 6, seq 5268→6300): the reader typed
+// three times into a turn that was already running. A steer joins the open turn, so
+// the host sends NO new turn/start and stamps the bubble with the newest seq — and
+// the clock-less process card between it and the previous bubble used to be
+// transparent to the ordering pass, which hoisted the bubble above the card it had
+// just steered ("把我后面补充的消息顶到了思考条和工具条之上").
+// ---------------------------------------------------------------------------
+
+const userAt = (seq, time, text) => ({
+  event: { seq, time, type: 'user/message', data: { message: { source: { kind: 'user' }, content: [{ type: 'text', text }] } } },
+})
+
+test('STEER-1 a message typed into a running turn stays under the process card', () => {
+  // 2026-10-22 second round: the bubble is now spliced into the turn where it arrived
+  // instead of being relocated over the card, so the run it interrupted ends above it.
+  const sandbox = buildSandbox()
+  const out = sandbox.visibleMessages([
+    userAt(1, 1000, '开跑'),
+    { event: { seq: 2, time: 1000, type: 'turn/start', data: { turn: 1 } } },
+    toolCall(3, 1, 1, 'c1', 'read_file'),
+    toolResult(4, 1, 1, 'c1'),
+    userAt(5, 9000, '途中插话'),
+  ])
+  assert.deepEqual(shape(out), ['user', 'process#0', 'user'], 'the steered bubble lands below the run it steered into, never above it')
+  assert.equal(out[2]._inTurn, true, 'and it is marked as belonging to the open turn, so no later relocation touches it')
+})
+
+test('STEER-1b the bubble never wedges inside the unit it steered into', () => {
+  // Same shape, only the clocks changed: the bubble now predates the answer that was
+  // already on screen. It may move above that answer — the whole 2026-10-19 contract
+  // — but it may not be dropped between the answer and the run it belongs to.
+  const sandbox = buildSandbox()
+  const out = sandbox.visibleMessages([
+    userAt(1, 1000, '开跑'),
+    { event: { seq: 2, time: 8000, type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '先答一段' }] } } } },
+    toolCall(3, 1, 2, 'c1', 'read_file'),
+    userAt(5, 5000, '途中插话'),
+  ])
+  assert.deepEqual(shape(out), ['user', 'user', 'reply:先答一段', 'process#0'], 'the bubble goes above the answer or below the run, never between them')
+  assert.equal(out[1].blocks[0].text, '途中插话', 'the steered bubble is the one that moved')
+})
+
+test('STEER-1c a bubble that arrives after the run is stamped keeps its place under it', () => {
+  const sandbox = buildSandbox()
+  const out = sandbox.visibleMessages([
+    userAt(1, 1000, '开跑'),
+    { event: { seq: 2, time: 8000, type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '先答一段' }] } } } },
+    toolCall(3, 1, 2, 'c1', 'read_file'),
+    userAt(5, 9000, '途中插话'),
+  ])
+  assert.deepEqual(shape(out), ['user', 'reply:先答一段', 'process#0', 'user'], 'a clock that is newer than the answer keeps the seq order the host gave it')
+})
+
+test('STEER-2 a bubble written before the answer above it still moves back up, tail and all', () => {
+  // The 2026-10-19 fix has to survive: a queued message is spliced into the turn with
+  // the newest seq, so only its own clock can put it back where it was written — and it
+  // must travel past the whole unit (answer plus that answer's clock-less rows).
+  const sandbox = buildSandbox()
+  const out = sandbox.visibleMessages([
+    userAt(1, 1000, '第一问'),
+    { event: { seq: 2, time: 5000, type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '第一答' }] } } } },
+    toolCall(3, 1, 2, 'c2', 'read_file'),
+    userAt(10, 3000, '排队时写的'),
+  ])
+  assert.deepEqual(shape(out), ['user', 'user', 'reply:第一答', 'process#0'], 'the late bubble returns to its own moment, above the newer answer')
 })

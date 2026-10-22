@@ -148,7 +148,7 @@ test('E the poll lives exactly on the landing: armed on entry, disarmed into a c
   const open = sliceTo('async function openSession(id,title', 'function handleHistory')
   // (2026-10-14 m02164②) entering a chat also hands the outgoing transcript to the
   // cache first — same statement sequence, one more step in the middle.
-  assert.match(open, /clearTimeout\(poll\);stopListPoll\(\);[\s\S]*?evictSessionCache\(\)\}closeSessionStream\(\);/, 'entering a session disarms it beside the session poll')
+  assert.match(open, /clearTimeout\(poll\);stopListPoll\(\);[\s\S]*?evictSessionCache\(\)\}if\(activeSession&&activeSession!==id\)resetEarlierParts\(\);closeSessionStream\(activeSession===id\);/, 'entering a session disarms it beside the session poll')
   const draft = sliceTo('function startDraftChat(workspaceId){', 'async function ensureSession()')
   assert.match(draft, /stopListPoll\(\);draftWorkspaceId=workspaceId;/, 'a new-chat draft counts as a chat too')
 })
@@ -243,7 +243,9 @@ test('D the prefetch is consumed once, bounded in time, and never replaces a fai
 // ---------------------------------------------------------------------------
 
 test('B the instant paint seeds lastHistoryKey with the exact expression applyHistory compares', () => {
-  const key = /\[messages,pendingQuestion\?\.rpcId\|\|null,agentRunning,currentTodos,todoExpanded\]/
+  // 2026-10-22：比键的首项成了 `streamConnected&&agentRunning?null:messages`（流式期不拿消息
+  // 参与比对，否则每 250ms 轮询必判「变了」而整屏重建），两条表达式仍然必须逐字一致。
+  const key = /\[streamConnected&&agentRunning\?null:messages,pendingQuestion\?\.rpcId\|\|null,agentRunning,currentTodos,todoExpanded\]/
   const instant = sliceTo('function paintInstantHistory(events,projections){', 'function paintInstantSession')
   const apply = sliceTo('function applyHistory(value,pending,initial){', 'function flushStreamRender')
   assert.match(instant, /lastHistoryKey=JSON\.stringify\(/, 'the instant paint records what it painted')
@@ -273,11 +275,11 @@ test('F leaving one chat for another stashes the outgoing transcript before the 
   const open = sliceTo('async function openSession(id,title', 'function handleHistory')
   assert.match(
     open,
-    /if\(activeSession&&activeSession!==id&&streamEvents\.length\)\{sessionCache\.set\(activeSession,\{streamEvents,olderEvents,olderHasMore,olderExhausted,streamProjections,at:Date\.now\(\)\}\);evictSessionCache\(\)\}closeSessionStream\(\)/,
+    /if\(activeSession&&activeSession!==id&&streamEvents\.length\)\{sessionCache\.set\(activeSession,\{streamEvents,olderEvents,olderHasMore,olderExhausted,streamProjections,at:Date\.now\(\)\}\);evictSessionCache\(\)\}if\(activeSession&&activeSession!==id\)resetEarlierParts\(\);closeSessionStream\(activeSession===id\)/,
     'the jump caches by the OUTGOING id and only then closes the stream — closing first would empty the arrays it is reading',
   )
   assert.ok(
-    open.indexOf('sessionCache.set(activeSession') < open.indexOf('evictSessionCache()}closeSessionStream()'),
+    open.indexOf('sessionCache.set(activeSession') < open.indexOf('evictSessionCache()}if(activeSession&&activeSession!==id)resetEarlierParts();closeSessionStream(activeSession===id)'),
     'the stash strictly precedes the teardown (compared against the call, not the comment that names it)',
   )
 })
