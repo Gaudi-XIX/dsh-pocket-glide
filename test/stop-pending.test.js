@@ -59,9 +59,9 @@ function buildStatusSandbox() {
     let agentRunning=true,pendingQuestion=null,stopPending=false
     // 2026-10-21: the line also carries the live turn clock and the retry notice,
     // both read from page globals. The sandbox leaves them idle so the classic
-    // 正在停止/深度思考 copy is what these assertions see.
+    // 正在停止/深度求索 copy is what these assertions see.
     let turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null
-    const L={deepDiving:'深度思考中…',stopping:'正在停止…',retryError:'模型报错，正在重试 {retry}/{max}'}
+    const L={deepDiving:'深度求索中',deepDivingFor:'深度求索中，用时 {duration} ···',stopping:'正在停止…',retryError:'模型报错，正在重试 {retry}/{max}',durHour:'小时',durMin:'分',durSec:'秒'}
     const $=()=>box
     const esc=(v)=>String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     const formatElapsed=(ms)=>Math.round(ms/1000)+'s'
@@ -85,7 +85,7 @@ function buildStatusSandbox() {
 
 test('the status line reads 正在停止… the moment stopPending flips', () => {
   const box = buildStatusSandbox();
-  assert.match(box.stopHtml(), /深度思考中…/, 'running label while not stopping');
+  assert.match(box.stopHtml(), /深度求索中/, 'running label while not stopping');
   box.setStop(true);
   assert.match(box.stopHtml(), /正在停止…/, 'stopping label the instant the flag flips');
 
@@ -94,7 +94,7 @@ test('the status line reads 正在停止… the moment stopPending flips', () =>
   assert.match(box.insertedHtml, /正在停止…/, 'inserted with the stopping copy');
   box.setStop(false);
   box.sync();
-  assert.equal(box.line.textContent, '深度思考中…', 'an existing line is rewritten in place, not left stale');
+  assert.equal(box.line.textContent, '深度求索中', 'an existing line is rewritten in place, not left stale');
 });
 
 test('the status line still yields to questions and settles with the turn', () => {

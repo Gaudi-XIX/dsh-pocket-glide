@@ -461,12 +461,13 @@ function statusSandbox(locale) {
 
 test('the status row beats with the elapsed clock', () => {
   const { sandbox } = statusSandbox('zh')
+  const L = labels('zh')
   sandbox.set('turnElapsedAt', 0)
-  assert.equal(sandbox.statusLabel(), labels('zh').deepDiving, 'with no clock it is the plain waiting phrase')
+  assert.equal(sandbox.statusLabel(), L.deepDiving, 'with no clock it is the plain waiting phrase')
   sandbox.set('turnElapsedAt', Date.now() - 12_000)
   const text = sandbox.statusLabel()
-  assert.ok(text.startsWith(labels('zh').deepDiving), 'the waiting phrase leads')
-  assert.match(text.slice(labels('zh').deepDiving.length), / \d+[smh]/, 'and the elapsed time rides behind it')
+  assert.ok(text.startsWith(L.deepDivingFor.split('{')[0]), 'the waiting phrase leads')
+  assert.match(text, /12秒/, 'and the elapsed time rides behind it, in the desktop duration words')
 })
 
 test('a model error replaces the waiting phrase while the retry is in flight', () => {

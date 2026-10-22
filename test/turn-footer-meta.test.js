@@ -466,22 +466,22 @@ test('A11b a turn elapsed stamp joins the clock with a separator, and never alon
   assert.equal(clockText(plain), '2024年3月14日 15:30', 'without a duration the clock is untouched')
 
   const stamped = sandbox.renderMessageTail({ messageTime: time, turnElapsed: 80_000 })
-  assert.equal(clockText(stamped), '2024年3月14日 15:30 · 用时 1m20s', 'the duration follows the moment, dot-separated')
+  assert.equal(clockText(stamped), '2024年3月14日 15:30 · 已完成，用时 1分20秒', 'the duration follows the moment, dot-separated')
 
   // No time stamp means no line to hang the duration on: the duration alone must
   // not invent a footer (the clock is the anchor the reader already trusts).
   assert.equal(sandbox.renderMessageTail({ turnElapsed: 80_000 }), '', 'a duration with no moment renders nothing')
 })
 
-test('A11b formatElapsed speaks seconds, minutes and hours without decimals', () => {
+test('A11b formatElapsed speaks the desktop duration words (秒 / 分 / 小时)', () => {
   const { formatElapsed } = helperSandbox('zh')
-  assert.equal(formatElapsed(0), '0s')
-  assert.equal(formatElapsed(9_400), '9s')
-  assert.equal(formatElapsed(60_000), '1m00s')
-  assert.equal(formatElapsed(80_000), '1m20s')
-  assert.equal(formatElapsed(3_600_000), '1h00m')
-  assert.equal(formatElapsed(3_930_000), '1h05m')
-  assert.equal(formatElapsed(-5), '0s', 'a negative clock reads as zero, never as garbage')
+  assert.equal(formatElapsed(0), '0秒')
+  assert.equal(formatElapsed(9_400), '9秒')
+  assert.equal(formatElapsed(60_000), '1分0秒')
+  assert.equal(formatElapsed(80_000), '1分20秒')
+  assert.equal(formatElapsed(3_600_000), '1小时0分0秒')
+  assert.equal(formatElapsed(3_930_000), '1小时5分30秒')
+  assert.equal(formatElapsed(-5), '0秒', 'a negative clock reads as zero, never as garbage')
 })
 
 // ---------------------------------------------------------------- A12 the early returns
@@ -725,7 +725,7 @@ test('A19 the pill winner is the last reply block emitted, backfilled on the ren
   assert.ok(
     projection.includes('if(lastText>=0){') &&
     projection.includes('rendered[lastText].messageTime=lastTime;rendered[lastText].usage=normalizeUsage(turn.usage)') &&
-    projection.includes('rendered[lastText].turnElapsed=spent'),
+    projection.includes('rendered[lastText].turnElapsed=Math.max(1000,spent)'),
     'the pill and the clock must be backfilled onto the final reply block, and the turn elapsed with them',
   )
   assert.ok(!projection.includes('lastTextSeq'), 'the _seq sentinel must stay gone')
