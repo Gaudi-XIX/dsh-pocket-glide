@@ -122,8 +122,43 @@ test('the stream also carries connection state, so the phone stops polling', asy
     const body = JSON.parse(match[1])
     assert.equal(body.connected, true)
     assert.equal(typeof body.expiresAt, 'number', 'the paired session expiry rides along')
+    // The desktop clock rides this frame (2026-10-22, user ruling m00054: the
+    // phone shows the desktop's own time instead of computing its own). It is
+    // the bridge's clock — the same machine as the Host — in epoch ms.
+    assert.equal(typeof body.hostNow, 'number', 'the desktop clock rides the status frame')
+    assert.ok(Math.abs(body.hostNow - Date.now()) < 60_000, 'and it is this machine\'s clock, not a phone one')
     // No tunnel is running in this test, so tunnelExpiresAt is absent — the
     // client only reacts when it is a number.
+  } finally {
+    await t.stop()
+  }
+})
+
+test('a phone that opens a running conversation gets the desktop clock at once', async () => {
+  // The status frame used to wait a full sseStatusMs (30s in production) before
+  // its first tick, so a phone that opened a running turn had no clock to show
+  // until then — the case the user hit as "用时一片混乱" (2026-10-22). The stream
+  // now publishes one status frame immediately on open. The cadence here is
+  // deliberately far outside the 2s window below, so only the immediate frame
+  // can satisfy this test.
+  const t = await startBridge({ harness: 'fake', bridgeOptions: { sseStatusMs: 60_000 } })
+  try {
+    const cookie = await t.pairMobile()
+    const res = await httpFetch(`${t.base}/api/session/stream?sessionId=sess-1`, { headers: { cookie } })
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let raw = ''
+    const deadline = Date.now() + 2000
+    while (Date.now() < deadline && !raw.includes('event: status')) {
+      const { value, done } = await reader.read()
+      if (done) break
+      raw += decoder.decode(value, { stream: true })
+    }
+    await reader.cancel().catch(() => {})
+
+    const match = raw.match(/event: status\ndata: (\{[^\n]*\})\n\n/)
+    assert(match, 'the first status frame must not wait for the cadence')
+    assert.equal(typeof JSON.parse(match[1]).hostNow, 'number', 'and it carries the desktop clock')
   } finally {
     await t.stop()
   }

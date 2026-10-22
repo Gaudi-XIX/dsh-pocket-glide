@@ -329,6 +329,11 @@ test('events: tokens and durable events flow out in order on a monotonic cursor;
     assert.equal(firstBody.latestSeq, 0)
     assert.equal(typeof firstBody.generation, 'string')
     assert.ok(firstBody.generation.length > 0)
+    // Tunnel mode has no SSE status frame, so this answer is the only carrier
+    // of the desktop clock (2026-10-22, user ruling m00054). It must ride every
+    // answer, including an empty one — the phone shows the desktop's time.
+    assert.equal(typeof firstBody.hostNow, 'number', 'the desktop clock rides the poll body')
+    assert.ok(Math.abs(firstBody.hostNow - Date.now()) < 60_000, 'the bridge clock is this machine\'s clock')
 
     // Wait for the collector's follow to actually open before pushing.
     await pollUntil(t.base, cookie, 's1', -1, () => harness.opens() >= 1)
@@ -348,6 +353,7 @@ test('events: tokens and durable events flow out in order on a monotonic cursor;
     assert.equal(drained.body.events[1].frame.seq, 5)
     assert.equal(drained.body.latestSeq, 2)
     assert.notEqual(drained.body.overflow, true)
+    assert.ok(drained.body.hostNow >= firstBody.hostNow, 'the desktop clock only moves forward between answers')
 
     // A cursor at the tip answers empty, not with a replay.
     const quiet = await httpFetch(`${t.base}/api/session/events?sessionId=s1&sinceSeq=2`, { headers: { cookie } })
