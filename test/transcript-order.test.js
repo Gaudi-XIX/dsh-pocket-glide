@@ -496,7 +496,7 @@ function buildRunningSandbox() {
   assert(bound > 0, 'the page declares its fallback bound')
   const idle = Number((js.match(/TURN_RUNNING_IDLE_MAX_MS=(\d+)/) || [])[1])
   assert(idle > 0, 'the page declares the idle bound the run state retires on')
-  const names = ['eventSeq', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning', 'clearTurnRunningWatch', 'expireTurnRunning', 'confirmTurnRunning', 'finishTurnConfirm', 'watchTurnRunning']
+  const names = ['eventSeq', 'eventTimeOf', 'clearAwaitingTurn', 'armAwaitingTurn', 'expireAwaitingTurn', 'noteTurnBoundary', 'updateRunning', 'clearTurnRunningWatch', 'expireTurnRunning', 'confirmTurnRunning', 'finishTurnConfirm', 'watchTurnRunning']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   return new Function(`
     const AWAITING_TURN_MAX_MS=${bound}
@@ -505,7 +505,7 @@ function buildRunningSandbox() {
     let hostRows=[],rpcRejects=false
     // The turn clock the run-state functions now write to: the elapsed stamps and
     // the retry counter live in page globals, so the sandbox hands them a home.
-    let stopPending=false,turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null
+    let stopPending=false,turnElapsedAt=0,turnElapsedHostStart=0,turnElapsedTurn=null,turnRetry=null
     const turnElapsedByTurn=new Map(),turnRetryMax=new Map()
     const stopTurnStatusTimer=()=>{}
     const calls=[]
@@ -536,7 +536,13 @@ test('M6 the wait is judged on the session log, never on two clocks', () => {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const slice = betweenA3('function updateRunning(events)', 'function todoProgress(', js)
   assert.ok(slice.includes('eventSeq(entry)>awaitingTurnSeq'), 'the judgement is a seq comparison')
-  assert.ok(!slice.includes('event.time'), 'no host timestamp is read here at all')
+  // 2026-10-22: the elapsed clock anchors on the span between two host records
+  // (turn start -> newest one in hand) and spends it on the phone's own clock, so a
+  // rebuilt page no longer restarts a running turn at 1s. Only a span crosses over;
+  // no absolute host stamp is ever subtracted from Date.now() — that comparison is
+  // what left the status pinned when the two machines disagreed.
+  assert.ok(!/Date\.now\(\)\s*-\s*eventTimeOf/.test(slice), 'no absolute host stamp meets the phone clock')
+  assert.ok(slice.includes('hostLatest-turnElapsedHostStart'), 'the clock is a host span, spent locally')
   assert.ok(!js.includes('awaitingTurnStartedAt'), 'the wall-clock slot is gone from the page')
   assert.ok(!js.includes('Date.now()-1000'), 'and so is the expression that armed it')
   const send = betweenA3('async function send()', 'function formatBytes(n)', js)

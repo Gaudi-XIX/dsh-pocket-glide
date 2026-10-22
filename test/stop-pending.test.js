@@ -211,6 +211,7 @@ function buildBoundarySandbox() {
     : Promise.resolve({});
   const make = new Function(
     'eventSeq',
+    'eventTimeOf',
     'clearTurnRunningWatch',
     'syncPromptUi',
     'syncTurnStatus',
@@ -221,7 +222,7 @@ function buildBoundarySandbox() {
     let turnRunningSeq=-1,turnRunningOpen=false,turnRunningSeenSeq=-1
     let turnRunningConfirming=false
     let agentRunning=true,stopPending=true,lastHistoryKey='',pendingQuestion=null,activeSession='s1'
-    let turnElapsedAt=0,turnElapsedTurn=null,turnRetry=null
+    let turnElapsedAt=0,turnElapsedHostStart=0,turnElapsedTurn=null,turnRetry=null
     const turnElapsedByTurn=new Map(),turnRetryMax=new Map()
     const stopTurnStatusTimer=()=>{}
     const AWAITING_TURN_MAX_MS=1000,TURN_RUNNING_IDLE_MAX_MS=1000
@@ -247,6 +248,11 @@ function buildBoundarySandbox() {
       const e = entry && (entry.event || entry);
       const s = e && e.seq;
       return typeof s === 'number' ? s : -1;
+    },
+    (entry) => {
+      const e = entry && (entry.event || entry);
+      const t = e && e.time;
+      return typeof t === 'number' && t > 0 ? t : 0;
     },
     noop, noop, noop, noop, rpc,
   );
@@ -314,6 +320,6 @@ test('the boundary clear points ship in the page source', () => {
     'expireTurnRunning hands the verdict to the host consult');
   assert.match(js, /if\(!turnRunningOpen\)return;if\(turnRunningSeenSeq>seenAtStart\)\{watchTurnRunning\(turnRunningSeenSeq\);return\}if\(busy\)\{[\s\S]*?\}turnRunningOpen=false;stopPending=false;/,
     'finishTurnConfirm retires the stale stop only on a host that says idle');
-  assert.match(js, /if\(turnRunningOpen\)\{clearTurnRunningWatch\(\);turnRunningSeenSeq=turnRunningSeq;if\(fresh\)stopPending=false;[\s\S]*?if\(!turnElapsedAt\|\|turnElapsedTurn!==startedKey\)\{turnElapsedTurn=startedKey;turnElapsedAt=Date\.now\(\);turnRetry=null\}/,
+  assert.match(js, /if\(turnRunningOpen\)\{clearTurnRunningWatch\(\);turnRunningSeenSeq=turnRunningSeq;if\(fresh\)stopPending=false;[\s\S]*?if\(!turnElapsedAt\|\|turnElapsedTurn!==startedKey\)\{turnElapsedTurn=startedKey;turnElapsedHostStart=eventTimeOf\(entry\);turnElapsedAt=Date\.now\(\);turnRetry=null\}/,
     'noteTurnBoundary retires the stop when a new turn starts and arms the turn clock');
 });

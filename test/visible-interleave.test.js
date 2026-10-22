@@ -314,6 +314,8 @@ const userAt = (seq, time, text) => ({
 })
 
 test('STEER-1 a message typed into a running turn stays under the process card', () => {
+  // 2026-10-22 second round: the bubble is now spliced into the turn where it arrived
+  // instead of being relocated over the card, so the run it interrupted ends above it.
   const sandbox = buildSandbox()
   const out = sandbox.visibleMessages([
     userAt(1, 1000, '开跑'),
@@ -322,7 +324,8 @@ test('STEER-1 a message typed into a running turn stays under the process card',
     toolResult(4, 1, 1, 'c1'),
     userAt(5, 9000, '途中插话'),
   ])
-  assert.deepEqual(shape(out), ['user', 'user', 'process#0'], 'the steered bubble lands below the run it steered into, never above it')
+  assert.deepEqual(shape(out), ['user', 'process#0', 'user'], 'the steered bubble lands below the run it steered into, never above it')
+  assert.equal(out[2]._inTurn, true, 'and it is marked as belonging to the open turn, so no later relocation touches it')
 })
 
 test('STEER-1b the bubble never wedges inside the unit it steered into', () => {
