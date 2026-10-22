@@ -16,7 +16,7 @@
 
 隧道轮询的游标也只跟到这一批真正带回的序号（`frames.length ? seenSeq : body.latestSeq`）：`latestSeq` 是交换机此刻的最新序号，可能落在这一批还没送到的帧之后（模型/工具事件与 `assistant/chunk` 是两条记录流），直接跳过去会把中间那段永久漏在窗口外。
 
-回归锁：`test/pages-send-mode.test.js` 钉 `FULL_PAINT_STREAM_EVENTS` 三个成员与 `fullPaint` 条件；`test/stream-watermark.test.js` 钉游标只前进不跳。全量 `node --test --test-concurrency=1 test/*.test.js` = 1430 tests / 1426 pass，仅 `test/tunnel.test.js` 两例 MSYS GNU tar 把 `-C C:\…` 当远程主机（pwsh 下全绿，环境伪红）。
+回归锁：`test/pages-tunnel-poll.test.js` 的沙箱不再自写一份「哪些事件算整屏」——`FULL_PAINT_SET` 直接照抄页面原文那一行（两份判定漂移过：沙箱少抄一行，整批帧就一个都不往渲染器送，6 条断言集体转红却报不出原因）；两个「整批只排一帧」用例断言 `lastBatchFullPaint`（内容帧 false、`turn/end` true），游标用例断言只跟本批真实序号、`latestSeq` 越过时也不跳。`test/nav-reload.test.js` 钉 `applyHistory` 比键的新首项。全量 `node --test` 全表（pwsh 下）= 1430 tests / 1428 pass / 0 fail / 2 skipped；同一套在 Git-bash 下 `test/tunnel.test.js` 两例转红——MSYS GNU tar 把 `-C C:\…` 当远程主机，属环境伪红。
 
 **工具行按到达顺序混排不置顶，一段只出一行，失败按次数说清楚**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值，手机须完全关闭重开。用户 2026-10-22 上午真机两条：「除了思考之外的内容，还是固定为一行，并且还固定置顶了」「聚合的方法不对，显示的时序也不对。应该根据实际情况，工具就是工具，思考就是思考，反正这个顺序」；下午第三条：「如果有失败的，会错误地显示『调用 x 次工具（失败）』，实际应该说『调用了 m 次工具（失败 x 次）』」）。
 

@@ -243,7 +243,9 @@ test('D the prefetch is consumed once, bounded in time, and never replaces a fai
 // ---------------------------------------------------------------------------
 
 test('B the instant paint seeds lastHistoryKey with the exact expression applyHistory compares', () => {
-  const key = /\[messages,pendingQuestion\?\.rpcId\|\|null,agentRunning,currentTodos,todoExpanded\]/
+  // 2026-10-22：比键的首项成了 `streamConnected&&agentRunning?null:messages`（流式期不拿消息
+  // 参与比对，否则每 250ms 轮询必判「变了」而整屏重建），两条表达式仍然必须逐字一致。
+  const key = /\[streamConnected&&agentRunning\?null:messages,pendingQuestion\?\.rpcId\|\|null,agentRunning,currentTodos,todoExpanded\]/
   const instant = sliceTo('function paintInstantHistory(events,projections){', 'function paintInstantSession')
   const apply = sliceTo('function applyHistory(value,pending,initial){', 'function flushStreamRender')
   assert.match(instant, /lastHistoryKey=JSON\.stringify\(/, 'the instant paint records what it painted')
