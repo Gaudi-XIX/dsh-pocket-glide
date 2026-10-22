@@ -54,19 +54,21 @@ function fakeBox({ scrollHeight = 5000, scrollTop = 0, clientHeight = 800 } = {}
 
 const scrollOrgans = (locale = 'zh') => {
   const js = assets[locale].js
-  const names = ['transcriptDistance', 'isNearBottom', 'anchorVisibleState', 'markHistoryTail']
+  const names = ['transcriptDistance', 'isNearBottom', 'canRearmFollow', 'anchorVisibleState', 'markHistoryTail']
   const body = names.map((name) => extractFunction(js, name)).join('\n')
   // 2026-10-12 P1: isNearBottom no longer trusts the raw 120px band alone — it caps the
   // band at half the settled transcript height, so a 120px band cannot mean "the reader
   // is still following" on a transcript that is barely taller than the viewport. That
   // pulls settledTranscriptHeight (and its lastScrollHeight fallback) into this sandbox.
+  // 2026-10-22：「还在带里」与「能否重新上膛」分成两个阈值——停下后要几乎贴底（24px）
+  // 才准重新跟随，否则流式每帧的几十像素就够把 120px 带沿来回穿越，屏幕连抖。
   return new Function(`
-    const SCROLL_FOLLOW_PX=120,ANCHOR_LATEST_SCREENS=1.5,ANCHOR_LEAVE_SCREENS=1,ANCHOR_PROMPT_SCREENS=1,CV_TAIL_KEEP=8;
+    const SCROLL_FOLLOW_PX=120,FOLLOW_REARM_PX=24,ANCHOR_LATEST_SCREENS=1.5,ANCHOR_LEAVE_SCREENS=1,ANCHOR_PROMPT_SCREENS=1,CV_TAIL_KEEP=8;
     let lastScrollHeight=0;
     function settledTranscriptHeight(){const box=$('messages');return box&&box.scrollHeight?box.scrollHeight:lastScrollHeight}
     function $(){return null}
     ${body}
-    return { transcriptDistance, isNearBottom, anchorVisibleState, markHistoryTail }
+    return { transcriptDistance, isNearBottom, canRearmFollow, anchorVisibleState, markHistoryTail }
   `)()
 }
 
@@ -76,6 +78,23 @@ test('the near-bottom band is the 120px follow threshold, measured from the bott
   assert.equal(isNearBottom({ scrollHeight: 5000, scrollTop: 4080, clientHeight: 800 }), true, '120px from the bottom still follows')
   assert.equal(isNearBottom({ scrollHeight: 5000, scrollTop: 4079, clientHeight: 800 }), false, '121px away is unlocked')
   assert.equal(isNearBottom({ scrollHeight: 800, scrollTop: 0, clientHeight: 800 }), true, 'a short transcript is always near bottom')
+})
+
+test('re-arming the follow is stricter than staying in it: parked readers are not re-stuck by a few dozen px', () => {
+  // 2026-10-22 用户口述（静止阅读时）：「往上滑的时候已经停止了，但是在抖动，屏幕很滑……
+  // 就是往下抖一下，再往上抖一下，再往上抖一下，然后就好像在跳跃似的」。
+  // 根因：跟随带 120px 既是「留下」也是「重新进入」的阈值，而流式每帧把 scrollHeight 抬高
+  // 几十像素，距底距离就在带沿上反复穿越——一次程序性滚动的重判把跟随重新打开 → 下一帧贴底
+  // （内容上移）→ 再下一帧锚点复原（内容下移）。真机遥测同日：jk 交替 ±286/±437/±466px、
+  // ts 钉底 154 次、rs 锚点复原 8 次。修法：停下后要回到 24px 以内（几乎贴底）才准重新跟随。
+  const { isNearBottom, canRearmFollow } = scrollOrgans()
+  // 5000-800=4200 是底部。距底 100px：仍在带里（可以继续跟随），但不足以重新上膛。
+  assert.equal(isNearBottom({ scrollHeight: 5000, scrollTop: 4100, clientHeight: 800 }), true, '100px away still counts as following')
+  assert.equal(canRearmFollow({ scrollHeight: 5000, scrollTop: 4100, clientHeight: 800 }), false, 'but a parked reader 100px away is not re-armed')
+  // 距底 20px：既在带里也可重新上膛（读者自己滑回底部就是这一档）。
+  assert.equal(canRearmFollow({ scrollHeight: 5000, scrollTop: 4180, clientHeight: 800 }), true, '20px from the bottom re-arms')
+  // 带本身比 24px 还小的短转录（settled/2 封顶）：按带宽走，否则永远回不来。
+  assert.equal(canRearmFollow({ scrollHeight: 40, scrollTop: 20, clientHeight: 20 }), true, 'a transcript shorter than the re-arm band falls back to the band')
 })
 
 test('anchor visibility: ONE gate for both buttons — they open together past the follow band, and ↑ never vanishes mid-climb', () => {
@@ -540,7 +559,7 @@ test('mergeOpenedMapFromBridge restores lost history without downgrading newer l
 
 test('the page wires the machine where the tests cannot reach: scroll, open, leave', () => {
   const js = assets.zh.js
-  assert.match(js, /followStream=isNearBottom\(live\)/, 'the scroll handler re-decides the follow from the live band')
+  assert.match(js, /followStream=followStream\?isNearBottom\(live\):canRearmFollow\(live\)/, 'the scroll handler re-decides the follow with the hysteresis: stay on the band, re-arm only on the tighter point')
   assert.match(js, /activeSession=id;resetEarlierParts\(\);const summary=sessionSummaries\.find\(item=>item\.sessionId===id\);sessionBlank=summary\?\.blank\?\?true;noteSessionOpened\(id\);followStream=true;/, 'openSession stamps the ledger and re-arms the follow (earlier-parts reset rides between the session switch and the first summary read)')
   assert.match(js, /poll=null;if\(activeSession\)noteSessionOpened\(activeSession\);/, 'leaving to the list stamps the ledger (activity seen live is read)')
   assert.match(js, /scheduleOpenedMapSync\(\);void pullOpenedMapRemote\(\);/, 'boot pulls the ledger back from the bridge after the first paint (0.4.35)')
@@ -551,7 +570,7 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   // The contract this assertion carries is unchanged and still holds: all of it
   // happens in ONE tick, so the re-decision, the anchor, the scroll anchors and the
   // top-edge pull can never be spread across frames and fight each other.
-  assert.match(js, /followStream=isNearBottom\(live\);if\(!followStream\)transcriptAnchor=readTranscriptAnchor\(live\);pendingFollowFrame=false\}else\{pendingFollowFrame=true\}syncScrollAnchors\(\);topEdgePull\(live\)/, 'the same rAF tick re-decides the anchors and the top edge（2026-10-12 P1 加入 programmaticScroll 静默窗：窗内的帧不许重上膛，改记 pendingFollowFrame）')
+  assert.match(js, /followStream=followStream\?isNearBottom\(live\):canRearmFollow\(live\);if\(!followStream\)transcriptAnchor=readTranscriptAnchor\(live\);pendingFollowFrame=false\}else\{pendingFollowFrame=true\}syncScrollAnchors\(\);topEdgePull\(live\)/, 'the same rAF tick re-decides the anchors and the top edge（2026-10-12 P1 加入 programmaticScroll 静默窗：窗内的帧不许重上膛，改记 pendingFollowFrame；2026-10-22 起重上膛走 canRearmFollow 的严格阈值）')
   // The deck's own geometry: the ↑ tile sits in the upper slot and ↓ in the lower one,
   // and ↑ chases the nearest ANSWER above the fold (user, 2026-10-13: 「我的意图应该是要回到
   // AI 发的最后那段总结性的话之前…不想往上翻」 — it used to land on the reader's own question,
@@ -570,7 +589,7 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   // followStream 因此永不重判 ⇒ 读者上滑被吞、下一帧又被钉回底（橡皮筋）。
   // 两处补口：链条自己有读者出口，窗口到点自己醒一次。
   assert.match(js, /if\(pinned!==undefined&&live\.scrollTop<pinned-2&&live\.scrollHeight-live\.scrollTop-live\.clientHeight>SCROLL_FOLLOW_PX\)\{if\(typeof followStream!=='undefined'\)followStream=false;[\s\S]{0,160}probeMark\('rl'\);return\}/, '2026-10-15 ③三轮：scrollTop 比上次写入值小且离底超跟随带＝读者动过手——解除 follow、记锚、打标 rl 并终止本链（内容长高只增 scrollHeight 不动 scrollTop，故该判据不误伤钳位）')
-  assert.match(js, /function programmaticScroll\(\)\{followReArmAllowedAt=Date\.now\(\)\+250;if\(followReArmTimer!==null\)return;followReArmTimer=setTimeout\(\(\)=>\{followReArmTimer=null;[\s\S]{0,220}probeMark\('ra'\);followStream=isNearBottom\(live\)/, '2026-10-15 ③三轮：静默窗到点自醒并重判 follow——原注释「窗长 250ms > 最长 settle 链」只对「一条链只跑 tries 次」成立，流式 patch 每 token 帧与 settleTailStick 每 120ms 都在给自己续期；pendingFollowFrame 那面旗只在 applyHistory 里消费，纯滑动时永远躺着')
+  assert.match(js, /function programmaticScroll\(\)\{followReArmAllowedAt=Date\.now\(\)\+250;if\(followReArmTimer!==null\)return;followReArmTimer=setTimeout\(\(\)=>\{followReArmTimer=null;[\s\S]{0,220}probeMark\('ra'\);followStream=followStream\?isNearBottom\(live\):canRearmFollow\(live\)/, '2026-10-15 ③三轮：静默窗到点自醒并重判 follow——原注释「窗长 250ms > 最长 settle 链」只对「一条链只跑 tries 次」成立，流式 patch 每 token 帧与 settleTailStick 每 120ms 都在给自己续期；pendingFollowFrame 那面旗只在 applyHistory 里消费，纯滑动时永远躺着。2026-10-22：重判分两档（在跟随带里继续跟；已停下要回到 24px 才重新上膛）')
   assert.match(js, /if\(btn\.id==='jumpLatest'\)\{box\.__settleTurn=\(box\.__settleTurn\|\|0\)\+1;transcriptAnchor=null;followStream=true;/, '2026-10-15 ③三轮：点 ↓ 先夺令牌并清锚点——上一条 ↑ 的 settlePromptJump 重瞄链必须立刻作废，否则两股相反写入交替（用户「点那个上下按钮的时候也有跳动」）；锚点也要清，它记的是点 ↓ 之前那一眼的最上行')
   // 2026-10-15 m02164③ 四轮：真机 03:43:47 遥测抓到点 ↓ 被拽回顶部——latest@scrollTop=0
   // → jk +11368 到底 → bf 内容长高 → jk -11368 甩回 798 → ol 连拽三次。根因：补页只发生在
