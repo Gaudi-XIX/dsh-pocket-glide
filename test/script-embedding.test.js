@@ -92,7 +92,7 @@ test('the two bootstrap pages share one copy of the stage script', () => {
   for (const organ of SHARED_ORGANS) {
     assert.equal(occurrences(source, organ), 1, `${organ} must not be written twice`)
   }
-  assert.equal(occurrences(source, 'const stage=stageRunner(setStep);'), 2, 'each page keeps its own binding')
+  assert.equal(occurrences(source, 'const stage=stageRunner(openRow);'), 2, 'each page keeps its own binding')
 })
 
 test('the shared block obeys the page template rules', () => {
@@ -115,8 +115,8 @@ test('both bootstrap pages carry the shared block exactly once', () => {
     assert.equal(occurrences(reconnect, organ), 1, `the reconnect page must carry ${organ} once`)
     assert.equal(occurrences(pairing, organ), 1, `the pairing page must carry ${organ} once`)
   }
-  assert.equal(occurrences(reconnect, 'const stage=stageRunner(setStep);'), 1)
-  assert.equal(occurrences(pairing, 'const stage=stageRunner(setStep);'), 1)
+  assert.equal(occurrences(reconnect, 'const stage=stageRunner(openRow);'), 1)
+  assert.equal(occurrences(pairing, 'const stage=stageRunner(openRow);'), 1)
 })
 
 // Every page script here is a JS template literal that EMITS JavaScript, so an edit

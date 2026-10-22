@@ -231,11 +231,14 @@ test('the handoff reads go out in one batch, and the ladder only ever climbs', (
   // workspace + session list + boot are independent, and the bridge dedupes the
   // catalogue itself: three serial round trips become one. They are built up front
   // (the backend starts loading them all at once — user 2026-10-21: "后端肯定是
-  // 提前加载"), then awaited row by row so the ladder reveals one row at a time.
+  // 提前加载"), then awaited row by row so the ladder walks one row at a time and a
+  // row's number is opened the instant the ladder enters it (2026-10-22).
   for (const [name, html] of [['pairing', pin], ['reconnect', reconnect]]) {
     assert.match(html, /const reads=\[\s*withRetry\(\(\)=>rpc\('workspace\.list'\)\)/, `${name} builds all three reads up front`)
     assert.match(html, /reads\.forEach\(p=>p\.catch\(\(\)=>\{\}\)\)/, `${name} disarms the not-yet-awaited legs`)
-    assert.match(html, /await stage\(\d,\s*\(\)=>reveal\(\d,reads\[0\]\)\)/, `${name} reveals the rows in order`)
+    assert.match(html, /await stage\(\d,\s*\(\)=>reads\[\d\]\)/, `${name} walks the rows in order`)
+    assert.match(html, /const openRow=\(n\)=>\{setStep\(n\);releaseCount\(n\)\};/, `${name} opens a row's number as the ladder enters it`)
+    assert.match(html, /const stage=stageRunner\(openRow\);/, `${name} the runner drives the rows through openRow`)
     assert.match(html, /gateLadder\(\)/, `${name} opens the count gate before the reads go out`)
   }
   // Rows are awaited in index order, so a late answer can never light a later row
