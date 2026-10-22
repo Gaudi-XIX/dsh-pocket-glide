@@ -519,6 +519,100 @@ test('clawbot quota: 计数真的进了发给微信的那段文字，入站一�
   }
 })
 
+// 入站身份门控：iLink 的 bot 会收到任何能对它说话的微信用户的入站（群里更是人人可说），
+// 而 watcher 原来把每条入站的 from_user_id 直接写成新绑定、再把公网隧道地址回给这个
+// 新绑定的 userId ⇒ 谁先说一句谁接管远程入口。这条锁断言默认拒绝的方向：
+// 非绑定者的入站整条丢弃（不续额度、不改绑定、不发回执、不拉隧道）。
+test('clawbot inbound gate: 非绑定者的入站整条丢弃，绑定与额度都不动', async () => {
+  const dir = makeTempDir('dsh-pocket-inbound-gate-')
+  const store = createSettingsStore(dir)
+  store.save({
+    notify: {
+      channel: 'clawbot',
+      key: 'bot_token_gate',
+      enabled: true,
+      // 已绑定（扫码时从 ilink_user_id 拿到的身份），令牌还没换过 ⇒ contextToken 为空。
+      // 计数先摆到 7：「被丢弃的入站不续额度」要能看出来，归零了才是错的。
+      clawbot: { botToken: 'bot_token_gate', userId: 'user_bound', contextToken: '', quotaUsed: 7 }
+    }
+  })
+  const sent = []
+  let inbound = { context_token: 'ctx_stranger', from_user_id: 'user_stranger' }
+  let polls = 0
+  const notifyFetchImpl = async (url, options) => {
+    const u = String(url)
+    if (u.includes('/sendmessage')) {
+      const body = JSON.parse(options.body)
+      sent.push({ text: body.msg.item_list[0].text_item.text, token: body.msg.context_token })
+      return { ok: true, status: 200, json: async () => ({ ret: 0, message_id: 7514520117146685578 }) }
+    }
+    if (u.includes('/getupdates')) {
+      polls += 1
+      const msg = inbound
+      inbound = null
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ret: 0, msgs: msg ? [msg] : [], get_updates_buf: 'buf_gate' })
+      }
+    }
+    return { ok: true, status: 200, json: async () => ({ ret: 0 }) }
+  }
+  // 隧道必须打桩（理由同上档）：真去 ensureCloudflared 会下载真二进制、污染共享缓存。
+  const t = await startBridge({
+    bridgeOptions: {
+      settingsStore: store,
+      notifyFetchImpl,
+      createCloudflareTunnel: async () => ({
+        url: 'https://gate-test.trycloudflare.com',
+        provider: 'cloudflare',
+        stop: async () => {},
+        process: { once: () => {} }
+      })
+    }
+  })
+  try {
+    const wait = (what, why) =>
+      new Promise((resolve, reject) => {
+        const deadline = Date.now() + 6000
+        const step = () => {
+          if (what()) return resolve()
+          if (Date.now() > deadline) return reject(new Error(`watcher never caught up: ${why}`))
+          setTimeout(step, 30)
+        }
+        step()
+      })
+    await wait(() => polls >= 2, 'stranger inbound consumed')
+
+    // 丢弃的三条后果，逐条断：这一档测的就是「什么都没发生」。
+    assert.equal(sent.length, 0, '非绑定者拿不到任何回话（回执与隧道地址都不发）')
+    assert.ok(
+      t.logs.some((l) => l.message.includes('clawbot inbound dropped')),
+      '丢弃要留一行 warn，否则现场看不出「为什么发了没反应」'
+    )
+    const afterStranger = store.load()?.notify?.clawbot || {}
+    assert.equal(afterStranger.userId, 'user_bound', '绑定者不因外人的一句入站被改写')
+    assert.equal(afterStranger.contextToken, '', '外人的令牌也不进存档')
+    assert.equal(afterStranger.quotaUsed, 7, '被丢弃的入站不续额度')
+
+    // 正证：绑定者本人说一句，同一套逻辑必须照常工作——否则这道卡就是把通道关死了。
+    // contextToken 从空变成有值 ⇒ 走首绑分支，发那封就绪回执。
+    inbound = { context_token: 'ctx_ok', from_user_id: 'user_bound' }
+    await wait(() => sent.length >= 1, 'bound user inbound accepted')
+    assert.ok(sent[0].text.includes('已就绪'), '本人入站照常发就绪回执')
+    assert.equal(sent[0].token, 'ctx_ok', '回执用新换到的令牌')
+    const afterBound = store.load()?.notify?.clawbot || {}
+    assert.equal(afterBound.userId, 'user_bound')
+    assert.equal(afterBound.contextToken, 'ctx_ok', '本人的令牌正常落盘')
+    // 归零之后紧接着发那封就绪回执，回执自己占一条额度 ⇒ 落盘是 1 不是 0。
+    // 关键是它从 7 变成了 1：续期确实发生了（被丢弃的那条没有这个效果）。
+    assert.equal(afterBound.quotaUsed, 1, '本人的入站照常续额度：7 → 归零 → 回执占回 1 条')
+  } finally {
+    await t.stop()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // 门地址回话与推送吃的是**同一条服务器额度**（一条入站换 10 条出站，服务器数所有出站）。
 // 2026-10-13 前它不计数：一次隧道换址交接就让账本比服务器落后一条，此后「第 10 条捎话」
 // 永远差一条——额度耗尽的那条被服务端静默拒收，用户只看到消息停了、没有任何解释。
