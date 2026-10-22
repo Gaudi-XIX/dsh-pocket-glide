@@ -53,7 +53,7 @@ test('desktop diagnostics: desktop gate, strict boolean, and the snapshot echo',
 
     const on = await post({ probe: true }, desktop)
     assert.equal(on.status, 200)
-    assert.deepEqual(await on.json(), { ok: true, probe: true })
+    assert.deepEqual(await on.json(), { ok: true, probe: true, phoneUa: null })
     assert.equal(store.load().diagnostics.probe, true, 'the setting lands in the settings file')
 
     const after = await (await httpFetch(`${t.base}/desktop/tunnel/status`, { headers: { Cookie: desktop } })).json()
@@ -61,7 +61,7 @@ test('desktop diagnostics: desktop gate, strict boolean, and the snapshot echo',
 
     const off = await post({ probe: false }, desktop)
     assert.equal(off.status, 200)
-    assert.deepEqual(await off.json(), { ok: true, probe: false })
+    assert.deepEqual(await off.json(), { ok: true, probe: false, phoneUa: null })
     assert.equal(store.load().diagnostics.probe, false)
   } finally {
     await t.stop()
@@ -149,4 +149,58 @@ test('the diagnostics switch posts to its own endpoint with a boolean body', () 
   const html = renderDesktopPairingPage({ ...baseDesktopOptions, locale: 'zh', diagnostics: { probe: false } })
   assert.match(html, /fetch\('\/desktop\/diagnostics'/, 'the page must post to the diagnostics route')
   assert.match(html, /\{probe:box\.checked\}/, 'the body is a strict boolean, matching the endpoint')
+})
+
+// The panel answers "which browser is the phone running" from the UA header of
+// the last phone request — no phone-side code, no extra request. The trap this
+// batch pins: the desktop pairing page is itself a stream of requests, and if
+// those counted, the answer would always be the desktop's browser.
+test('desktop diagnostics: the phone UA is remembered, and desktop traffic never overwrites it', async () => {
+  const { dir, store } = tempStore()
+  const t = await startBridge({ bridgeOptions: { settingsStore: store } })
+  try {
+    const desktop = await t.pairDesktop()
+    const head = { Cookie: desktop }
+
+    assert.equal((await (await httpFetch(`${t.base}/desktop/diagnostics`, { method: 'POST', headers: { ...head, 'content-type': 'application/json' }, body: JSON.stringify({ probe: true }) })).json()).phoneUa, null, 'nothing seen yet')
+
+    const phoneUa = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_2 like Mac OS X) PocketUaProbe/1.0'
+    // A phone request needs no cookie to be remembered: `handle()` records the
+    // header before any authorization, so even a 401 counts.
+    await httpFetch(`${t.base}/sw.js`, { headers: { 'user-agent': phoneUa } })
+    const seen = t.bridge.diagnosticsView().phoneUa
+    assert.equal(seen.ua, phoneUa, 'the phone UA is what the panel will show')
+    assert.ok(seen.label.length > 0, 'the label is resolved for the panel line')
+    assert.equal(typeof seen.at, 'number')
+
+    await httpFetch(`${t.base}/desktop/status`, { headers: { ...head, 'user-agent': 'Mozilla/5.0 (Windows NT 10.0) DesktopProbe/9' } })
+    assert.equal(t.bridge.diagnosticsView().phoneUa.ua, phoneUa, 'desktop traffic must not answer for the phone')
+
+    // The trap: the pairing page's own document is `/desktop` with no trailing
+    // slash, so a prefix test that only excluded `/desktop/` let the desktop
+    // browser overwrite the phone the moment someone opened the panel.
+    await httpFetch(`${t.base}/desktop`, { headers: { ...head, 'user-agent': 'Mozilla/5.0 (Windows NT 10.0) DesktopPage/9' } })
+    assert.equal(t.bridge.diagnosticsView().phoneUa.ua, phoneUa, 'the bare /desktop document must not overwrite it either')
+
+    const shown = await (await httpFetch(`${t.base}/desktop/diagnostics`, { method: 'POST', headers: { ...head, 'content-type': 'application/json' }, body: JSON.stringify({ probe: true }) })).json()
+    assert.equal(shown.phoneUa.ua, phoneUa, 'the endpoint echoes the remembered UA')
+  } finally {
+    await t.stop()
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('the diagnostics panel renders the phone UA line in both locales', () => {
+  const phoneUa = { ua: 'Mozilla/5.0 (iPhone) SafariProbe/2.1', label: 'Safari / iOS', at: 1 }
+  const zh = renderDesktopPairingPage({ ...baseDesktopOptions, locale: 'zh', diagnostics: { probe: false, phoneUa } })
+  assert.match(zh, /手机浏览器 UA/, 'the line is labelled')
+  assert.match(zh, /SafariProbe\/2\.1/, 'the raw UA is shown, escaped')
+
+  const en = renderDesktopPairingPage({ ...baseDesktopOptions, locale: 'en', diagnostics: { probe: false, phoneUa } })
+  assert.match(en, /Phone browser UA/)
+  assert.match(en, /SafariProbe\/2\.1/)
+
+  // Nobody has connected yet → a dash, never a blank that reads as a bug.
+  const none = renderDesktopPairingPage({ ...baseDesktopOptions, locale: 'zh', diagnostics: { probe: false } })
+  assert.match(none, /手机浏览器 UA（最近一次）：—/)
 })

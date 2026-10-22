@@ -5,6 +5,35 @@
 最新的一节对应当前 `package.json` 的 `version`。
 
 ## 未发布（工作树）
+### 通知轮询不再每 30 秒硬打一次卡住的宿主；「桌面端没有响应」取代「在重启」（2026-10-23，0.4.56）
+
+真机症状（m00002，逐字）：「桌面端在重启或暂时联系不上，正在重试……自从某次改动以后，特别频繁地出这个提示」。
+取证（2026-10-22 桥日志）：本地 15:21:34–16:11:31 连续 50 分钟里 `harness transport failed endpoint=session/list ... The operation was aborted due to timeout` **每 30.037 秒一次、共 85 次**，endpoint 只有 `session/list`；那 50 分钟里没有整页重载（无 `doc url=`）、没有手机交互（kbprobe 埋点 0 条）、也没有别的端点失败。⇒ 既不是手机网络断，也不是隧道断，是这台宿主那段时间对全量会话列表调用超过 30 秒不返回。
+
+提示要三环同时成立才出得来：
+
+- **宿主慢**：`session/list` 一次返回全部工作区全部会话（实测约 200KB），这台机器上曾整段挂住；
+- **桥有 30 秒硬超时**：`invokeHarnessCall` 的 `AbortSignal.timeout(30_000)`，超时返回 `__bridge/transport`；
+- **通知轮询每 30 秒无条件读一次全量列表**（`startNotifyWatcher` → `pollNotifyRunning` → `cachedSessionList(false)`），超时一返回就发下一次、没有退避，等于把这台慢宿主一直按在原点；页面再把 transport 类错误统一翻成「在重启」。
+
+改三处（`lib/bridge.js`、`lib/constants.js`、`lib/pages.js`）：
+
+- **手机页活着就不读列表**：`pollNotifyRunning` 开头先看 `now - phoneLiveAt() < MOBILE_LIVE_FRESH_MS`（30 秒内有过页面心跳）。页面活着时推送本来就会被 `sendNotice` 抑制（日志里成片的 `notify suppressed: phone page is live`），这次列表读到的结果必然白花，直接跳过并清空判定态（`notifyJudgeStates`、`retryStorms`），等真的没人看的时候重新取基线。
+- **失败退避**：读列表失败（超时或 `!ok`）时按 `NOTIFY_POLL_MS × 2^(streak-1)` 递增，封顶 `NOTIFY_RETRY_BACKOFF_MAX_MS = 300_000`（30→60→120→240→300 秒），日志记 `notify poll failed (N in a row), next attempt in Ns`；成功即归零。退避期间整个 tick 跳过，不再对卡住的宿主连打。
+- **文案改准**：`streamDownHost` 中英双语由「桌面端在重启或暂时联系不上，正在重试…」/「The desktop is restarting or unreachable, retrying…」改为「桌面端没有响应，正在重试…」/「The desktop is not responding, retrying…」。桥手里的事实只是「宿主 30 秒没应答」，说成「在重启」是超时误报成重启，也是这次被误导的直接来源。
+
+回归锁：`test/notify.test.js` 新增两条（手机页活着时一次列表都不读、且判定态被清空；失败后下一次调用被退避挡住，而不是每 30 秒重来），`test/error-visibility.test.js` 的三档文案断言同步新文案。全量 `node --test --test-concurrency=1 test/*.test.js`（pwsh）= **1445 tests / 1442 pass / 1 fail / 2 skipped**；唯一那条红是 `mobile-assets` 的 AC-UI1（`.todo-header` 触摸高度断言），干净 HEAD 复现同样红，属既有红，与本次改动无关。
+
+### 桌面诊断面板新增「手机浏览器 UA（最近一次）」（2026-10-23，0.4.56）
+
+需求（m00276）：「加个 UA 探针，加在诊断面板上」。零新增请求、零手机端代码：桥在唯一 HTTP 入口 `handle()` 里对**非 `/desktop` 开头**的每个请求记一次 `user-agent`（`notePhoneAgent`，截断 240 字符；UA 没变就只刷新时间），桌面配对页渲染时由 `diagnosticsView()` 带出 `phoneUa: { ua, label, at }`，面板在「诊断」区显示一行「label · ua」，没记录过就是 `—`。
+
+- 守卫用 `startsWith('/desktop')` 而不是 `/desktop/`：裸 `GET /desktop` 就是配对页本体，让它用自己的 UA 覆盖手机 UA 是错的那一侧。
+- 记录发生在鉴权之前，所以未配对、401 的手机请求也能留下 UA；反过来，桌面浏览器只要不碰 `/desktop*` 也不会污染它。
+- 只能拿到 HTTP 头里的 UA，拿不到 UA-CH 的品牌/型号列表（那要页面 JS 主动上报，本次没做）。
+
+回归锁：`test/diagnostics-panel.test.js` 新增两条（手机 UA 被记住，且 `/desktop/status`、裸 `/desktop` 都不得覆盖它；两种语言的面板都渲染这一行），既有两条断言同步多出的 `phoneUa: null` 字段。桌面配对页不参与手机壳字节预算（`mobilePageAssets` 改前改后字节完全一致）。
+
 ### 运行用时改为宿主钟直传：桥在既有帧上带 hostNow，页面不再自己算（2026-10-22，0.4.55）
 
 真机反馈（m00054）：「我刚刚重启，已经测试了，时间显示一片混乱……在一次工具调用或者一回合里面退出再进，时间就会重置，然后还会跳」「电脑端不是有时间吗？直接把那个时间传到手机 Pocket 上显示不行吗？……我就知道你肯定是要增加手机 Pocket 和电脑端的连接压力，我觉得这是严令禁止的」。上一版（4f7ac3b）的「宿主跨度重锚」在装载后真机仍复现重置＋跳变：静默的工具回合里批内最大记录戳不前进，下一条记录落地时跨度突然变大，显示就前跳；锚点被看门狗清掉或整页重建后重遇起点时，又会用本机挂钟重新锚定，显示回 1 秒。

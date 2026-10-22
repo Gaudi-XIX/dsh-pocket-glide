@@ -326,7 +326,7 @@ test('the latch is a per-round limit, not a lifetime quota', () => {
 test('the three disconnect tiers exist in both locales and are picked by cause', () => {
   for (const [key, zh, en] of [
     ['streamDownTunnel', '远程链接断了，正在自动重试…', 'The remote link dropped, retrying on its own…'],
-    ['streamDownHost', '桌面端在重启或暂时联系不上，正在重试…', 'The desktop is restarting or unreachable, retrying…'],
+    ['streamDownHost', '桌面端没有响应，正在重试…', 'The desktop is not responding, retrying…'],
     ['streamDownBackground', '会话被移到后台，回到前台会自动继续', 'This chat moved to the background; it resumes when you return'],
   ]) {
     assert.equal(L[key], zh, `zh tier ${key}`)

@@ -530,3 +530,92 @@ test('notify clawbot: the push is one line — status, name, quota tail, in that
   const bare = JSON.parse(seen[0].init.body).msg.item_list[0].text_item.text
   assert.equal(bare, '待回答｜部署周报')
 })
+
+// ---------------------------------------------------------------------------
+// Poll thrift (2026-10-22 incident): a live page must not cost a catalogue
+// read, and a Host that stopped answering must not be hammered every 30s.
+// ---------------------------------------------------------------------------
+
+test('notify poll: a live phone page never reads the catalogue, and forgets what it judged', async () => {
+  const sent = []
+  const reads = []
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname) => {
+        if (pathname !== '/api/session/list') return undefined
+        reads.push(pathname)
+        return { ok: true, value: { items: [] } }
+      }
+    },
+    bridgeOptions: notifyBridgeOptions(sent, [])
+  })
+  try {
+    // A page that authenticated within MOBILE_LIVE_FRESH_MS is "watching", and
+    // sendNotice suppresses every push of such a tick — so the catalogue read
+    // buys nothing. On 2026-10-22 the poll kept making it anyway, once per 30s,
+    // against the one endpoint the Host had stopped answering.
+    t.bridge.devices.set('live-device', { lastSeenAt: Date.now() })
+    t.bridge.notifyJudgeStates.set('s1', { active: true })
+    await t.bridge.pollNotifyRunning()
+    assert.equal(reads.length, 0, 'no catalogue read while the user is watching')
+    assert.equal(
+      t.bridge.notifyJudgeStates.size,
+      0,
+      'states are dropped — what happened under the user\'s eyes is not owed as a push'
+    )
+    // A stale stamp means the page went away, and the poll resumes from a fresh
+    // baseline: nothing watched-then-completed gets pushed late.
+    t.bridge.devices.set('live-device', { lastSeenAt: Date.now() - 10 * 60_000 })
+    await t.bridge.pollNotifyRunning()
+    assert.equal(reads.length, 1, 'a backgrounded phone puts the poll back to work')
+    assert.equal(sent.length, 0, 'the resumed tick is a baseline, not a catch-up push')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('notify poll: a failing Host is retried with a growing gap, not every 30s', async () => {
+  const sent = []
+  let failing = true
+  let reads = 0
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname) => {
+        if (pathname !== '/api/session/list') return undefined
+        reads += 1
+        return failing
+          ? { ok: false, error: 'Harness is not reachable.' }
+          : { ok: true, value: { items: [] } }
+      }
+    },
+    bridgeOptions: notifyBridgeOptions(sent, [])
+  })
+  try {
+    await t.bridge.pollNotifyRunning()
+    assert.equal(reads, 1, 'the first tick reads the catalogue')
+    assert.equal(t.bridge.notifyFailStreak, 1, 'a failed read is counted')
+    assert.ok(
+      t.bridge.notifyRetryAt > Date.now(),
+      'and the next attempt is pushed out by the backoff'
+    )
+    // Clearing the cache proves the backoff — not the 10s TTL — is what holds
+    // the next attempt off.
+    t.bridge._sessionListCache = undefined
+    await t.bridge.pollNotifyRunning()
+    assert.equal(reads, 1, 'the backoff keeps the next tick from touching the Host')
+
+    // Recovery: the window passing and a good read reset both the streak and
+    // the gate, so the poll is back on its normal cadence.
+    t.bridge.notifyRetryAt = 0
+    failing = false
+    t.bridge._sessionListCache = undefined
+    await t.bridge.pollNotifyRunning()
+    assert.equal(reads, 2, 'a recovered Host is read again')
+    assert.equal(t.bridge.notifyFailStreak, 0, 'success clears the streak')
+    assert.equal(t.bridge.notifyRetryAt, 0, 'and re-opens the gate')
+  } finally {
+    await t.stop()
+  }
+})
