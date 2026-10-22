@@ -6,6 +6,18 @@
 
 ## 未发布（工作树）
 
+### 手机端不再整片闪：流式期只换最后一条消息，整屏重建只在结构真的变了时（2026-10-22）
+
+真机反馈（m03046，截图 m03088）：一次 69 次工具调用、14 个串行 step 的回合里，会话页每 250ms 把整个 `#messages` 清空重排一次——用户看到的是整片闪。三条路径叠出来的：
+
+- **轮询比键把流算进「变了」**：`applyHistory` 的 `key` 含 `messages`，而流式期轮询手里那批比屏上少一截流（`tokenStream` 与还没合并的事件），于是每个安静的工具回合也判「变了」→ 整屏重建。现在流式期（`streamConnected && agentRunning`）比键里消息位置换成 `null`，屏上那棵树归 `flushStreamRender` 管；`flushStreamRender` 里的 `lastHistoryKey=''` 一并删掉（那行会让下一拍轮询必触发一次整屏重建），回合结束后由 `applyHistory` 自己按新内容判一次。
+- **每个事件都要求整屏重建**：`applyStreamEventFrame` 过去对除 `assistant/chunk` 之外的**每个**事件都传 `fullPaint=true`——69 次 `tool/result`、`step/start` 只是往最后一条消息里追内容，走 `patchLastStreamMessage` 换那一条就够。现在只在 `FULL_PAINT_STREAM_EVENTS = {turn/end, user/message, turn/start}` 时才整屏重建。
+- **同一帧排两队**：`queueStreamRender` 开头补 `if(streamRenderFrame!==null)return;`，同一 `requestAnimationFrame` 回调里重复调用不再各排一队。
+
+隧道轮询的游标也只跟到这一批真正带回的序号（`frames.length ? seenSeq : body.latestSeq`）：`latestSeq` 是交换机此刻的最新序号，可能落在这一批还没送到的帧之后（模型/工具事件与 `assistant/chunk` 是两条记录流），直接跳过去会把中间那段永久漏在窗口外。
+
+回归锁：`test/pages-send-mode.test.js` 钉 `FULL_PAINT_STREAM_EVENTS` 三个成员与 `fullPaint` 条件；`test/stream-watermark.test.js` 钉游标只前进不跳。全量 `node --test --test-concurrency=1 test/*.test.js` = 1430 tests / 1426 pass，仅 `test/tunnel.test.js` 两例 MSYS GNU tar 把 `-C C:\…` 当远程主机（pwsh 下全绿，环境伪红）。
+
 **工具行按到达顺序混排不置顶，一段只出一行，失败按次数说清楚**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值，手机须完全关闭重开。用户 2026-10-22 上午真机两条：「除了思考之外的内容，还是固定为一行，并且还固定置顶了」「聚合的方法不对，显示的时序也不对。应该根据实际情况，工具就是工具，思考就是思考，反正这个顺序」；下午第三条：「如果有失败的，会错误地显示『调用 x 次工具（失败）』，实际应该说『调用了 m 次工具（失败 x 次）』」）。
 
 - **① 按事件真实顺序混排、不置顶**：`renderMessage` 的 turnProcess 分支改为顺序遍历 `blocks`——连续的工具块攒成一次 `toolRun`，遇到思考/正文就先把它落成一行（`processRows` → `processLineHtml`）再渲染该块。于是「工具行、思考块、正文」各在各的位置：工具在前就是工具在前，思考在前就是思考在前，工具行不再被抬到段首。（08:1x 那版是 `parts.unshift(line)`，把工具行钉死在段首，被用户打回。）
