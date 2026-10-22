@@ -161,7 +161,7 @@ test('the verb tables cover every category in both locales and both states', () 
     }
     assert.ok(L.processSep, `${locale}: the join separator must exist`)
     assert.ok(L.toolCount.includes('{count}'), `${locale}: the count template needs its slot`)
-    assert.ok(L.failMark, `${locale}: the failure mark must exist`)
+    assert.ok(L.toolFailedCount.includes('{count}'), `${locale}: the failure breakdown needs its slot`)
   }
 })
 
@@ -201,7 +201,7 @@ test('the en verbs carry the english phrasing', () => {
 test('processLineText counts per category, in arrival order, running last', () => {
   const { processLineText } = renderSandbox('zh')
   const L = labels('zh')
-  const pack = (rows) => processLineText(rows, { verbs: L.stepVerbs, done: L.stepDone, sep: L.processSep, count: L.toolCount, failedMark: L.failMark })
+  const pack = (rows) => processLineText(rows, { verbs: L.stepVerbs, done: L.stepDone, sep: L.processSep, count: L.toolCount, failedTemplate: L.toolFailedCount })
   assert.equal(pack([{ category: 'read', count: 1 }]), '已读取文件', 'a lone call never shows a count')
   assert.equal(pack([{ category: 'read', count: 3 }]), '已读取文件 3 次', 'a run carries its count')
   assert.equal(
@@ -210,7 +210,26 @@ test('processLineText counts per category, in arrival order, running last', () =
     'what is still going rides the end of the line',
   )
   assert.equal(pack([{ category: 'edit', count: 1, running: true }]), '正在编辑文件', 'before anything settles, the line is the verb alone')
-  assert.equal(pack([{ category: 'edit', count: 1, failed: true }]), '修改了文件（失败）', 'a failure stays legible')
+  assert.equal(
+    pack([{ category: 'tools', count: 1, failed: true, failedCount: 1 }]),
+    '已调用工具（失败 1 次）',
+    'a lone failure still says how many broke',
+  )
+  assert.equal(
+    pack([{ category: 'tools', count: 5, failed: true, broken: 2 }]),
+    '已调用工具 5 次（失败 2 次）',
+    '2026-10-22 m02802: the count is the whole run, the breakdown rides in brackets',
+  )
+  assert.equal(
+    pack([{ category: 'tools', count: 5, failed: true }]),
+    '已调用工具 5 次（失败 1 次）',
+    'without a breakdown the mark counts the entry as one broken call, never the whole run',
+  )
+  assert.equal(
+    pack([{ category: 'tools', count: 1, failed: true, broken: 1 }, { category: 'tools', count: 2, failed: true, broken: 1 }]),
+    '已调用工具 3 次（失败 2 次）',
+    'two rows of one category add their totals AND their breakdowns',
+  )
   assert.equal(
     pack([{ category: 'read', count: 2 }, { category: 'commands', count: 1 }, { category: 'webSearch', count: 4 }]),
     '已读取文件 2 次，执行了命令，已搜索网页 4 次',

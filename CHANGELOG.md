@@ -6,6 +6,14 @@
 
 ## 未发布（工作树）
 
+**工具行按到达顺序混排不置顶，一段只出一行，失败按次数说清楚**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据＝运行桥 `GET /sw.js` 的 `V=` 变为盘上实算值，手机须完全关闭重开。用户 2026-10-22 上午真机两条：「除了思考之外的内容，还是固定为一行，并且还固定置顶了」「聚合的方法不对，显示的时序也不对。应该根据实际情况，工具就是工具，思考就是思考，反正这个顺序」；下午第三条：「如果有失败的，会错误地显示『调用 x 次工具（失败）』，实际应该说『调用了 m 次工具（失败 x 次）』」）。
+
+- **① 按事件真实顺序混排、不置顶**：`renderMessage` 的 turnProcess 分支改为顺序遍历 `blocks`——连续的工具块攒成一次 `toolRun`，遇到思考/正文就先把它落成一行（`processRows` → `processLineHtml`）再渲染该块。于是「工具行、思考块、正文」各在各的位置：工具在前就是工具在前，思考在前就是思考在前，工具行不再被抬到段首。（08:1x 那版是 `parts.unshift(line)`，把工具行钉死在段首，被用户打回。）
+- **② 一段工具工作只出一行且带「正在干啥」**：`processRows` 里同一类目的已完成与进行中合成**一行**（`{count, running, failed, broken}`），行尾由 `processLineText` 接动词（如「已调用工具 8 次，正在运行命令」）。旧行为是 done 一行 + running 再起一行，真机上就是「已调用工具 4 次」下面紧跟「已调用工具 2 次」。
+- **③ 失败按次数说**：过程行标记从「（失败）」改为「（失败 N 次）」——线上是「已调用工具 8 次（失败 2 次）」。新增标签 `toolFailedCount`（zh `失败 {count} 次`／en `{count} failed`）取代 `failMark`；`processLineText` 的入参键同步改成 `failedTemplate`（**不能叫 `failedCount`**：标签表里同时有 `count`/`failedCount`/`toolFailedCount` 三键，取 `table.failedCount` 会拿到模板串而不是次数，这条踩过）。条目内部用 `broken` 记失败条数，行级 `broken` 缺省时按 1 计数——**不得回落到整行 `count`**，否则首个失败行会打印「5 次（失败 5 次）」。
+- **回归锁**：`test/pages-process-render.test.js`（30 test）新增「一类失败带次数」「两行同类相加总数与失败数」「省略细分时只算一条」「模板取 `failedTemplate` 而标签表是 `toolFailedCount`」四组；`processRows`/`processLineHtml` 的桩在 `test/pages-scroll-anchors.test.js`、`test/visible-interleave.test.js` 同步。
+- **回归**：全量 `node --test --test-concurrency=1 test/*.test.js` = **1428 tests / 1424 pass / 2 fail**（2026-10-22 13:2x，bash 跑法）；两例均为 `test/tunnel.test.js` 造 .tgz 时 MSYS GNU tar 把 `-C C:\…` 当远程主机（`tar (child): Cannot connect to C: resolve failed`），在 PowerShell 下跑该文件全绿，属环境伪红、与本笔无关。
+
 **阶梯「会话内容」那行改数真实消息条数，且一行一进入就把数字交出来**（⏳ 待重启生效：`lib/pages.js` 属宿主装载面；生效判据同上一条。用户 2026-10-22 两条小调整：「那个会话消息那儿不应该写『10 组消息』，而是看能不能真实地把消息的条数写出来」「有没有可能刚进入那一行，就把后面对应的数字显示出来」）——同日前一条（闸门寄存 + 按序揭示）的两点就地修正。
 
 - **①「10 组消息」改成真实条数**：新增纯函数 `countTailMessages(tails)`，按记录类型只数 `user/message` 与 `assistant/message`（与 `visibleMessages()` 渲染同判据；`assistant/chunk`／`tool/call`／`tool/result`／`turn/end`／`deliverables/presented` 都不算消息），计数格文案变 `N 条消息`／`N msg`（原 `N 组消息`／`N ready`）。原来数的是 tail 集合里非 `error` 的 key 数（≤`BOOT_PRELOAD_TAILS=10`），那是「预载了几份尾包」，写在「正在同步会话内容」这一行会被读成「十条消息」。
