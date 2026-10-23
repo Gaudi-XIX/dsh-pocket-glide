@@ -4,6 +4,27 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 0.4.57 — 2026-10-23
+
+**同一个故障五分钟内只说一次、退避真的退、慢不再说成断**。装机变化一条：手机端刷新页面即生效（改动全在页面脚本里，桥与宿主代码没动，不必重启宿主）。
+
+### 断线提示去重到每五分钟一次；宿主慢不再被说成「连接已断开」（2026-10-23，0.4.57）
+
+真机症状（m00600，逐字）：「不停在弹这两个提示，这两个提示是什么机制带回来的？如果连接不上，那就应该要采取别的措施呀」。
+
+取证（`C:\Users\toast\.dsh\pocket\logs\pocket.log`，东八）：提示的两个来源各自都在「宿主卡住」时反复触发——`reconnectBar` 每 8 秒宽限到期就弹一次，一帧回来立刻解锁，下一帧又断就又弹；`session/list` 一个时段 71 条传输失败，其中重启后 32 条里 16 条与通知轮询同源、15 条与页面调用同源。两条提示的原文都被写成「断开」，而桥手里的事实常常只是「宿主这次没在 12 秒内答完」。
+
+改四处（全在 `lib/pages.js`）：
+
+- **一处冷却，两个写者共用**：`paintStreamDown` 记 `streamDownRearmAt = now + STREAM_DOWN_COOLDOWN_MS(300 000)`，冷却未过期时直接返回。帧那条腿（`notifyStreamDown`）与 RPC 那条腿（`showError` 的 disconnected 分支）走同一个闸，所以「一帧回来就解锁、下一帧又断」不再能制造每十秒一次的闪烁。断线本身不被掩盖：阈值、退避、重连尝试全都没动，只是不再重复告知。
+- **恢复后要稳二十秒才准再弹**：`noteStreamRecovery` 把重装时间推到 `max(冷却到期, now + STREAM_DOWN_STABLE_MS(20 000))`。故障持续超过五分钟时，第一次恢复不会立刻把「许可」还回去，得真稳二十秒。
+- **慢与断分档**：`showError` 的 disconnected 分支按实时腿是否还活着选文案——流仍在送帧（`streamConnected && now - lastStreamFrameAt < 30 000`）说「桌面端处理较慢，正在等它回应…」，流也静了才说「连接已断开，正在重试…」。`streamDownHost` 的中英文案随之由「桌面端没有响应，正在重试…」/「The desktop is not responding, retrying…」改为「桌面端处理较慢，正在等它回应…」/「The desktop is slow to answer; still waiting…」。
+- **退避真的退**：① 历史轮询的活跃档 `HISTORY_POLL_ACTIVE_MS` 由 250 ms 放到 1 500 ms（它只在「实时流断了 / 隧道轮询连败两次」时启用，正常态恒为 5 000 ms，不受影响）——实测这一档是「越卡越卡」的加速器：`1/max(250ms, 请求耗时)` 在宿主快而流失联时一分钟可打到两百多次；② 隧道事件轮询连续失败三次起把上限从 6 000 ms 抬到 `EVENTS_POLL_SLOW_MS = 30 000`，阶梯 12 s → 24 s → 30 s 封顶，成功即归零。
+
+回归锁（`test/error-visibility.test.js`）：冷却挡住第二个故障、恢复后二十秒才解锁、超长故障按稳定性重装、RPC 那条腿同样被冷却挡住、慢与断两档各说各话；`test/pages-disconnect-copy.test.js` 与 `test/turn-end-errors.test.js` 的沙箱同步新状态变量与读取上限（`streamDownHost` 的第四条读取者是新的分档判断，仍然不进任何消息气泡）。全量 `node --test --test-concurrency=1 test/*.test.js`（pwsh 7）= **1466 tests / 1464 pass / 0 fail / 2 skipped**。
+
+静态资产：`ASSET_BUDGET_BYTES = 391_500` 没有抬高，本次靠压缩等量注释腾出位置——`lib/pages.js` 里两条 turn high-water 注释、滚动时序埋点与锚点两处注释做了同义压缩（内容未丢）；实测余量 zh 71 B / en 174 B。
+
 ## 0.4.56 — 2026-10-23
 
 **首屏只下一次、同一 Bot 只占一行、断线提示不再每 30 秒闪一次**。装机变化一条：DSH 宿主需重启一次，手机端页面刷新即生效（桥在宿主进程内）。以下各节同属本版。

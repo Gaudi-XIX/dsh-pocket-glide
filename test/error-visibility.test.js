@@ -117,11 +117,19 @@ const NOTICE_ORGANS = [
 // The flags the notice organs share. Every sandbox that runs one of them has to own
 // them, or the page code throws on a missing global and the test proves nothing.
 const CODE_COPY_LINE = js.match(/const STREAM_CODE_COPY=\{[^}]*\}/)[0]
+// The reconnect cooldown and the stability window it re-arms on, read off the page so a
+// sandbox cannot drift from the numbers the phone actually ships (2026-10-23).
+const NOTICE_COOLDOWN_MS = Number(/STREAM_DOWN_COOLDOWN_MS=(\d+)/.exec(js)[1])
+const NOTICE_STABLE_MS = Number(/STREAM_DOWN_STABLE_MS=(\d+)/.exec(js)[1])
 const NOTICE_STATE = (state = {}) => `
     let importantErrorActive=${JSON.stringify(Boolean(state.importantErrorActive))}
     let streamDownNoticeShown=${JSON.stringify(Boolean(state.streamDownNoticeShown))}
     let streamDownGraceTimer=null
+    let streamDownRearmAt=${Number(state.streamDownRearmAt) || 0}
+    let streamConnected=${JSON.stringify(Boolean(state.streamConnected))}
+    let lastStreamFrameAt=${Number(state.lastStreamFrameAt) || 0}
     const STREAM_DOWN_GRACE_MS=8000
+    const STREAM_DOWN_COOLDOWN_MS=${NOTICE_COOLDOWN_MS},STREAM_DOWN_STABLE_MS=${NOTICE_STABLE_MS}
     let tunnelLinkActive=${JSON.stringify(Boolean(state.tunnelLinkActive))}
     ${CODE_COPY_LINE}
     const L=${JSON.stringify(L)}
@@ -148,6 +156,8 @@ function buildNoticeSandbox(state = {}) {
       showError, clearTransientError, notifyStreamDown, noteStreamRecovery, streamDownCopy, setStatusCopy,
       get importantErrorActive(){return importantErrorActive},
       get streamDownNoticeShown(){return streamDownNoticeShown},
+      get streamDownRearmAt(){return streamDownRearmAt},
+      set streamDownRearmAt(value){streamDownRearmAt=value},
       set tunnelLinkActive(value){tunnelLinkActive=value},
       containers,
     }
@@ -371,7 +381,7 @@ test('the recovery still retires the outage notice it answered (V-4 companion)',
 
 // ------------------------------------------------- 每轮断开最多一次（闩锁，不是绝对计数）
 
-test('the disconnect notice speaks once per drop and re-arms on the first frame back', () => {
+test('the disconnect notice speaks once per drop, and a new drop waits the cooldown out', () => {
   const sandbox = buildNoticeSandbox({ tunnelLinkActive: true })
   sandbox.notifyStreamDown()
   const first = sandbox.containers.reconnectBar.textContent
@@ -389,20 +399,40 @@ test('the disconnect notice speaks once per drop and re-arms on the first frame 
   assert.equal(sandbox.streamDownNoticeShown, false, 'recovered')
   assert.equal(sandbox.containers.reconnectBar.textContent, '', 'and the notice it answered is gone')
   assert.equal(sandbox.containers.statusText.textContent, L.statusConnected)
+  // 2026-10-23: a bar that came back every ten seconds was the report. The same outage is
+  // stated once per cooldown, so a link that keeps flapping stops interrupting the reader.
+  assert.ok(sandbox.streamDownRearmAt > Date.now(), 'the recovery left the cooldown running')
   sandbox.notifyStreamDown()
-  assert.equal(sandbox.containers.reconnectBar.textContent, L.streamDownTunnel, 'a new drop is a new round')
+  assert.equal(sandbox.containers.reconnectBar.hidden, true, 'a new drop inside the cooldown says nothing')
+  sandbox.streamDownRearmAt = Date.now() - 1
+  sandbox.notifyStreamDown()
+  assert.equal(sandbox.containers.reconnectBar.textContent, L.streamDownTunnel, 'past the cooldown a drop speaks again')
 })
 
-test('the latch is a per-round limit, not a lifetime quota', () => {
+test('the cooldown, not the frame, decides when the notice may speak again', () => {
   const sandbox = buildNoticeSandbox()
+  sandbox.notifyStreamDown()
+  assert.equal(sandbox.streamDownNoticeShown, true, 'the notice is latched through the outage')
+  sandbox.noteStreamRecovery()
+  assert.equal(sandbox.streamDownNoticeShown, false, 'and the recovery releases the latch')
   for (let round = 0; round < 3; round += 1) {
     sandbox.notifyStreamDown()
     sandbox.notifyStreamDown()
-    sandbox.notifyStreamDown()
-    assert.equal(sandbox.streamDownNoticeShown, true, 'the notice is latched through the outage')
-    sandbox.noteStreamRecovery()
-    assert.equal(sandbox.streamDownNoticeShown, false, 'and the recovery releases the latch')
+    assert.equal(sandbox.streamDownNoticeShown, false, 'but the cooldown keeps a flapping link quiet')
   }
+  assert.equal(NOTICE_COOLDOWN_MS, 300000, 'five minutes between two statements of the same outage')
+})
+
+test('an outage that outlives its cooldown re-arms on twenty stable seconds', () => {
+  const sandbox = buildNoticeSandbox()
+  sandbox.notifyStreamDown()
+  assert.equal(NOTICE_STABLE_MS, 20000, 'the stability window the page ships')
+  sandbox.streamDownRearmAt = Date.now() - 1 // the outage outlasted its own cooldown
+  sandbox.noteStreamRecovery()
+  assert.ok(
+    sandbox.streamDownRearmAt > Date.now() + NOTICE_STABLE_MS - 2000,
+    'so the frame that ends it re-arms on stability, not on the frame itself',
+  )
 })
 
 // ---------------------------------------------------------------- 断线原因三档标签
@@ -410,7 +440,7 @@ test('the latch is a per-round limit, not a lifetime quota', () => {
 test('the three disconnect tiers exist in both locales and are picked by cause', () => {
   for (const [key, zh, en] of [
     ['streamDownTunnel', '远程链接断了，正在自动重试…', 'The remote link dropped, retrying on its own…'],
-    ['streamDownHost', '桌面端没有响应，正在重试…', 'The desktop is not responding, retrying…'],
+    ['streamDownHost', '桌面端处理较慢，正在等它回应…', 'The desktop is slow to answer; still waiting…'],
     ['streamDownBackground', '会话被移到后台，回到前台会自动继续', 'This chat moved to the background; it resumes when you return'],
   ]) {
     assert.equal(L[key], zh, `zh tier ${key}`)
@@ -420,6 +450,29 @@ test('the three disconnect tiers exist in both locales and are picked by cause',
   assert.equal(buildNoticeSandbox({ tunnelLinkActive: true }).streamDownCopy(), L.streamDownTunnel, 'a tunnel page blames the link')
   const hidden = buildNoticeSandbox({ document: { hidden: true }, tunnelLinkActive: true })
   assert.equal(hidden.streamDownCopy(), L.streamDownBackground, 'and a backgrounded tab says it moved to the background')
+})
+
+test('a repeated RPC timeout cannot flap the bar either — one cooldown for both writers (2026-10-23)', () => {
+  const sandbox = buildNoticeSandbox()
+  sandbox.showError('chatError', { disconnected: true })
+  assert.equal(sandbox.containers.reconnectBar.hidden, false, 'the first timeout speaks')
+  sandbox.noteStreamRecovery()
+  assert.equal(sandbox.containers.reconnectBar.hidden, true, 'and the recovery retires it')
+  sandbox.showError('chatError', { disconnected: true })
+  assert.equal(sandbox.containers.reconnectBar.hidden, true, 'the next one inside the cooldown stays silent')
+})
+
+test('a slow desktop is not called a dropped connection (2026-10-23)', () => {
+  const slow = buildNoticeSandbox({ streamConnected: true, lastStreamFrameAt: Date.now() })
+  slow.showError('chatError', { disconnected: true })
+  assert.equal(
+    slow.containers.reconnectBar.textContent,
+    L.streamDownHost,
+    'a stream still delivering frames means the desktop is slow, not gone',
+  )
+  const gone = buildNoticeSandbox({ streamConnected: false })
+  gone.showError('chatError', { disconnected: true })
+  assert.equal(gone.containers.reconnectBar.textContent, L.disconnectedRetry, 'a silent stream is a dropped connection')
 })
 
 test('the tunnel tier comes from the status payload, not from a guess', () => {
@@ -659,8 +712,8 @@ function buildStaleSandbox({ hidden = false, clock = 1_000 } = {}) {
     'openSessionStream',
     'world',
     `
-    let activeSession='s1',streamConnected=true,sessionStream=null,lastStreamFrameAt=0,streamDownNoticeShown=false,streamDownGraceTimer=null,streamStaleTimer=null,streamRetryTimer=null,tunnelLinkActive=false,importantErrorActive=false
-    const STREAM_DOWN_GRACE_MS=8000
+    let activeSession='s1',streamConnected=true,sessionStream=null,lastStreamFrameAt=0,streamDownNoticeShown=false,streamDownGraceTimer=null,streamDownRearmAt=0,streamStaleTimer=null,streamRetryTimer=null,tunnelLinkActive=false,importantErrorActive=false
+    const STREAM_DOWN_GRACE_MS=8000,STREAM_DOWN_COOLDOWN_MS=${NOTICE_COOLDOWN_MS},STREAM_DOWN_STABLE_MS=${NOTICE_STABLE_MS}
     ${staleLine()}
     const L=${JSON.stringify(L)}
     const $=(id)=>containers[id]

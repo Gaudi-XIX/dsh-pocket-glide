@@ -105,7 +105,11 @@ function buildNoticeSandbox(state = {}) {
     let importantErrorActive=${JSON.stringify(Boolean(state.importantErrorActive))}
     let streamDownNoticeShown=${JSON.stringify(Boolean(state.streamDownNoticeShown))}
     let streamDownGraceTimer=null
+    let streamDownRearmAt=0
+    let streamConnected=${JSON.stringify(Boolean(state.streamConnected))}
+    let lastStreamFrameAt=0
     const STREAM_DOWN_GRACE_MS=8000
+    const STREAM_DOWN_COOLDOWN_MS=${Number(/STREAM_DOWN_COOLDOWN_MS=(\d+)/.exec(js)[1])},STREAM_DOWN_STABLE_MS=${Number(/STREAM_DOWN_STABLE_MS=(\d+)/.exec(js)[1])}
     let tunnelLinkActive=${JSON.stringify(Boolean(state.tunnelLinkActive))}
     ${CODE_COPY_LINE}
     const L=${JSON.stringify(L)}
