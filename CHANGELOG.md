@@ -6,7 +6,7 @@
 
 ## 0.4.56 — 2026-10-23
 
-**首屏只下一次、同一 Bot 只占一行、断线提示不再每 30 秒闪一次**。装机变化一条：DSH 宿主需重启一次，手机端页面刷新即生效（桥在宿主进程内）。以下五节同属本版。
+**首屏只下一次、同一 Bot 只占一行、断线提示不再每 30 秒闪一次**。装机变化一条：DSH 宿主需重启一次，手机端页面刷新即生效（桥在宿主进程内）。以下各节同属本版。
 
 ### 通知轮询不再每 30 秒硬打一次卡住的宿主；「桌面端没有响应」取代「在重启」（2026-10-23，0.4.56）
 
@@ -71,6 +71,18 @@
 **明确的失败不走宽限**：发送失败（`e.disconnected`，只来自 `rpc()` 的 fetch reject 与 401）仍然**立即**画「连接已断开，正在重试…」。这条若也等 8 秒，用户点发送、失败、几秒后隧道自愈，结果是浮条不出现、输入框旁的红字也不写——彻底没反应比闪烁更糟。顺带修掉一个遗留问题：回到列表页时已亮起的浮条以前不会收起来（全页只有 `noteStreamRecovery` 一个隐藏点，而它只在收到帧时调用）。回归锁：`test/error-visibility.test.js` 新增专用沙箱 `buildGraceSandbox` 四条（窗口内不显影、到期才开口、窗口内来一帧则永不出、明确失败立即出），另同步四个既有沙箱的计时器桩。
 
 装机与验收：以上四项都要重启 DSH 宿主才生效（桥跑在宿主进程内）。全量 `node --test --test-concurrency=1 test/*.test.js`（pwsh）= **1463 tests / 1461 pass / 0 fail / 2 skipped**。独立审查（Verifier，只读）结论：**必改与注意项已逐条复核闭合，全量测试未由审查方复跑**。手机壳资产预算：zh 391,251 B / en 391,149 B，线（391,500 B）未抬。
+
+### 任务 dock 收成右下角胶囊：不再横贯全宽、不再把消息区挤窄（2026-10-22，0.4.56）
+
+症状（用户三条要求）：待办条横贯屏宽，把消息区挤窄；要求「默认往右缩进收纳到右下角」「保持悬浮不遮挡」「不与上翻下翻冲突」。
+
+改法：`.todo-dock` 从 composer 流内的全宽卡改成右贴边胶囊（`width:max-content` + `margin:0 0 8px auto`）。容器与折叠列表 `pointer-events:none`（竖向手势穿到消息区），只有头部 `pointer-events:auto`；`flex-direction:column-reverse` 让展开的卡片向上长、头部位置不动；展开态点胶囊外任意处收起；列表 `touch-action:pan-y` + `overscroll-behavior:contain`，滚到底不带动消息区。
+
+让位链必须补 `--todo-h`：胶囊在 composer 流内会把 composer 盒子顶高 52px，而 `syncComposerHeight()` 只量 `.composer-inner`（`--composer-h` 故意不含 dock），所以凡按 `--composer-h` 定位的固定层（`.scroll-anchors`、`#composer .session-settings`）都得自己把 `--todo-h` 加回让位栈。2026-10-22 第一版曾摘掉后两处，↑/↓ 与设置面板当场压到胶囊上——回归钉里专门钉了这两条。
+
+回归锁：`test/goal-queue-dock.test.js` 一条 12 项字面钉（形态、`pointer-events`、`touch-action`、点外收起、两处 `--todo-h` 让位）；`test/mobile-assets.test.js` 的 44px 触摸底线清单同步新形状。目验判据 7 项在 `docs/GUI-CHECKLIST.md` 第 45 条，机理与纪律在 `docs/SOP-底部让位带与触摸死区.md`。
+
+真机状态：字符层绿；渲染层与真机层待用户重启宿主后走查（判据见清单第 44/45 条）。
 
 ### 运行用时改为宿主钟直传：桥在既有帧上带 hostNow，页面不再自己算（2026-10-22，0.4.55）
 
