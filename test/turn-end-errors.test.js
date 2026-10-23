@@ -143,7 +143,7 @@ test('the error line carries a dropped stream; the transcript still carries the 
   // 2. The transcript renderer never speaks for the transport.
   const renderer = source.slice(source.indexOf('function renderMessage('), source.indexOf('\n', source.indexOf('function renderMessage(')))
   assert.notEqual(renderer, '', 'the message renderer must still exist')
-  for (const key of ['disconnectedRetry', 'streamDownTunnel', 'streamDownHost', 'streamDownBackground']) {
+  for (const key of ['disconnectedRetry', 'streamDownTunnel', 'streamDownHost', 'streamDownFailed', 'streamDownBackground']) {
     assert.ok(!renderer.includes(`L.${key}`), `${key} must not be rendered into a message bubble`)
   }
   // Each disconnect label is read by exactly two places: the copy classifier and the

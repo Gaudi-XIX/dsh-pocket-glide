@@ -23,17 +23,23 @@
 
 回归锁（`test/error-visibility.test.js`）：冷却挡住第二个故障、恢复后二十秒才解锁、超长故障按稳定性重装、RPC 那条腿同样被冷却挡住、慢与断两档各说各话、**冷却期回落写正文而不是什么都不说**（`chatError` 仍是 `disconnectedRetry`）；`test/pages-disconnect-copy.test.js` 与 `test/turn-end-errors.test.js` 的沙箱同步新状态变量与新文案 key（`streamDownHost` 与新的 `streamDownFailed` 各管一档，都不进任何消息气泡）。全量 `node --test --test-concurrency=1 test/*.test.js` = **1466 tests / 1464 pass / 0 fail / 2 skipped**。
 
-静态资产：`ASSET_BUDGET_BYTES = 391_500` 没有抬高，本次靠压缩等量注释腾出位置——`lib/pages.js` 里两条 turn high-water 注释、滚动时序埋点与锚点两处注释做了同义压缩（内容未丢），补审又压了 `S-R3-3` 半开流那条（8 行 → 5 行，四个 keepalive 周期的理由保留）；终值 zh 391,274（余 226 B）/ en 391,181（余 319 B）。
+静态资产：`ASSET_BUDGET_BYTES = 391_500` 没有抬高，本次靠压缩等量注释腾出位置——`lib/pages.js` 里两条 turn high-water 注释、滚动时序埋点与锚点两处注释做了同义压缩（内容未丢），补审又压了 `S-R3-3` 半开流那条（8 行 → 5 行，四个 keepalive 周期的理由保留）；终值 **zh 391,299（余 201 B）/ en 391,206（余 294 B）**（两轮审查改完后重测）。
 
 ### 独立审查后的三处修正（2026-10-23，同 0.4.57）
 
 只读审查对 `58b29c8` 判「可以交付（附条件）」，三项必改，都已改：
 
-- **请求已失败不再说「正在等它回应」**：`rpcFailure` 原先把 transport 类失败也映射到 `streamDownHost`（那句是「处理较慢，正在等它回应」），语义与事实相反。新增 `streamDownFailed`：「桌面端没有响应，这条没有发出去，请重试」/「The desktop did not answer; the message was not sent — try again.」。`streamDownHost` 只留给「还活着、只是慢」那一档。原先把这个错位锁成绿的两条断言已改判新 key。
-- **冷却不再等于静默失败**：`paintStreamDown` 改为返回布尔，`showError` 的 disconnected 分支只在真画了浮条时才 `return`；被冷却挡下时回落写正文（`L.disconnectedRetry`）。用户按下发送却什么都没看到，是比多弹一次更坏的结果。
+- **请求已失败不再说「正在等它回应」**：`rpcFailure` 原先把 transport 类失败也映射到 `streamDownHost`（那句是「处理较慢，正在等它回应」），语义与事实相反。新增 `streamDownFailed`：「桌面端没有响应，这次没有完成，请重试」/「The desktop did not answer; this did not complete — try again.」。`streamDownHost` 只留给「还活着、只是慢」那一档。原先把这个错位锁成绿的两条断言已改判新 key。文案刻意不指代「这条消息」——`rpcFailure` 是所有 RPC 共用的，刷新列表（`listError`）与加载更早（`chatError`）撞上宿主无响应时没人在发消息。
+- **冷却不再等于静默失败**：`paintStreamDown` 改为返回布尔，`showError` 的 disconnected 分支只在真画了浮条时才 `return`；浮条没画（被冷却挡下，或本轮已经弹过）时回落写正文（`L.disconnectedRetry`）。用户按下发送却什么都没看到，是比多弹一次更坏的结果。
 - **报告里的旧读数与现状对齐**：`HISTORY_POLL_ACTIVE_MS` 250→1500 之后，报告 §2.1 的「240 次/分」「≈258 次/分」都标成改动前口径，并补该格改后读数（P12 40 / 总 ≈58；6 倍只对 P12 成立，整格 4.45 倍）。
 
-审查提的两条未采纳（留档）：`30000` 不改成命名常量（该函数要被测试沙箱抽取，沙箱不拥有模块常量，改命名反而扩大契约面）；冷却不挡状态药丸（药丸是常驻状态指示，不是重复提示）。
+第二轮只读审查（对 `382565b`）又提出三项，都已改：
+
+- **新 key 补进常驻名单（回归修复）**：`isStreamDownCopy` 原先还是那四个 key，`streamDownFailed` 不在里面 ⇒ `importantErrorActive` 为假 ⇒ 下一次 `/api/status` 成功就 `clearTransientError('chatError')` 把它抹掉，发送失败的红条只活到下一次轮询。现已并入名单，并加断言：该文案写入后 `importantErrorActive === true`、`clearTransientError` 抹不掉；同时把 `streamDownFailed` 加进 `test/turn-end-errors.test.js` 的「不得进消息气泡」名单。
+- **文案主语去指代**（见上，改为「这次没有完成」）。
+- **分档线补边界断言**：29 秒仍判「慢」、31 秒判「断」，`30000` 这个字面量从此被测试钉住，不再只靠一句注释。
+
+审查提的另两条处置（留档）：`30000` 仍不改成命名常量——沙箱确实拥有模块常量（`test/error-visibility.test.js` 用正则从源码注入，也让 `STREAM_DOWN_GRACE_MS` 之类硬写进沙箱），真实代价只是多一行注入；权衡后选了更便宜的边界断言（上一行）。冷却不挡状态药丸——药丸是常驻状态指示、冷却期按状态帧显示「已连接」不是谎，压住浮条正是「不重复告知」。
 
 ## 0.4.56 — 2026-10-23
 

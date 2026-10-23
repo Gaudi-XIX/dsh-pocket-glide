@@ -296,8 +296,18 @@ test('AC-C2 a successful poll keeps the stream failure copy', () => {
   assert.equal(sandbox.containers.chatError.textContent, '连接中断 (E_STREAM)', 'the copy the audit asked to keep')
 })
 
-test('AC-C2 loadHistory clears through the guard instead of an assignment', () => {
-  const loading = between('async function loadHistory(initial,force)', 'const FALLBACK_IMAGE_LIMITS')
+test('AC-C2 a dead request outlives the next clean poll too (2026-10-23)', () => {
+  // rpcFailure() puts L.streamDownFailed on any bridge-transport failure, so the banner it
+  // writes must be on the same standing-alarm list as a dropped stream — otherwise the next
+  // successful /api/status empties it and a send that never left looks like nothing happened.
+  const sandbox = buildNoticeSandbox()
+  sandbox.showError('chatError', { message: L.streamDownFailed })
+  assert.equal(sandbox.importantErrorActive, true, 'a request the desktop never answered explains itself')
+  sandbox.clearTransientError('chatError')
+  assert.equal(sandbox.containers.chatError.textContent, L.streamDownFailed, 'so a clean poll keeps it')
+})
+
+test('AC-C2 loadHistory clears through the guard instead of an assignment', () => {  const loading = between('async function loadHistory(initial,force)', 'const FALLBACK_IMAGE_LIMITS')
   assert.ok(loading.includes("clearTransientError('chatError')"), 'the success path asks the guard')
   assert.ok(!loading.includes("$('chatError').textContent=''"), 'a bare assignment would silence the disconnect again')
 })
@@ -442,7 +452,7 @@ test('the three disconnect tiers exist in both locales and are picked by cause',
     ['streamDownTunnel', '远程链接断了，正在自动重试…', 'The remote link dropped, retrying on its own…'],
     ['streamDownHost', '桌面端处理较慢，正在等它回应…', 'The desktop is slow to answer; still waiting…'],
     ['streamDownBackground', '会话被移到后台，回到前台会自动继续', 'This chat moved to the background; it resumes when you return'],
-    ['streamDownFailed', '桌面端没有响应，这条没有发出去，请重试', 'The desktop did not answer; the message was not sent — try again.'],
+    ['streamDownFailed', '桌面端没有响应，这次没有完成，请重试', 'The desktop did not answer; this did not complete — try again.'],
   ]) {
     assert.equal(L[key], zh, `zh tier ${key}`)
     assert.equal(LEN[key], en, `en tier ${key}`)
@@ -477,6 +487,14 @@ test('a slow desktop is not called a dropped connection (2026-10-23)', () => {
   const gone = buildNoticeSandbox({ streamConnected: false })
   gone.showError('chatError', { disconnected: true })
   assert.equal(gone.containers.reconnectBar.textContent, L.disconnectedRetry, 'a silent stream is a dropped connection')
+  // The 30s line is what decides "slow" vs "gone" while frames still arrive; pin both sides
+  // of it, so a stray edit to the literal cannot slide the tier without a red test.
+  const fresh = buildNoticeSandbox({ streamConnected: true, lastStreamFrameAt: Date.now() - 29000 })
+  fresh.showError('chatError', { disconnected: true })
+  assert.equal(fresh.containers.reconnectBar.textContent, L.streamDownHost, '29s of silence is still "slow"')
+  const stale = buildNoticeSandbox({ streamConnected: true, lastStreamFrameAt: Date.now() - 31000 })
+  stale.showError('chatError', { disconnected: true })
+  assert.equal(stale.containers.reconnectBar.textContent, L.disconnectedRetry, '31s of silence is "gone"')
 })
 
 test('the tunnel tier comes from the status payload, not from a guess', () => {
