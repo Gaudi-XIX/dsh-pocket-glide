@@ -393,7 +393,7 @@ test('B-8 closing a session empties the per-session state the next visit would i
     let tokenStream=null,streamConnected=false,streamEvents=[],olderEvents=[]
     let olderHasMore=false,olderBusy=false,olderExhausted=false
     let streamProjections=null,streamNeedsFullPaint=false,streamRevision=0
-    let activeSession='s1'
+    let activeSession='s1',streamDownGraceTimer=null
     const turnOpenState=new Map(),streamWatermarks=new Map()
     function clearSkeletonWatchdog(){}
     function clearStreamStaleWatch(){}

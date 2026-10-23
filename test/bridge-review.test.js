@@ -979,6 +979,31 @@ test('B2 X4⑤: the status payload separates the bridge, the Host and the carrie
   }
 })
 
+test('B2 X4⑤: a business rejection proves the Host answered, so it never reads as unreachable', async () => {
+  // 2026-10-23: the observation used to be `ok = result.ok`, so an ordinary
+  // rejection (a closed session, a busy agent) left `hostReachable:false` for
+  // the next 10s and the phone painted「宿主未响应」after every ordinary error.
+  // Only a transport-shaped failure is an outage.
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (path) => (String(path).includes('settings') ? { ok: false, error: { message: 'unsupported', code: 'gateway/unsupported' } } : undefined),
+    },
+  })
+  try {
+    const cookie = await t.pairMobile('PocketStatus/1.0')
+    // /api/status asks settings/describe on its own, so one request is enough:
+    // the fake Host refuses that as a business error, and the observation it
+    // leaves behind must still say the Host answered.
+    const res = await httpFetch(`${t.base}/api/status`, { headers: { cookie } })
+    const body = await res.json()
+    assert.equal(body.hostReachable, true, 'the Host answered — a rejection is not an outage')
+    assert.match(String(body.hostProbeCode ?? ''), /gateway\/unsupported/, 'and the class of answer rides along')
+  } finally {
+    await t.stop()
+  }
+})
+
 test('B2 X4⑧: a rate-limited attempt is logged before the guess is ever read', async () => {
   // The pre-check answers 429 and used to write nothing, so a run of guesses was
   // silent in the log exactly while it was happening; only a wrong PIN made

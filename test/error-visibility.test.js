@@ -108,6 +108,7 @@ const NOTICE_ORGANS = [
   'showError',
   'clearTransientError',
   'streamDownCopy',
+  'paintStreamDown',
   'notifyStreamDown',
   'noteStreamRecovery',
   'setStatusCopy',
@@ -119,6 +120,8 @@ const CODE_COPY_LINE = js.match(/const STREAM_CODE_COPY=\{[^}]*\}/)[0]
 const NOTICE_STATE = (state = {}) => `
     let importantErrorActive=${JSON.stringify(Boolean(state.importantErrorActive))}
     let streamDownNoticeShown=${JSON.stringify(Boolean(state.streamDownNoticeShown))}
+    let streamDownGraceTimer=null
+    const STREAM_DOWN_GRACE_MS=8000
     let tunnelLinkActive=${JSON.stringify(Boolean(state.tunnelLinkActive))}
     ${CODE_COPY_LINE}
     const L=${JSON.stringify(L)}
@@ -131,9 +134,13 @@ const NOTICE_STATE = (state = {}) => `
 function buildNoticeSandbox(state = {}) {
   const containers = fakeContainers()
   const body = NOTICE_ORGANS.map((name) => extractFunction(js, name)).join('\n')
+  // The reconnect bar now waits a grace window out before it speaks, so the sandbox
+  // has to own that timer. Anything short (the 8s grace) runs at once; the 90s
+  // auto-dismiss is left pending, which is what the pre-grace tests relied on.
   const make = new Function(
     'containers',
     'document',
+    'setTimeout',
     `
     ${NOTICE_STATE(state)}
     ${body}
@@ -146,8 +153,85 @@ function buildNoticeSandbox(state = {}) {
     }
   `,
   )
-  return make(containers, state.document || { hidden: false })
+  return make(containers, state.document || { hidden: false }, (fn, ms) => { if ((ms || 0) < 10000) fn(); return 0 })
 }
+
+// A timer that runs the grace at once would turn "8s later" into "now", which is exactly
+// the state the phone is NOT in — and it would keep passing even if the grace were deleted.
+// This sandbox keeps every timer pending and cancels by handle, so a test can sample INSIDE
+// the window and then expire it itself.
+function buildGraceSandbox(state = {}) {
+  const containers = fakeContainers()
+  const body = NOTICE_ORGANS.map((name) => extractFunction(js, name)).join('\n')
+  const pending = []
+  const make = new Function(
+    'containers',
+    'document',
+    'setTimeout',
+    'clearTimeout',
+    'pending',
+    `
+    ${NOTICE_STATE(state)}
+    ${body}
+    return {
+      notifyStreamDown, noteStreamRecovery, showError, streamDownCopy,
+      get pending(){return pending},
+      get streamDownNoticeShown(){return streamDownNoticeShown},
+      get graceTimer(){return streamDownGraceTimer},
+      containers,
+    }
+  `,
+  )
+  const world = make(
+    containers,
+    state.document || { hidden: false },
+    (fn, ms) => { pending.push({ fn, ms, cancelled: false }); return pending.length },
+    (id) => { const held = pending[id - 1]; if (held) held.cancelled = true },
+    pending,
+  )
+  world.expire = () => { for (const held of pending) if (!held.cancelled) held.fn() }
+  return world
+}
+
+// ------------------------------------------------------------------ grace window
+
+test('a dropped frame stays silent inside the grace window', () => {
+  const world = buildGraceSandbox()
+  world.notifyStreamDown()
+  assert.equal(world.containers.reconnectBar.hidden, true, 'nothing on screen inside the window')
+  assert.equal(world.containers.reconnectBar.textContent, '')
+  assert.equal(world.streamDownNoticeShown, false, 'and the latch stays free for the real drop')
+  assert.equal(world.pending.length, 1, 'exactly one wait is armed')
+  assert.equal(world.pending[0].ms, 8000, 'the window the page advertises')
+})
+
+test('the same drop speaks once the window expires', () => {
+  const world = buildGraceSandbox()
+  world.notifyStreamDown()
+  world.expire()
+  assert.equal(world.containers.reconnectBar.hidden, false)
+  assert.equal(world.containers.reconnectBar.textContent, world.streamDownCopy())
+  assert.equal(world.streamDownNoticeShown, true)
+  assert.equal(world.graceTimer, null, 'the handle is dropped once it fires')
+})
+
+test('a frame that lands inside the window keeps the bar away for good', () => {
+  const world = buildGraceSandbox()
+  world.notifyStreamDown()
+  world.noteStreamRecovery()
+  world.expire()
+  assert.equal(world.containers.reconnectBar.hidden, true, 'a recovered blip never paints')
+  assert.equal(world.containers.reconnectBar.textContent, '')
+  assert.equal(world.streamDownNoticeShown, false)
+})
+
+test('a refused RPC still paints at once — the grace is for frames, not for failures', () => {
+  const world = buildGraceSandbox()
+  world.showError('chatError', { disconnected: true })
+  assert.equal(world.containers.reconnectBar.textContent, L.disconnectedRetry, 'no 8s wait on a real failure')
+  assert.equal(world.containers.reconnectBar.hidden, false)
+  assert.equal(world.pending.length, 0, 'and no wait is armed behind it')
+})
 
 // The mandated shape: what one rendered error line actually shows. A DISCONNECT is no
 // longer an error-line copy (W4 separation): it lands in the top reconnect bar instead,
@@ -389,6 +473,7 @@ function buildConnectionSandbox(state = {}) {
     'applyInheritedSettings',
     'renderTunnelWarning',
     'renderDeviceExpiry',
+    'setTimeout',
     `
     ${NOTICE_STATE(state)}
     ${organs}
@@ -420,6 +505,10 @@ function buildConnectionSandbox(state = {}) {
     () => {},
     () => {},
     () => {},
+    // The reconnect bar waits a grace window out before it speaks; the sandbox owns that
+    // timer and runs anything short (the 8s grace) at once, so a synchronous test still
+    // sees the bar the page would raise.
+    (fn, ms) => { if ((ms || 0) < 10000) fn(); return 0 },
   )
   sandbox.events = events
   return sandbox
@@ -554,7 +643,7 @@ test('AC-C3 the threshold is a multiple of the server keepalive period', () => {
 function buildStaleSandbox({ hidden = false, clock = 1_000 } = {}) {
   const containers = fakeContainers()
   const world = { clock, tick: null, calls: [], retryAt: null, retry: null }
-  const body = ['streamDownCopy', 'notifyStreamDown', 'noteStreamRecovery', 'setStatusCopy', 'clearStreamStaleWatch', 'armStreamRetry', 'armStreamStaleWatch']
+  const body = ['streamDownCopy', 'paintStreamDown', 'notifyStreamDown', 'noteStreamRecovery', 'setStatusCopy', 'clearStreamStaleWatch', 'armStreamRetry', 'armStreamStaleWatch']
     .map((name) => extractFunction(js, name))
     .join('\n')
   const make = new Function(
@@ -570,7 +659,8 @@ function buildStaleSandbox({ hidden = false, clock = 1_000 } = {}) {
     'openSessionStream',
     'world',
     `
-    let activeSession='s1',streamConnected=true,sessionStream=null,lastStreamFrameAt=0,streamDownNoticeShown=false,streamStaleTimer=null,streamRetryTimer=null,tunnelLinkActive=false,importantErrorActive=false
+    let activeSession='s1',streamConnected=true,sessionStream=null,lastStreamFrameAt=0,streamDownNoticeShown=false,streamDownGraceTimer=null,streamStaleTimer=null,streamRetryTimer=null,tunnelLinkActive=false,importantErrorActive=false
+    const STREAM_DOWN_GRACE_MS=8000
     ${staleLine()}
     const L=${JSON.stringify(L)}
     const $=(id)=>containers[id]
@@ -591,7 +681,12 @@ function buildStaleSandbox({ hidden = false, clock = 1_000 } = {}) {
     { now: () => world.clock },
     (callback) => { world.tick = callback; return 1 },
     () => { world.tick = null },
-    (callback, ms) => { world.retry = callback; world.retryAt = ms; return 2 },
+    // Short timers (the 8s reconnect grace) run at once so the stale drop still paints
+    // the bar synchronously; the retry stays pending for the test to fire by hand.
+    // The 8s grace runs at once here, and null is the handle production is left holding
+    // once its callback has fired — returning an id would leave this sandbox claiming a
+    // timer is still armed when the page has none.
+    (callback, ms) => { if ((ms || 0) < 10000) { callback(); return null } world.retry = callback; world.retryAt = ms; return 2 },
     () => { world.retry = null; world.retryAt = null },
     () => world.calls.push('closeSessionStream'),
     () => world.calls.push('schedulePoll'),
@@ -928,7 +1023,10 @@ function buildDeadlineSandbox() {
   )
   // Node's timer handle carries unref(); the page feature-detects it (so a test process is
   // not held open by a 90s deadline), so the fake has to expose one to look like the host.
+  // Short timers (the 8s reconnect grace) run at once and are not recorded — the deadline
+  // assertions below are about the 90s one, which stays pending for the test to fire.
   sandbox = make(containers, { hidden: false }, (fn, delay) => {
+    if ((delay || 0) < 10000) { fn(); return { unref() { return this } } }
     sandbox.timers.push({ fn, delay })
     return { unref() { return this } }
   })

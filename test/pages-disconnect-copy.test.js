@@ -88,6 +88,7 @@ const ORGANS = [
   'showError',
   'clearTransientError',
   'streamDownCopy',
+  'paintStreamDown',
   'notifyStreamDown',
   'noteStreamRecovery',
   'setStatusCopy',
@@ -99,9 +100,12 @@ function buildNoticeSandbox(state = {}) {
   const make = new Function(
     'containers',
     'document',
+    'setTimeout',
     `
     let importantErrorActive=${JSON.stringify(Boolean(state.importantErrorActive))}
     let streamDownNoticeShown=${JSON.stringify(Boolean(state.streamDownNoticeShown))}
+    let streamDownGraceTimer=null
+    const STREAM_DOWN_GRACE_MS=8000
     let tunnelLinkActive=${JSON.stringify(Boolean(state.tunnelLinkActive))}
     ${CODE_COPY_LINE}
     const L=${JSON.stringify(L)}
@@ -114,7 +118,10 @@ function buildNoticeSandbox(state = {}) {
     }
   `,
   )
-  return make(containers, state.document || { hidden: false })
+  // The reconnect bar waits a grace window out before it speaks; the sandbox owns that
+  // timer and runs anything short (the 8s grace) at once, so a synchronous test still
+  // sees the bar the page would raise.
+  return make(containers, state.document || { hidden: false }, (fn, ms) => { if ((ms || 0) < 10000) fn(); return 0 })
 }
 
 function renderedChatError(error, fallback) {

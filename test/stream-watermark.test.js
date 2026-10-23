@@ -363,7 +363,7 @@ function buildCloseSandbox() {
     let activeSession=null,sessionStream=null,streamRenderFrame=null,pendingSyncTimer=null,projectionsSyncTimer=null
     let streamConnected=true,streamEvents=[],olderEvents=[],olderHasMore=true,olderBusy=true
     let olderExhausted=true,streamProjections={values:{}},streamRevision=7,tokenStream=null
-    let fillBusy=false,olderRunBusy=false
+    let fillBusy=false,olderRunBusy=false,streamDownGraceTimer=null
     const streamWatermarks=new Map()
     const calls=[]
     function cancelAnimationFrame(){calls.push('raf')}

@@ -138,8 +138,8 @@ function startHost({ includeVisible }) {
     };
 
     if (url.pathname === '/') {
-      // The initial boot is inlined; the FIRST /api/boot request is reconcileBoot's, so it
-      // must already be live data (a stub there would make the ghost path unreachable).
+      // The initial boot is inlined, and reconcileBoot stays off for a document served
+      // from the network (2026-10-23), so this route carries the whole scenario.
       return send(200, renderMobilePage({ locale: 'zh', boot: JSON.stringify(hostData({ includeVisible })), initialChat: false }), 'text/html; charset=utf-8');
     }
     if (url.pathname === '/sw.js') return send(200, 'self.addEventListener("fetch",()=>{})', 'text/javascript; charset=utf-8');
@@ -359,7 +359,11 @@ async function scenarioChat(host, port, failures) {
     failures.push(`chat: no transcript painted for ${VISIBLE_ID} — the scenario never ran: ${JSON.stringify(result.first.messagesText)}`);
   }
   if (!result.first.chatOpen) failures.push('chat: the visible session did not open — the bootstrap did not run');
-  if (state.bootRequests < 1) failures.push('chat: reconcileBoot never asked /api/boot — the ghost path was never reached');
+  // 2026-10-23: reconcileBoot is gated on the document coming out of the shell cache,
+  // and this page is served straight from the network — so the inline payload is the
+  // only boot the page ever gets. Zero requests here is the proof that the ghost path
+  // survives without the second 1.09 MB download.
+  if (state.bootRequests !== 0) failures.push(`chat: reconcileBoot asked /api/boot ${state.bootRequests} time(s) — the inline payload already carried this data`);
   if (state.historySeq.some((id) => id !== SUBAGENT_ID)) {
     failures.push(`chat: the page asked the host for a session other than the probe: ${JSON.stringify(state.historySeq)}`);
   }

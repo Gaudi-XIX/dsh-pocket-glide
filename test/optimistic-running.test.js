@@ -139,6 +139,46 @@ function botRow(sessionId, title, folder, updatedAt, origin) {
   };
 }
 
+// ---- one Bot, one row, by identity (2026-10-23) ----
+// A Bot's parts do not all stay in one folder: Chief's 2026-10-20 part recorded
+// F:\AgentData as its working directory, so the title + folder fold left it
+// standing as a second row. The bridge now stamps the owning Bot's name on every
+// part it can find in ds-bot's roster, and a stamped row folds by that name.
+function botPart(sessionId, botName, title, folder, updatedAt) {
+  return {
+    sessionId,
+    updatedAt,
+    projections: { values: { title, workingDirectory: folder, botName } },
+  };
+}
+
+test('parts of one Bot fold by Bot name even when a part ran in another folder', () => {
+  const box = buildSandbox();
+  const painted = box.projectSessionRows([
+    botPart('elsewhere', 'Chief', 'Chief', 'F:/AgentData', 100),
+    botPart('here', 'Chief', 'Chief', 'F:/DSBOT', 300),
+  ]);
+  assert.deepEqual(painted.map((r) => r.sessionId), ['here']);
+});
+
+test('a part created before a Bot rename still folds under the Bot name', () => {
+  const box = buildSandbox();
+  const painted = box.projectSessionRows([
+    botPart('before', 'Chief', 'Chief (旧名)', 'F:/DSBOT', 100),
+    botPart('after', 'Chief', 'Chief', 'F:/DSBOT', 300),
+  ]);
+  assert.deepEqual(painted.map((r) => r.sessionId), ['after']);
+});
+
+test('a Bot row never swallows a user session that shares its title', () => {
+  const box = buildSandbox();
+  const painted = box.projectSessionRows([
+    botPart('bot', 'Chief', 'Chief', 'F:/DSBOT', 300),
+    botRow('mine', 'Chief', 'F:\DSBOT', 100),
+  ]);
+  assert.deepEqual(painted.map((r) => r.sessionId), ['bot', 'mine']);
+});
+
 test('three parts of one Bot in one folder fold to the newest row only', () => {
   const box = buildSandbox();
   const painted = box.projectSessionRows([

@@ -4,7 +4,10 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
-## 未发布（工作树）
+## 0.4.56 — 2026-10-23
+
+**首屏只下一次、同一 Bot 只占一行、断线提示不再每 30 秒闪一次**。装机变化一条：DSH 宿主需重启一次，手机端页面刷新即生效（桥在宿主进程内）。以下五节同属本版。
+
 ### 通知轮询不再每 30 秒硬打一次卡住的宿主；「桌面端没有响应」取代「在重启」（2026-10-23，0.4.56）
 
 真机症状（m00002，逐字）：「桌面端在重启或暂时联系不上，正在重试……自从某次改动以后，特别频繁地出这个提示」。
@@ -33,6 +36,41 @@
 - 只能拿到 HTTP 头里的 UA，拿不到 UA-CH 的品牌/型号列表（那要页面 JS 主动上报，本次没做）。
 
 回归锁：`test/diagnostics-panel.test.js` 新增两条（手机 UA 被记住，且 `/desktop/status`、裸 `/desktop` 都不得覆盖它；两种语言的面板都渲染这一行），既有两条断言同步多出的 `phoneUa: null` 字段。桌面配对页不参与手机壳字节预算（`mobilePageAssets` 改前改后字节完全一致）。
+
+### 会话折叠改按 Bot 身份认亲：同一 Bot 的会话不再因工作目录变过多出一行（2026-10-23，0.4.56）
+
+真机反馈（用户原话）：「我看我现在这个 DS 的工作区里面，这个会话就有两个你的对话，那应该就是出了一个 bug 呗」。实测：Chief 共 15 段会话，14 段的行内 `workingDirectory` 是 `F:\DSBOT`，第 0 段（`session-55a9adf5-0cbb-4e09-8222-cbde3a052f82`，2026-10-20 12:56 开）记录里是 `F:\AgentData`。折叠键是「标题 + 工作目录」两样都对上才算同一个 Bot，目录一变就认不出，于是这一段单独站成第二行。消息一条没丢，是显示上少折了一行；同类隐患还有一条——给某个 Bot 改名后，它旧段挂着旧标题也会各站一行。
+
+改法是把「猜」换成「认」：
+
+- **桥侧**（`lib/bridge.js`、`lib/projections.js`、`lib/constants.js`）：宿主会话行不带 `botId`（`agentTeam` 行里只有 sessionId），所以由桥读 ds-bot 自己的 roster `C:\Users\toast\.dsh\bot\state.json` 的 `bots[].segments[].sessionId` 反查 Bot 名，在 `session.list` 应答里给每行盖 `projections.values.botName`（`SESSION_ROW_VALUE_KEYS` 加入 `botName`，否则投影会把它裁掉）。roster 按 mtime 缓存 5 秒（`BOT_NAMES_CACHE_MS`）；读不到、形状不认识或缓存未命中一律返回空 Map，整条链路 fail-open 落回旧折叠，页面不因此报错。盖章**返回新数组、行对象也是替换而非改写**——list 来自桥自己的缓存（`applyDescendantRunning` 无脏行时返回原数组引用），原地写会让下次刷新依赖缓存被触碰的顺序。**首屏两条入口同样盖章**（`buildMobileBoot`，即文档内联的 boot 与 `/api/boot`）：否则首屏先把一个 Bot 的段画成两行，等 `session.list` 应答才折成一行，冷启动会看见「两行 → 一行」抖一次。
+- **页面侧**（`lib/pages.js`）：`mergeBotParts` 新增 `botOf(row)`；取到 Bot 名的行**只按 Bot 名折叠**（同一个 Bot 的每一段就是一个会话，无论跑在哪个目录，键里不看文件夹），并且这类行不进 title/folder 两张表，不会吞掉邻居。没有 `botName` 的行完全走原来的三条规则（同标题+同目录、上级目录、`MERGE_LEGACY_FOLDER`），所以用户自建的同名会话照旧不会被误折。
+
+回归锁：`test/bot-names.test.js` 8 项（roster 反查 4 项；`botNamesForSessions` 的 5 秒缓存窗口、读不到 roster 时 fail-open 各 1 项；盖章返回新数组、不写进桥的缓存行 1 项；首屏 boot 与 `session.list` 同口径盖章 1 项）；`test/optimistic-running.test.js` 加 3 项（同一 Bot 跨目录折成一行、Bot 改名前后仍折、Bot 行不吞同名用户会话）。全量 `node --test --test-concurrency=1 test/*.test.js` = **1458 tests / 1454 pass / 2 fail / 2 skipped**，两条红全在 `test/tunnel.test.js`（`:314`、`:335`）且与本线无关：本机 MSYS 的 GNU tar 把 `C:\` 当远程主机名（`tar (child): Cannot connect to C: resolve failed`）；**改动后未由独立审查复跑**，以上为本机（作者）自测读数；两条红是 shell 差异、不是机器差异——同一台机器换一种 shell 跑全量，`test/tunnel.test.js` 全绿，只有 MSYS 壳解析到 GNU tar 时红（pwsh 下解析到的是 System32 的 `tar.exe`）。WP1 字节预算守住：本线代码一度把 zh shell assets 顶到 391,738 B（超 238 B），精简注释与紧凑写法后回到 391,500 B 以内，没有抬 `ASSET_BUDGET_BYTES`。
+
+### 每次打开省一半流量：删掉首屏之后那次重复的 `/api/boot`（2026-10-23，0.4.56）
+
+现象（m00001，用户原话「这个 reconcile boot 直接给它删掉」）：一次冷启动把同一份约 940 KB 的数据下载两遍——文档里内联一份（阻塞首屏），页面启动后又 `fetch('/api/boot')` 再取一份（911 KB）。生产日志三组对照：`/api/boot` 与 `GET /` 的差值恒定在 3~11 KB（正好是 HTML 外壳大小），说明两者承载同一份数据。
+
+删掉的原因不是「看起来多余」，是三条同时成立的硬事实：
+
+- 文档每次都从网络整份下发。service worker 对 `/` 是 network-first（`revalidateShell()`），且桥渲染文档时不设 `cache-control`/`ETag`/`Last-Modified` ⇒ 页面里内联的那份 boot 永远是最新的，再拉一次拿不到任何新内容；
+- 它兜底的场景不存在：文档注释说它守护「service-worker-cached shell 在后台 reconcile」，但缓存壳那条分支只在 `req.mode==='navigate'` 的其它导航里，落地页永远走网络；
+- 它拉回来的四样东西冷启动时都另有来源：工作区列表 ← `workspace.list`、会话行 ← `session.list`（带指纹）、设置 ← `/api/status`、尾包 ← 文档内嵌那份。
+
+收益与代价：每次冷启动少下 **1.09 MB**、少一次约 2 秒的服务端构建，并消掉首屏画完约 3 秒后整表重画一次的跳动。代价为零——`lib/pages.js:2911` 起那行「文档没带数据才兜底」的判断一并删除，因为该分支在生产不可达。回归锁：`test/nav-reload.test.js` 断言启动段里不再出现 `reconcileBoot|bootFromCache`，`test/dom/subagent-session-dom.mjs` 断言整场会话零 `/api/boot` 请求。
+
+### 「宿主未响应」不再跟着普通报错闪：只有真的连不上才算不可达（2026-10-23，0.4.56）
+
+桥原来把「电脑端拒绝了一个请求」也记成「电脑端连不上」：`hostProbe.ok` 取 `result.ok === true`，于是会话已关闭、agent 正忙、方法不支持这类**业务拒绝**都会留下 `hostReachable:false`，而这个记录 10 秒内有效 ⇒ 状态栏在之后 10 秒里显示「宿主未响应」，每碰一次普通报错就闪一次。现在只有传输层失败（`TRANSPORT_ERROR_CODES`）才算不可达；业务拒绝恰恰证明电脑端在答话，`hostProbeCode` 仍随帧带出，便于区分。回归锁：`test/bridge-review.test.js` 新增一条（`settings/describe` 返回业务拒绝时 `hostReachable` 仍为 `true`）。
+
+### 掉一帧不再立刻报「桌面端没有响应」：等 8 秒，真断了立刻报（2026-10-23，0.4.56）
+
+真机症状（用户截图 + 原话「就是这个」）：聊天页顶部横幅反复弹出「桌面端没有响应，正在重试…」。根因是隧道每 ~30 秒掉一帧，而 `notifyStreamDown` 收到 `source.onerror` 就立刻竖条。改法：给「流静默」这条路径加 **8 秒宽限**（`STREAM_DOWN_GRACE_MS`，与 `EVENT_HOLD_MS` 同量级）——窗口内任意一帧到达都会取消告警；窗口走满才画。8 秒的判据是隧道掉帧的间隔量级，宽到不误报、又短到真断线时用户不会等太久。
+
+**明确的失败不走宽限**：发送失败（`e.disconnected`，只来自 `rpc()` 的 fetch reject 与 401）仍然**立即**画「连接已断开，正在重试…」。这条若也等 8 秒，用户点发送、失败、几秒后隧道自愈，结果是浮条不出现、输入框旁的红字也不写——彻底没反应比闪烁更糟。顺带修掉一个遗留问题：回到列表页时已亮起的浮条以前不会收起来（全页只有 `noteStreamRecovery` 一个隐藏点，而它只在收到帧时调用）。回归锁：`test/error-visibility.test.js` 新增专用沙箱 `buildGraceSandbox` 四条（窗口内不显影、到期才开口、窗口内来一帧则永不出、明确失败立即出），另同步四个既有沙箱的计时器桩。
+
+装机与验收：以上四项都要重启 DSH 宿主才生效（桥跑在宿主进程内）。全量 `node --test --test-concurrency=1 test/*.test.js`（pwsh）= **1463 tests / 1461 pass / 0 fail / 2 skipped**。独立审查（Verifier，只读）结论：**必改与注意项已逐条复核闭合，全量测试未由审查方复跑**。手机壳资产预算：zh 391,251 B / en 391,149 B，线（391,500 B）未抬。
 
 ### 运行用时改为宿主钟直传：桥在既有帧上带 hostNow，页面不再自己算（2026-10-22，0.4.55）
 
