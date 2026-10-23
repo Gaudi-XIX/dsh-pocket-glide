@@ -157,7 +157,8 @@ test('the error line carries a dropped stream; the transcript still carries the 
   // put the light into "reconnecting" — that is one more statusConnected reader (6).
   // 2026-10-23: showError names the slow-desktop tier (L.streamDownHost) when the stream
   // is still delivering frames; the same review split the failed-request copy onto its own
-  // key (L.streamDownFailed, rpcFailure only) because "still waiting" is a lie once the
+  // key (L.streamDownFailed, written by rpcFailure and read by the standing-alarm list)
+  // because "still waiting" is a lie once the
   // request already died. Neither is ever the transcript's word for a turn failure.
   const readerCaps = { statusConnected: 6, statusDisconnected: 4, statusReconnecting: 3 }
   for (const key of ['disconnectedRetry', 'streamDownTunnel', 'streamDownHost', 'streamDownFailed', 'streamDownBackground', 'statusConnected', 'statusDisconnected', 'statusReconnecting']) {
