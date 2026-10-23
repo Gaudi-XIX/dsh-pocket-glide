@@ -166,7 +166,7 @@ function codesSeenInSources() {
 // Codes with no user-facing sentence ON PURPOSE, each with the reason a reader would
 // not be helped by one. Everything else found above must be in STREAM_CODE_COPY.
 const UNMAPPED = new Map([
-  ['__bridge/transport', 'already rendered as the generic desktop tier via rpcFailure (L.streamDownHost)'],
+  ['__bridge/transport', 'already rendered as a dead request via rpcFailure (L.streamDownFailed)'],
   ['__bridge/rpc-mismatch', 'same transport family; a protocol lie is not a reader decision'],
   ['__bridge/invalid-arguments', 'a client bug: the bridge prose is the diagnosis, generic copy would hide it'],
   ['session/attachment-invalid', 'the attachment endpoint answers 404 text, never an RPC errorCode'],

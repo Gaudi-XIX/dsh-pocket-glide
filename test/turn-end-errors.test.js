@@ -155,11 +155,12 @@ test('the error line carries a dropped stream; the transcript still carries the 
   // 2026-10-07-fix-pocket-banner-dismiss-and-ttl: dismissing the banner or letting its
   // 90s deadline fire restores the connected label, because the standing notice is what
   // put the light into "reconnecting" — that is one more statusConnected reader (6).
-  // 2026-10-23: showError now names the slow-desktop tier (L.streamDownHost) when the
-  // stream is still delivering frames, so the transport copy gained its fourth reader —
-  // it is still never the transcript's word for a turn failure.
-  const readerCaps = { statusConnected: 6, statusDisconnected: 4, statusReconnecting: 3, streamDownHost: 4 }
-  for (const key of ['disconnectedRetry', 'streamDownTunnel', 'streamDownHost', 'streamDownBackground', 'statusConnected', 'statusDisconnected', 'statusReconnecting']) {
+  // 2026-10-23: showError names the slow-desktop tier (L.streamDownHost) when the stream
+  // is still delivering frames; the same review split the failed-request copy onto its own
+  // key (L.streamDownFailed, rpcFailure only) because "still waiting" is a lie once the
+  // request already died. Neither is ever the transcript's word for a turn failure.
+  const readerCaps = { statusConnected: 6, statusDisconnected: 4, statusReconnecting: 3 }
+  for (const key of ['disconnectedRetry', 'streamDownTunnel', 'streamDownHost', 'streamDownFailed', 'streamDownBackground', 'statusConnected', 'statusDisconnected', 'statusReconnecting']) {
     const reads = [...source.matchAll(new RegExp(`L\\.${key}\\b`, 'g'))].length
     const cap = readerCaps[key] ?? 3
     assert.ok(reads >= 1, `${key} must have a consumer, not just a definition`)

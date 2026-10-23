@@ -442,6 +442,7 @@ test('the three disconnect tiers exist in both locales and are picked by cause',
     ['streamDownTunnel', '远程链接断了，正在自动重试…', 'The remote link dropped, retrying on its own…'],
     ['streamDownHost', '桌面端处理较慢，正在等它回应…', 'The desktop is slow to answer; still waiting…'],
     ['streamDownBackground', '会话被移到后台，回到前台会自动继续', 'This chat moved to the background; it resumes when you return'],
+    ['streamDownFailed', '桌面端没有响应，这条没有发出去，请重试', 'The desktop did not answer; the message was not sent — try again.'],
   ]) {
     assert.equal(L[key], zh, `zh tier ${key}`)
     assert.equal(LEN[key], en, `en tier ${key}`)
@@ -460,6 +461,9 @@ test('a repeated RPC timeout cannot flap the bar either — one cooldown for bot
   assert.equal(sandbox.containers.reconnectBar.hidden, true, 'and the recovery retires it')
   sandbox.showError('chatError', { disconnected: true })
   assert.equal(sandbox.containers.reconnectBar.hidden, true, 'the next one inside the cooldown stays silent')
+  // Silence is not allowed to become a silent failure: the bar stands down, the red banner
+  // by the composer still says the connection went away (the user pressed send and missed).
+  assert.equal(sandbox.containers.chatError.textContent, L.disconnectedRetry, 'the banner still speaks inside the cooldown')
 })
 
 test('a slow desktop is not called a dropped connection (2026-10-23)', () => {
@@ -863,7 +867,7 @@ test('the rpc consumer reads errorCode and names the transport family', async ()
   await assert.rejects(
     () => rpc('session.history', { sessionId: 's1' }),
     (error) => {
-      assert.equal(error.message, L.streamDownHost, 'a desktop that cannot be reached is not a generic failure')
+      assert.equal(error.message, L.streamDownFailed, 'a desktop that cannot be reached names the failure, not a wait')
       assert.equal(error.errorCode, '__bridge/transport', 'and the code is carried for whoever asks next')
       return true
     },
@@ -885,7 +889,7 @@ test('an unknown code keeps the bridge own words, and no code keeps the old copy
   const plain = buildRpcSandbox(rpcReply(400, {}, { broken: true }))
   await assert.rejects(() => plain('session.history', {}), (error) => error.message === L.failed, 'a body that is not json still falls back')
   const down = buildRpcSandbox(rpcReply(503, {}, { broken: true }))
-  await assert.rejects(() => down('session.history', {}), (error) => error.message === L.streamDownHost, 'a plain-text 503 is the desktop family')
+  await assert.rejects(() => down('session.history', {}), (error) => error.message === L.streamDownFailed, 'a plain-text 503 is the desktop family')
 })
 
 test('a successful rpc still returns its value and a 401 is still a disconnect', async () => {
