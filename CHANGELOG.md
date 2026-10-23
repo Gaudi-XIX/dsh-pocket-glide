@@ -21,7 +21,7 @@
 - **慢与断分档**：`showError` 的 disconnected 分支按实时腿是否还活着选文案——流仍在送帧（`streamConnected && now - lastStreamFrameAt < 30 000`）说「桌面端处理较慢，正在等它回应…」，流也静了才说「连接已断开，正在重试…」。`streamDownHost` 的中英文案随之由「桌面端没有响应，正在重试…」/「The desktop is not responding, retrying…」改为「桌面端处理较慢，正在等它回应…」/「The desktop is slow to answer; still waiting…」。
 - **退避真的退**：① 历史轮询的活跃档 `HISTORY_POLL_ACTIVE_MS` 由 250 ms 放到 1 500 ms（它只在「实时流断了 / 隧道轮询连败两次」时启用，正常态恒为 5 000 ms，不受影响）——实测这一档是「越卡越卡」的加速器：`1/max(250ms, 请求耗时)` 在宿主快而流失联时一分钟可打到两百多次；② 隧道事件轮询连续失败三次起把上限从 6 000 ms 抬到 `EVENTS_POLL_SLOW_MS = 30 000`，阶梯 12 s → 24 s → 30 s 封顶，成功即归零。
 
-回归锁（`test/error-visibility.test.js`）：冷却挡住第二个故障、恢复后二十秒才解锁、超长故障按稳定性重装、RPC 那条腿同样被冷却挡住、慢与断两档各说各话、**冷却期回落写正文而不是什么都不说**（`chatError` 仍是 `disconnectedRetry`）；`test/pages-disconnect-copy.test.js` 与 `test/turn-end-errors.test.js` 的沙箱同步新状态变量与新文案 key（`streamDownHost` 与新的 `streamDownFailed` 各管一档，都不进任何消息气泡）。全量 `node --test --test-concurrency=1 test/*.test.js` = **1466 tests / 1464 pass / 0 fail / 2 skipped**。
+回归锁（`test/error-visibility.test.js`）：冷却挡住第二个故障、恢复后二十秒才解锁、超长故障按稳定性重装、RPC 那条腿同样被冷却挡住、慢与断两档各说各话、**冷却期回落写正文而不是什么都不说**（`chatError` 仍是 `disconnectedRetry`）；`test/pages-disconnect-copy.test.js` 与 `test/turn-end-errors.test.js` 的沙箱同步新状态变量与新文案 key（`streamDownHost` 与新的 `streamDownFailed` 各管一档，都不进任何消息气泡）。全量 `node --test --test-concurrency=1 test/*.test.js` = **1467 tests / 1465 pass / 0 fail / 2 skipped**（基线 1463 / 1461 / 0 / 2；两轮审查各补断言后重测）。
 
 静态资产：`ASSET_BUDGET_BYTES = 391_500` 没有抬高，本次靠压缩等量注释腾出位置——`lib/pages.js` 里两条 turn high-water 注释、滚动时序埋点与锚点两处注释做了同义压缩（内容未丢），补审又压了 `S-R3-3` 半开流那条（8 行 → 5 行，四个 keepalive 周期的理由保留）；终值 **zh 391,299（余 201 B）/ en 391,206（余 294 B）**（两轮审查改完后重测）。
 
