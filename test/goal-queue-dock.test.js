@@ -554,6 +554,40 @@ test('the queue dock slots into the composer with the todo-dock height protocol'
   assert.match(js, /toggle\('queue-open'/, 'the body class rides the render, todo-style');
 });
 
+test('the todo dock is a right-hugging pill above the composer, not a full-width band', () => {
+  // 2026-10-22: the dock used to be a full-width card in the composer flow, which
+  // squeezed the transcript and pushed the message list away from the input. It is
+  // now a pill that hugs the right edge and floats just above the composer, so the
+  // expanded card overlays the transcript the way the subagent rows already do.
+  assert.match(css, /\.todo-dock\{[^}]*width:max-content[^}]*margin:0 0 8px auto/,
+    'the dock hugs the right edge and stops claiming the composer width');
+  assert.match(css, /\.todo-dock\{[^}]*flex-direction:column-reverse/,
+    'the pill is rendered top-down so the expanded card grows upward, header first');
+  assert.match(css, /\.todo-dock\{[^}]*pointer-events:none/,
+    'the transparent container lets vertical gestures reach the transcript');
+  assert.match(css, /\.todo-header\{[^}]*pointer-events:auto/, 'the pill itself keeps its hit area');
+  assert.match(css, /\.todo-header\{[^}]*border-radius:999px/, 'the head reads as a capsule');
+  assert.match(css, /\.todo-list\{[^}]*pointer-events:none/,
+    'the collapsed list is inert until it actually overflows');
+  assert.match(css, /\.todo-list\{[^}]*touch-action:pan-y/, 'the list owns its own vertical drag');
+  assert.match(js, /function syncTodoHeight\(host\)/, 'the pill keeps a measured clearance for the transcript');
+  assert.match(js, /\$\('todoDock'\)\.onclick=/, 'the pill has a click handler');
+  assert.match(document, /<div id="composer"[\s\S]{0,400}id="todoDock"/,
+    'the pill still lives inside the composer, above the input row');
+  assert.match(js, /if\(!todoExpanded\)return;const dock=\$\('todoDock'\)/,
+    'the expanded pill collapses on an outside pointerdown like the subagent capsule');
+  // 让位钉：胶囊在 composer 的流内，会把 composer 盒子顶高 52px，而 syncComposerHeight()
+  // 只量 .composer-inner（--composer-h 故意不含 dock）。所以每个按 --composer-h 定位的固定层
+  // 都必须自己把 --todo-h 加回让位栈，否则落在胶囊带里。2026-10-22 第一版曾摘掉后两处，
+  // ↑/↓ 与设置面板当场压到胶囊上。
+  assert.match(css, /\.scroll-anchors\{[^}]*var\(--composer-h\) \+ var\(--todo-h\)/,
+    'the jump fabs stay clear of the pill: their band carries --todo-h');
+  assert.match(css, /#composer \.session-settings\{[^}]*var\(--todo-h\)/,
+    'the settings panel opens above the pill too');
+  assert.doesNotMatch(css, /\.todo-(open|expanded) \.messages\{/,
+    'no per-state messages band: the base tier already carries --todo-h and the card overlays it');
+});
+
 test('the projections RPC is allowlisted and wraps sessionId in the request param', () => {
   const entry = HARNESS_ENDPOINTS['session.projections'];
   // Live-probed against the running host 2026-10-05: a flat `{ sessionId }`

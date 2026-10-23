@@ -414,7 +414,7 @@ test('AC-UI1 every control the audit measured small now clears the 44px floor', 
     '.composer textarea{flex:1;height:44px;min-height:44px;',
     '.plus-search-open{display:flex;align-items:center;gap:7px;width:100%;height:44px;',
     '.plus-filter{width:100%;height:44px;',
-    '.todo-header{width:100%;height:44px;',
+    '.todo-header{display:flex;align-items:center;gap:6px;height:44px;',
     '.setting-pick{width:100%;height:46px;',
     '.chat-toolbar{position:absolute;inset:0 0 auto;z-index:2;min-height:44px;',
     '.plus-search-cancel{flex:none;min-width:44px;min-height:44px;',
@@ -1097,6 +1097,10 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   TAIL_ROUNDS_MAX / TAIL_REQUEUE_MAX + 分批递归，m02267）；② 启动数字改成请求发出即开跑
 //   （countCrawl）。实测 zh 390 426（css 56 836 + js 333 590）/ en 390 356（css 56 836 +
 //   js 333 520）；取 391 500（余量 1 074 B（zh）/ 1 144 B（en））。
+// 2026-10-23 0.4.56 身份折叠 + 删 reconcileBoot + hostProbe + 断线宽限四批合计吃掉八成余量：
+//   实测 zh 391 251（css 53 502 + js 337 749）/ en 391 149（css 53 502 + js 337 647）。
+//   **余量已到硬底（249 B（zh）/ 351 B（en）），线仍不抬**——下一批改动先瘦身或先做桥侧压缩，
+//   不要改大 ASSET_BUDGET_BYTES。
 const ASSET_BUDGET_BYTES = 391_500
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
