@@ -7,7 +7,8 @@
 ## 未发布 — 目标 0.4.59
 
 本版修三件事：**手机发出去的消息会静默丢掉**（A 组）、隧道侧的五条缺陷（B 组，其中三条 P0），
-以及手机首屏静态资产的传输体积（D 组）。C 组（cookie `Secure` 改成按「这一跳是否 TLS」判）**本版未做**，理由写在节末。
+以及手机首屏静态资产的传输体积（D 组）。C 组（cookie `Secure` 改成按「这一跳是否 TLS」判）本版原定不做，
+发布前由 W3 补做（见节内《W3》小节，真机走查仍欠）。
 
 ### A 组：发送改成一本账，离页不再静默
 
@@ -39,9 +40,17 @@
   开关、每桥只渲染一次）。
 - **已知取舍**：`preferredEncoding()` 不解析 `q=` 权重、不认 `*`，只按 br → gzip → identity 的固定顺序取第一个显式 token。
 
-### 未做：C 组 cookie `Secure`
+### W3：隧道自动重拨 + cookie `Secure` 按本跳判（2026-10-25，卡 `2026-10-24-pocket-tunnel-resilience`）
 
-按「这一跳是否 TLS」判要碰登录态：判错一次就是手机掉登录，而验证它需要 LAN 直连、隧道、反代三档真机各走一遍。本版不修（`F:\defws\.agents\flow\changes\2026-10-24-pocket-send-loss-and-tunnel-p0\tasks.md` T4 标 `SKIP-BY-LEAD`），隧道态登录态维持现状。
+- **A1 自动重拨**：carrier 意外死亡后桥自己再拉一次隧道，最多 **3 次**，间隔 **2 s / 8 s / 30 s**（`TUNNEL_AUTO_REVIVE_MAX`、`TUNNEL_AUTO_REVIVE_BACKOFF_MS`）；`DSH_POCKET_TUNNEL_AUTOREVIVE=0` 可整体关掉（只有显式 `0` 关，空值仍开）。致命判据只落在「重拨启动失败」上：`lib/tunnel.js` 已经把「换 token 才有救」的五类错打了 `fatal`，重拨撞上它就放弃（`reason=fatal`），其余失败继续退避，成功即清零。**代价要说清楚：重拨后隧道地址会变，手机手上那条 URL 随之失效——用户仍需重新扫码**（新地址不会自己推到手机上，推送属另卡）。计时器一律 `.unref()`，`stop()`/`toggleTunnel(false)`/`clearTunnelDeathFlags()` 都清；同一次死亡重复报 `close` 只处理一次（幂等，`parkLiveSessions` 不会跑第二遍）。快照新增 `tunnelAutoRevive{attempt,max,nextAt}`——配对页文案本次未动，只落数据面。
+- **P0-4 cookie `Secure` 按本跳判**：新增 `lib/hop-tls.js`（零依赖纯函数），三档证据按强度排序——① `req.socket.encrypted`；② `cf-visitor: {"scheme":"https"}`（Cloudflare 边缘重写该头，客户端自带值会被替换）；③ 隧道档 + **本机回环对端**（cloudflared 以 `http://127.0.0.1:<port>` 回源，桥看不到的那一跳必是 https）。手机会话、桌面配对、同意门三处 cookie 都走这一个判据，删掉了两处「按 `connectionMode` 猜」的副本。
+- **顺手修的真 bug**：隧道档下来自 `192.168.x.x` 的 LAN 明文请求不再被加 `Secure`。此前按 `connectionMode` 判，同一个监听口上的两种事实被混成一种 ⇒ 明文跳上带 `Secure` 的 `Set-Cookie` 被浏览器**静默丢弃**（不报错、不进 jar），表现就是「反复掉登录」。反向的一处也一并修好：隧道回源这一跳（loopback）此前拿不到 `Secure`。**不认 `x-forwarded-proto`**：本机任何进程都能塞这个头，伪造「我是 https」只会给自己多一个 `Secure`，收益为负。
+- **怎么验**：`test/tunnel.test.js` 21 条（常量与开关三档、真 `child_process` 被杀触发重拨、真 cloudflared 替身打 `invalid tunnel secret` 走完 `isFatalCloudflaredError()` → `reason=fatal`、连续失败到 `reason=exhausted`、无悬挂定时器、幂等、六档 hop 判据、`hopSecureSuffix(` 4 处 / `hopIsTls(` 1 处的单一性 grep 断言）、`test/pairing.test.js` 2 条（两参调用逐字节不变 + 传第三参才多出 `Secure`）、`test/consent.test.js` 3 条。全量 `node --test --test-concurrency=1 test/*.test.js` = **1611 tests / 1609 pass / 0 fail / 2 skipped**（pwsh；基线 `d290551` 为 1529/1527/0/2）。
+- **壳字节 0 B**：本卡不碰 `lib/pages.js`，`ASSET_BUDGET_BYTES = 391_500` 未抬线。
+
+### 未做：C 组 cookie `Secure`（0.4.59 发布前已由 W3 补做）
+
+按「这一跳是否 TLS」判要碰登录态：判错一次就是手机掉登录，而验证它需要 LAN 直连、隧道、反代三档真机各走一遍。本版不修（`F:\defws\.agents\flow\changes\2026-10-24-pocket-send-loss-and-tunnel-p0\tasks.md` T4 标 `SKIP-BY-LEAD`），隧道态登录态维持现状。**2026-10-25 由卡 `2026-10-24-pocket-tunnel-resilience` 的 W3 补做（见上节）；三档真机走查仍未做**，本机只有单测与真实 HTTP 端到端用例。上面这段保留为当时的判断与理由。
 
 ### 读数
 

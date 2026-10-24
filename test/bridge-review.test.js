@@ -139,7 +139,15 @@ test('A tunnel: the cookie-matched suspended entry is revived without a new sess
   bridge.suspendedSessions.set(token, { token, remoteAddress: '203.0.113.7', issuedAt: 1000 })
   const response = mockResponse()
   bridge.issueSessionCookie(
-    { headers: { cookie: `dsh_mobile=${token}`, 'user-agent': 'PocketDevice/1.0' } },
+    // P0-4: `Secure` now follows what THIS hop carried, and a tunnel hop is
+    // recognised by its loopback TCP peer — cloudflared dials the bridge on
+    // 127.0.0.1. A real request always carries its socket, so the mock has to
+    // carry one too; without it there is no evidence this hop was TLS and the
+    // correct answer is no `Secure` at all (that is AC3.4, the LAN peer case).
+    {
+      headers: { cookie: `dsh_mobile=${token}`, 'user-agent': 'PocketDevice/1.0' },
+      socket: { remoteAddress: '127.0.0.1' },
+    },
     response,
     '203.0.113.7',
     'tunnel'

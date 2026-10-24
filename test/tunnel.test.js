@@ -7,15 +7,16 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { Readable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { startCloudflareNamedTunnel, startCloudflareQuickTunnel, isFatalCloudflaredError, resolveCloudflared, ensureCloudflared, extractTryCloudflareUrl, buildCloudflaredEnv } from '../lib/tunnel.js'
 import { createSettingsStore, SETTINGS_FILE_NAME } from '../lib/settings-store.js'
-import { LanMobileBridge } from '../lib/bridge.js'
-import { TUNNEL_HOSTNAME_MAX_LENGTH } from '../lib/constants.js'
+import { LanMobileBridge, tunnelAutoReviveEnabled } from '../lib/bridge.js'
+import { cfVisitorScheme, isLoopbackHop } from '../lib/hop-tls.js'
+import { TUNNEL_AUTO_REVIVE_BACKOFF_MS, TUNNEL_AUTO_REVIVE_MAX, TUNNEL_HOSTNAME_MAX_LENGTH } from '../lib/constants.js'
 import { encodeQr } from '../lib/qr-svg.js'
 import { createMuxMonitor } from '../lib/mux-client.js'
 import { startBridge, httpFetch } from './helpers.js'
@@ -1860,4 +1861,478 @@ test('P0-2: the idle window is raised to 20 s; the probe never lands after the t
     .filter((name) => name.endsWith('.js'))
     .filter((name) => /setKeepAlive|new http\.Agent/.test(fs.readFileSync(path.join(libDir, name), 'utf8')))
   assert.ok(hits.length >= 1, 'the keepalive must live in the shipped lib, not only in a test double')
+})
+
+// ---------------------------------------------------------------------------
+// W3 (2026-10-24-pocket-tunnel-resilience) — A1: bounded auto-revive.
+//
+// Nothing here mocks the death. The seam under test is the delay ladder
+// (`options.tunnelAutoReviveDelays`), so the production 2 s / 8 s / 30 s is
+// never waited out; everything else is the real path — a real child process
+// really dies, `toggleTunnel` really launches, and the `fatal` verdict really
+// comes from `lib/tunnel.js` reading cloudflared's own output tail. There is no
+// `{ fatal: true }` stand-in instance anywhere in this block, because at death
+// time no such field exists (`lib/tunnel.js` reports it via `options.onExit`,
+// which the bridge does not pass).
+// ---------------------------------------------------------------------------
+
+/** A real child process that stays alive until somebody kills it. */
+function liveTunnelChild() {
+  return spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+}
+
+/** The bridge's own fake carrier: a real process, a real close event. */
+function realCarrier() {
+  const child = liveTunnelChild()
+  return {
+    child,
+    instance: {
+      url: 'https://flaky.trycloudflare.com',
+      provider: 'cloudflare',
+      process: child,
+      stop: async () => {
+        try {
+          child.kill()
+        } catch {
+          /* already gone */
+        }
+      },
+    },
+  }
+}
+
+/** Poll until `predicate()` holds; fail loudly instead of hanging. */
+async function waitForReviveState(predicate, description, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.fail(`timed out waiting for ${description}`)
+}
+
+/** Kill a real carrier and wait for the death the bridge has to react to. */
+async function killCarrier(child) {
+  const closed = new Promise((resolve) => child.once('close', resolve))
+  process.kill(child.pid)
+  await closed
+}
+
+test('auto-revive constants (AC1.1): three tries, 2 s / 8 s / 30 s', () => {
+  assert.equal(TUNNEL_AUTO_REVIVE_MAX, 3)
+  assert.deepEqual([...TUNNEL_AUTO_REVIVE_BACKOFF_MS], [2000, 8000, 30000])
+  assert.ok(Object.isFrozen(TUNNEL_AUTO_REVIVE_BACKOFF_MS), 'the ladder is frozen, not a mutable module-level array')
+})
+
+/** Run `fn` with DSH_POCKET_TUNNEL_AUTOREVIVE set (or unset) and restore it. */
+function withAutoReviveEnv(value, fn) {
+  const previous = process.env.DSH_POCKET_TUNNEL_AUTOREVIVE
+  try {
+    if (value === undefined) delete process.env.DSH_POCKET_TUNNEL_AUTOREVIVE
+    else process.env.DSH_POCKET_TUNNEL_AUTOREVIVE = value
+    return fn()
+  } finally {
+    if (previous === undefined) delete process.env.DSH_POCKET_TUNNEL_AUTOREVIVE
+    else process.env.DSH_POCKET_TUNNEL_AUTOREVIVE = previous
+  }
+}
+
+test('auto-revive switch (AC1.2): unset means on', () => {
+  withAutoReviveEnv(undefined, () => assert.equal(tunnelAutoReviveEnabled(), true))
+})
+
+test('auto-revive switch (AC1.2): exactly "0" means off', () => {
+  withAutoReviveEnv('0', () => assert.equal(tunnelAutoReviveEnabled(), false))
+})
+
+test('auto-revive switch (AC1.2): an empty value is not "off"', () => {
+  withAutoReviveEnv('', () => assert.equal(tunnelAutoReviveEnabled(), true))
+})
+
+test('auto-revive schedules on real close (AC2.1): a carrier that really dies arms one bounded redial', async () => {
+  const carriers = []
+  const t = await startBridge({
+    tunnelAutoReviveDelays: [0, 0, 0],
+    createCloudflareTunnel: async () => {
+      const carrier = realCarrier()
+      carriers.push(carrier)
+      return carrier.instance
+    },
+  })
+  try {
+    await t.bridge.toggleTunnel(true)
+    assert.ok(carriers.length === 1, 'one carrier is up')
+    assert.ok(carriers[0].child.pid > 0, 'the carrier is a real process, not a stub object')
+    await killCarrier(carriers[0].child)
+    // The bridge's own `close` listener was registered first, and the redial
+    // tick is a later macrotask: this is the state the death left behind.
+    assert.equal(t.bridge.unexpectedlyClosed, true)
+    assert.equal(t.bridge.tunnelAutoReviveAttempt, 1)
+    assert.notEqual(t.bridge.tunnelAutoReviveTimer, undefined, 'and a tick is armed')
+    assert.equal(typeof t.bridge.tunnelAutoReviveNextAt, 'number')
+    const snap = t.bridge.snapshot()
+    assert.equal(snap.tunnelAutoRevive.max, 3)
+    assert.equal(snap.tunnelAutoRevive.attempt, 1)
+    assert.equal(typeof snap.tunnelAutoRevive.nextAt, 'number')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('auto-revive: fatal cloudflared is not retried (AC2.2) — a credential the edge refuses ends the ladder after one try', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pocket-w3-fatal-'))
+  // A stand-in cloudflared: it writes cloudflared's own words and exits 1, so the
+  // verdict under test is `isFatalCloudflaredError()` reading a real output tail.
+  // (`invalid tunnel secret` is cloudflared's own wording for a token the edge
+  // refused — `Invalid tunnel token` alone does NOT trip the classifier, and a
+  // stand-in that trips nothing would be testing the test.)
+  const stub = path.join(tmpDir, 'fatal-cloudflared.cjs')
+  fs.writeFileSync(stub, "process.stderr.write('ERR Failed to unmarshal tunnel token: invalid tunnel secret\\n')\nprocess.exit(1)\n")
+  assert.equal(isFatalCloudflaredError('ERR Failed to unmarshal tunnel token: invalid tunnel secret\n'), true, 'the stand-in really trips the classifier')
+  const carriers = []
+  const lines = []
+  let launches = 0
+  const t = await startBridge({
+    tunnelAutoReviveDelays: [0, 0, 0],
+    createCloudflareTunnel: async (port) => {
+      launches += 1
+      if (launches === 1) {
+        const carrier = realCarrier()
+        carriers.push(carrier)
+        return carrier.instance
+      }
+      // The revive dials the REAL named-tunnel launcher; only the binary it
+      // spawns is a stand-in, and it is a real child process either way.
+      return await startCloudflareNamedTunnel({
+        port,
+        token: 'revive-token',
+        hostname: 'revive.example.com',
+        ensureImpl: async () => process.execPath,
+        spawnImpl: (_bin, _args, spawnOptions) => spawn(process.execPath, [stub], spawnOptions),
+        graceMs: 60,
+        log: () => {},
+      })
+    },
+    bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) },
+  })
+  try {
+    await t.bridge.toggleTunnel(true)
+    await killCarrier(carriers[0].child)
+    await waitForReviveState(() => lines.some((line) => line.includes('reason=fatal')), 'the fatal verdict')
+    assert.equal(t.bridge.tunnelErrorFatal, true, 'the launch that failed was the fatal one')
+    assert.equal(t.bridge.tunnelAutoReviveAttempt, 1, 'no second try is spent on a refused credential')
+    assert.equal(t.bridge.tunnelAutoReviveTimer, undefined, 'and nothing is left armed')
+    assert.ok(t.bridge.tunnelError.length > 0, 'the reason is on the snapshot')
+  } finally {
+    await t.stop()
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  }
+})
+
+test('revive (AC2.3): a death while the bridge is stopping the tunnel schedules nothing', async () => {
+  const lines = []
+  const child = liveTunnelChild()
+  let releaseStop
+  const stopping = new Promise((resolve) => {
+    releaseStop = resolve
+  })
+  const t = await startBridge({
+    tunnelAutoReviveDelays: [50, 50, 50],
+    createCloudflareTunnel: async () => ({
+      url: 'https://stopping.trycloudflare.com',
+      provider: 'cloudflare',
+      process: child,
+      stop: () => stopping,
+    }),
+    bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) },
+  })
+  try {
+    await t.bridge.toggleTunnel(true)
+    // The carrier dies in the same instant the desktop asked for the tunnel to
+    // go away: the stop is not a death asking to be replaced.
+    const toggleOff = t.bridge.toggleTunnel(false)
+    await killCarrier(child)
+    assert.equal(t.bridge.tunnelAutoReviveTimer, undefined, 'nothing is armed')
+    assert.equal(t.bridge.tunnelAutoReviveAttempt, 0, 'and no attempt is spent')
+    assert.equal(t.bridge.unexpectedlyClosed, false, 'a stop the bridge asked for is not an unexpected death')
+    assert.doesNotMatch(lines.join(' | '), /tunnel closed unexpectedly/)
+    releaseStop()
+    await toggleOff
+    // The guard is belt-and-braces behind `armTunnelProcess`'s own
+    // `tunnelExpectedStop` check: whatever calls the scheduler while a stop is
+    // in flight must not arm a launch the stop is about to invalidate.
+    t.bridge.tunnelExpectedStop = true
+    t.bridge.scheduleTunnelAutoRevive()
+    assert.equal(t.bridge.tunnelAutoReviveTimer, undefined)
+    assert.match(lines.join(' | '), /tunnel revive skip reason=expected-stop/)
+  } finally {
+    t.bridge.tunnelExpectedStop = false
+    releaseStop?.()
+    await t.stop()
+  }
+})
+
+test('auto-revive gives up after max (AC2.4): three failed launches in a row spend the ladder and say so', async () => {
+  const carriers = []
+  const lines = []
+  let launches = 0
+  const t = await startBridge({
+    tunnelAutoReviveDelays: [0, 0, 0],
+    createCloudflareTunnel: async () => {
+      launches += 1
+      if (launches === 1) {
+        const carrier = realCarrier()
+        carriers.push(carrier)
+        return carrier.instance
+      }
+      // Not fatal: the edge is unreachable, which is exactly the case the ladder
+      // exists for — and every launch settles, so the bridge never hangs on it.
+      throw new Error('cloudflared dial refused by the edge (test)')
+    },
+    bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) },
+  })
+  try {
+    await t.bridge.toggleTunnel(true)
+    await killCarrier(carriers[0].child)
+    await waitForReviveState(
+      () => lines.some((line) => line.includes('gave up reason=exhausted')),
+      'the ladder to be spent'
+    )
+    assert.equal(t.bridge.tunnelAutoReviveAttempt, 3, 'all three attempts are on the books')
+    assert.equal(t.bridge.tunnelAutoReviveTimer, undefined)
+    assert.ok(t.bridge.tunnelError.length > 0, 'the last failure is still reported on the snapshot')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('revive (AC2.5): DSH_POCKET_TUNNEL_AUTOREVIVE=0 leaves the dead tunnel dead', async () => {
+  const carriers = []
+  const lines = []
+  const previous = process.env.DSH_POCKET_TUNNEL_AUTOREVIVE
+  let t
+  try {
+    process.env.DSH_POCKET_TUNNEL_AUTOREVIVE = '0'
+    t = await startBridge({
+      tunnelAutoReviveDelays: [0, 0, 0],
+      createCloudflareTunnel: async () => {
+        const carrier = realCarrier()
+        carriers.push(carrier)
+        return carrier.instance
+      },
+      bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) },
+    })
+    await t.bridge.toggleTunnel(true)
+    await killCarrier(carriers[0].child)
+    assert.equal(t.bridge.tunnelAutoReviveAttempt, 0)
+    assert.equal(t.bridge.tunnelAutoReviveTimer, undefined)
+    assert.match(lines.join(' | '), /tunnel revive skip reason=disabled/)
+  } finally {
+    if (previous === undefined) delete process.env.DSH_POCKET_TUNNEL_AUTOREVIVE
+    else process.env.DSH_POCKET_TUNNEL_AUTOREVIVE = previous
+    await t?.stop()
+  }
+})
+
+test('revive (AC2.6): turning the tunnel off disarms the pending redial', async () => {
+  const carriers = []
+  const t = await startBridge({
+    tunnelAutoReviveDelays: [50, 50, 50],
+    createCloudflareTunnel: async () => {
+      const carrier = realCarrier()
+      carriers.push(carrier)
+      return carrier.instance
+    },
+  })
+  try {
+    await t.bridge.toggleTunnel(true)
+    await killCarrier(carriers[0].child)
+    assert.equal(t.bridge.tunnelAutoReviveAttempt, 1)
+    assert.notEqual(t.bridge.tunnelAutoReviveTimer, undefined)
+    await t.bridge.toggleTunnel(false)
+    assert.equal(t.bridge.tunnelAutoReviveTimer, undefined)
+    assert.equal(t.bridge.tunnelAutoReviveAttempt, 0)
+  } finally {
+    await t.stop()
+  }
+})
+
+test('revive (AC2.7): clearTunnelDeathFlags() drops the tick, the budget and the fatal flag', async () => {
+  const carriers = []
+  const t = await startBridge({
+    tunnelAutoReviveDelays: [50, 50, 50],
+    createCloudflareTunnel: async () => {
+      const carrier = realCarrier()
+      carriers.push(carrier)
+      return carrier.instance
+    },
+  })
+  try {
+    await t.bridge.toggleTunnel(true)
+    await killCarrier(carriers[0].child)
+    assert.notEqual(t.bridge.tunnelAutoReviveTimer, undefined)
+    // The flag is normally set by a launch that failed fatally; what this arm
+    // pins is that clearing the death clears it too.
+    t.bridge.tunnelErrorFatal = true
+    t.bridge.clearTunnelDeathFlags()
+    assert.equal(t.bridge.tunnelAutoReviveTimer, undefined)
+    assert.equal(t.bridge.tunnelAutoReviveAttempt, 0)
+    assert.equal(t.bridge.tunnelErrorFatal, false)
+    assert.equal(t.bridge.unexpectedlyClosed, false)
+  } finally {
+    await t.stop()
+  }
+})
+
+test('revive (AC2.8): no dangling timer survives bridge.stop()', async () => {
+  const carriers = []
+  const t = await startBridge({
+    tunnelAutoReviveDelays: [30_000, 30_000, 30_000],
+    createCloudflareTunnel: async () => {
+      const carrier = realCarrier()
+      carriers.push(carrier)
+      return carrier.instance
+    },
+  })
+  await t.bridge.toggleTunnel(true)
+  await killCarrier(carriers[0].child)
+  assert.notEqual(t.bridge.tunnelAutoReviveTimer, undefined, 'a long redial is armed, and ref-held it would outlive the run')
+  await t.stop()
+  assert.equal(t.bridge.tunnelAutoReviveTimer, undefined, 'stop() takes the tick with it')
+  // If the tick had been left armed and referenced, this file would not exit on
+  // its own — the pattern is named so a hang here is attributable.
+})
+
+test('auto-revive idempotent (AC2.9): one death is handled once, however many close events arrive', async () => {
+  const lines = []
+  const child = { once: (_event, handler) => { child.handler = handler }, kill: () => true, exitCode: null, signalCode: null }
+  const t = await startBridge({
+    tunnelAutoReviveDelays: [50, 50, 50],
+    createCloudflareTunnel: async () => ({
+      url: 'https://twice.trycloudflare.com',
+      provider: 'cloudflare',
+      process: child,
+      stop: async () => {},
+    }),
+    bridgeOptions: { log: (level, message) => lines.push(`${level} ${message}`) },
+  })
+  try {
+    await t.pairMobile('PocketTwice/1.0')
+    await t.bridge.toggleTunnel(true)
+    child.handler?.()
+    child.handler?.()
+    const deaths = lines.filter((line) => line.includes('tunnel closed unexpectedly'))
+    assert.equal(deaths.length, 1, lines.join(' | '))
+    assert.equal(t.bridge.tunnelAutoReviveAttempt, 1, 'and one death spends one attempt, not two')
+    assert.equal(t.bridge.sessions.size, 0)
+  } finally {
+    await t.stop()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// W3 — P0-4: `Secure` follows THIS hop, not the bridge's mode.
+// ---------------------------------------------------------------------------
+
+test('hop tls (AC3.1): an encrypted socket marks the cookie Secure', async () => {
+  const t = await startBridge()
+  try {
+    assert.equal(
+      t.bridge.hopSecureSuffix({ socket: { encrypted: true }, headers: {}, remoteAddress: '127.0.0.1' }, 'lan'),
+      '; Secure'
+    )
+  } finally {
+    await t.stop()
+  }
+})
+
+test('hop tls (AC3.2): a plaintext LAN hop gets no Secure', async () => {
+  const t = await startBridge()
+  try {
+    assert.equal(
+      t.bridge.hopSecureSuffix({ socket: {}, headers: {}, remoteAddress: '192.168.1.7' }, 'lan'),
+      ''
+    )
+  } finally {
+    await t.stop()
+  }
+})
+
+test('hop tls (AC3.3): a tunnel hop from this machine is TLS', async () => {
+  const t = await startBridge()
+  try {
+    assert.equal(
+      t.bridge.hopSecureSuffix({ socket: {}, headers: {}, remoteAddress: '127.0.0.1' }, 'tunnel'),
+      '; Secure'
+    )
+    assert.equal(
+      t.bridge.hopSecureSuffix({ socket: {}, headers: {}, remoteAddress: '::1' }, 'tunnel'),
+      '; Secure'
+    )
+  } finally {
+    await t.stop()
+  }
+})
+
+test('hop tls (AC3.4, R3): a LAN handset stays plaintext even while the tunnel is up', async () => {
+  const t = await startBridge()
+  try {
+    // The old test was the bridge's own mode, so this hop got a `Secure` cookie
+    // its phone could not store and the consent answer never stuck.
+    assert.equal(
+      t.bridge.hopSecureSuffix({ socket: {}, headers: {}, remoteAddress: '192.168.1.7' }, 'tunnel'),
+      ''
+    )
+  } finally {
+    await t.stop()
+  }
+})
+
+test('hop tls (AC3.5): cf-visitor saying https is this hop being TLS', async () => {
+  const t = await startBridge()
+  try {
+    assert.equal(
+      t.bridge.hopSecureSuffix(
+        { socket: {}, headers: { 'cf-visitor': '{"scheme":"https"}' }, remoteAddress: '192.168.1.7' },
+        'lan'
+      ),
+      '; Secure'
+    )
+  } finally {
+    await t.stop()
+  }
+})
+
+test('hop tls (AC3.6): a forged x-forwarded-proto is not evidence', async () => {
+  const t = await startBridge()
+  try {
+    assert.equal(
+      t.bridge.hopSecureSuffix(
+        { socket: {}, headers: { 'x-forwarded-proto': 'https' }, remoteAddress: '192.168.1.7' },
+        'lan'
+      ),
+      ''
+    )
+  } finally {
+    await t.stop()
+  }
+})
+
+test('hop-tls evidence: the loopback range is the whole 127/8, and a malformed cf-visitor says nothing', () => {
+  assert.equal(isLoopbackHop('127.55.0.1'), true, '127/8 is loopback, not just 127.0.0.1')
+  assert.equal(isLoopbackHop('::ffff:127.9.9.9'), true, 'the IPv4-mapped form too')
+  assert.equal(isLoopbackHop('::1'), true)
+  assert.equal(isLoopbackHop('192.168.1.7'), false)
+  assert.equal(cfVisitorScheme({ 'cf-visitor': '{"scheme":"https"}' }), 'https')
+  assert.equal(cfVisitorScheme({ 'cf-visitor': 'not json' }), undefined, 'a malformed header is not evidence')
+  assert.equal(cfVisitorScheme({}), undefined)
+})
+
+test('AC3.8: every cookie site asks lib/hop-tls.js — one definition, three call sites', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('../lib/bridge.js', import.meta.url)), 'utf8')
+  const count = (needle) => src.split(needle).length - 1
+  assert.equal(count('hopSecureSuffix('), 4, 'one definition + three cookie sites')
+  assert.equal(count('hopIsTls('), 1, 'the judgement itself is asked for in exactly one place')
+  assert.equal(count("connectionMode === 'tunnel' ? '; Secure'"), 0, 'the old mode-based copy is gone, not shadowed')
+  assert.match(src, /from '\.\/hop-tls\.js'/, 'and the judgement is imported, not re-implemented')
 })

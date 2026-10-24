@@ -106,6 +106,11 @@ export async function startBridge(opts = {}) {
     // ceiling instead of asserting on it. A test that wants the hold opts in with
     // `bridgeOptions: { eventHoldMs: … }`.
     eventHoldMs: 0,
+    // W3/A1: the revive-gap seam and the cloudflared seam read better beside the
+    // other inputs, so `startBridge({ tunnelAutoReviveDelays, createCloudflareTunnel })`
+    // is accepted at the top level as well as under `bridgeOptions`.
+    ...(opts.tunnelAutoReviveDelays === undefined ? {} : { tunnelAutoReviveDelays: opts.tunnelAutoReviveDelays }),
+    ...(opts.createCloudflareTunnel === undefined ? {} : { createCloudflareTunnel: opts.createCloudflareTunnel }),
     ...(opts.bridgeOptions ?? {}),
     log: (level, message) => {
       logs.push({ level, message })

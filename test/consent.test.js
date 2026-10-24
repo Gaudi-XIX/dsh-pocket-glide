@@ -264,3 +264,52 @@ test('须知回答落在设备档案上：换隧道域名（没有 cookie）也�
     await t.stop()
   }
 })
+
+// ------------------------------------- W3/P0-4: the consent cookie's `Secure`
+// The gate's cookie is the one that decides whether the disclaimer question is
+// asked again on every navigation, so its `Secure` has to describe THIS hop
+// (design P0-4). Three arms, one per piece of evidence the hop can carry.
+const consentAccept = (t, extraHeaders) => httpFetch(`${t.base}/consent/accept`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', ...extraHeaders },
+  body: JSON.stringify({ next: '/' }),
+})
+
+test('consent gate: a cf-visitor https hop marks the cookie Secure without any cloudflare proxy headers', async () => {
+  const t = await startBridge()
+  try {
+    // A LAN-mode request (no cf-connecting-ip / cf-ray) whose hop still says
+    // https: the handset reached a TLS front, so the cookie deserves `Secure`.
+    const res = await consentAccept(t, { 'cf-visitor': '{"scheme":"https"}' })
+    assert.equal(res.status, 303)
+    assert.match(res.headers.get('set-cookie') ?? '', /;\s*Secure/)
+  } finally {
+    await t.stop()
+  }
+})
+
+test('consent gate: a forged x-forwarded-proto is not TLS evidence for the cookie', async () => {
+  const t = await startBridge()
+  try {
+    const res = await consentAccept(t, { 'x-forwarded-proto': 'https' })
+    assert.equal(res.status, 303)
+    const setCookie = res.headers.get('set-cookie') ?? ''
+    assert.match(setCookie, /^dsh_consent=1/)
+    assert.doesNotMatch(setCookie, /Secure/, 'any local process can send that header; it decides nothing')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('consent gate: cf-visitor saying http keeps the cookie plaintext even when x-forwarded-proto claims https', async () => {
+  const t = await startBridge()
+  try {
+    const res = await consentAccept(t, { 'cf-visitor': '{"scheme":"http"}', 'x-forwarded-proto': 'https' })
+    assert.equal(res.status, 303)
+    const setCookie = res.headers.get('set-cookie') ?? ''
+    assert.match(setCookie, /Max-Age=31536000/)
+    assert.doesNotMatch(setCookie, /Secure/, 'Cloudflare described the handset leg as http')
+  } finally {
+    await t.stop()
+  }
+})

@@ -3,7 +3,7 @@
 // + cf-ray header seam (no real public host required).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { LanMobileBridge, pairingRateKey } from '../lib/bridge.js'
+import { LanMobileBridge, desktopCookieAttributes, pairingRateKey } from '../lib/bridge.js'
 import { PAIRING_PIN_DIGITS } from '../lib/constants.js'
 import { startBridge, httpFetch } from './helpers.js'
 
@@ -649,4 +649,32 @@ test('after pairing, the consent gate fronts /api/rpc until the disclaimer is ac
   } finally {
     await t.stop()
   }
+})
+
+// W3/P0-4 (AC3.7): the desktop cookie's third argument is OPTIONAL and, when it
+// is absent, the bytes are exactly the ones this function always returned —
+// every pre-existing call site keeps its meaning. When it is present, `Secure`
+// follows the hop the argument describes.
+test('desktop cookie attributes (AC3.7): the two-argument call is byte-for-byte what it was', () => {
+  assert.equal(desktopCookieAttributes('127.0.0.1', 1000), 'HttpOnly; SameSite=Strict; Path=/; Max-Age=1')
+  // The default TTL (12 h) is unchanged, and so is the third-argument-free shape.
+  assert.equal(desktopCookieAttributes('127.0.0.1'), 'HttpOnly; SameSite=Strict; Path=/; Max-Age=43200')
+  // The address-only rule is untouched: a non-loopback desktop visitor still
+  // gets `Secure`, exactly as before P0-4.
+  assert.equal(desktopCookieAttributes('192.168.5.5', 1000), 'HttpOnly; SameSite=Strict; Path=/; Secure; Max-Age=1')
+})
+
+test('desktop cookie attributes (AC3.7): a third argument moves only the Secure suffix', () => {
+  const base = desktopCookieAttributes('127.0.0.1', 1000)
+  assert.equal(base, 'HttpOnly; SameSite=Strict; Path=/; Max-Age=1')
+  assert.equal(
+    desktopCookieAttributes('127.0.0.1', 1000, { hop: { socket: { encrypted: true } } }),
+    `${base.slice(0, base.indexOf('; Max-Age'))}; Secure${base.slice(base.indexOf('; Max-Age'))}`
+  )
+  // A plaintext hop that the address alone would have called public stays plain:
+  // the evidence replaces the guess, it does not add to it.
+  assert.equal(
+    desktopCookieAttributes('192.168.5.5', 1000, { hop: { socket: {}, headers: {}, remoteAddress: '192.168.5.5' } }),
+    base
+  )
 })
