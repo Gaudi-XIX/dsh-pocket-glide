@@ -72,7 +72,10 @@ test('the goodbye page answers on /bye and the service worker lets it through', 
     assert.doesNotMatch(body, /<br>/, 'the hints are separate lines, not one <br>-stacked paragraph')
     assert.doesNotMatch(body, /<script/, 'a page shown while the host dies must carry no script')
     const sw = await httpFetch(t.base + '/sw.js')
-    assert.match(await sw.text(), /consent\|bye\)/, 'the SW must not hijack /bye back into the cached shell')
+    // `bot` joined BYPASS with the Bot page (2026-10-24) — same reason `/bye`
+    // is there: a navigation the worker answers with the cached shell would
+    // never reach the route.
+    assert.match(await sw.text(), /consent\|bye\|bot\)/, 'the SW must not hijack /bye or /bot back into the cached shell')
   } finally { await t.stop() }
 })
 

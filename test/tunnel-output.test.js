@@ -136,7 +136,9 @@ test('S5: after the URL is learned no parser is attached to either pipe', async 
   assert.equal(instance.url, 'https://aaa-11.trycloudflare.com')
   assert.equal(spawned.length, 1, 'the injected spawner was used — nothing was really launched')
   assert.equal(spawned[0].bin, 'stubbed-cloudflared', 'the resolver was stubbed, so the machine cache chain was never consulted')
-  assert.deepEqual(spawned[0].args, ['tunnel', '--url', 'http://127.0.0.1:43127'])
+  // §8 P0-3 (2026-10-24): the edge leg is pinned to http2 — QUIC is what a
+  // TUN-mode proxy blackholes, and the tunnel still prints a hostname then.
+  assert.deepEqual(spawned[0].args, ['tunnel', '--url', 'http://127.0.0.1:43127', '--protocol', 'http2'])
 
   // The work is gone.
   assert.equal(child.stdout.listenerCount('data'), 0, 'stdout must not keep the output parser attached')

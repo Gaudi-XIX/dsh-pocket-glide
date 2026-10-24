@@ -160,7 +160,15 @@ test('the error line carries a dropped stream; the transcript still carries the 
   // key (L.streamDownFailed, written by rpcFailure and read by the standing-alarm list)
   // because "still waiting" is a lie once the
   // request already died. Neither is ever the transcript's word for a turn failure.
-  const readerCaps = { statusConnected: 6, statusDisconnected: 4, statusReconnecting: 3 }
+  // 2026-10-24 (change 2026-10-24-pocket-send-loss-and-tunnel-p0, A group): the send
+  // ledger adds exactly two more readers of L.streamDownFailed, and both are notices,
+  // never the transcript's word for anything. (1) send()'s inner catch now reports a
+  // request that died while the reader was on another page — that is a transport
+  // failure with nobody looking at the bubble; (2) resumeSend() says the same thing
+  // when the reader comes back and gets their text handed to them. Neither is inside
+  // renderMessage, and the key already exists, so no copy bytes were added; the count
+  // is pinned at 4 so the transcript still cannot grow a fifth.
+  const readerCaps = { statusConnected: 6, statusDisconnected: 4, statusReconnecting: 3, streamDownFailed: 4 }
   for (const key of ['disconnectedRetry', 'streamDownTunnel', 'streamDownHost', 'streamDownFailed', 'streamDownBackground', 'statusConnected', 'statusDisconnected', 'statusReconnecting']) {
     const reads = [...source.matchAll(new RegExp(`L\\.${key}\\b`, 'g'))].length
     const cap = readerCaps[key] ?? 3

@@ -258,6 +258,7 @@ function buildSendSandbox() {
   const make = new Function('box', `
     let activeSession='s1',agentRunning=false,busyEnter='queue',lastHistoryKey='chat:s1'
     let optimisticPrompts=[],sessionBlank=true
+    let pendingSend=new Map()
     // 2026-10-16 (first-message latency): send() now raises the optimistic turn,
     // empties the composer and closes the double-tap window BEFORE it awaits the
     // session create. The sandbox runs the real body, so it has to carry that
@@ -305,12 +306,15 @@ function buildSendSandbox() {
     async function loadHistory(){}
     async function refreshActiveSessionSummary(){}
     async function rpc(method,payload){rpcCalls.push({method,payload});await new Promise((resolve,reject)=>{flight={resolve,reject}})}
-    const L={draftUploading:'uploading',draftFailed:'failed',attachNotAccepted:'no {command}',attachTooLarge:'too large'}
+    const L={draftUploading:'uploading',draftFailed:'failed',attachNotAccepted:'no {command}',attachTooLarge:'too large',queueSteerFailed:'send failed',streamDownFailed:'send failed'}
     // 2026-10-07-fix-pocket-r3-audit-batch: send()'s catch now maps too-large
     // failures through the page's single helper — splice the real one in so the
     // sandbox keeps running the page's own words (L.attachTooLarge/failed are not
     // pinned by B-5, the rejection path stays behaviour-identical).
     ${extractFunction(js, 'attachFailureCopy')}
+    const SEND_KEY='${/const SEND_KEY='([^']+)'/.exec(js)[1]}'
+    ${extractFunction(js, 'stashSend')}
+    ${extractFunction(js, 'stashTake')}
     ${body}
     return {
       run:send,
@@ -348,6 +352,11 @@ test('B-5 a failed send restores the text only into the session it belonged to',
   await landed
   assert.equal(stayed.value(), 'hello', 'the text comes back while that session is still on screen')
   assert.equal(stayed.errors.length, 1)
+  assert.equal(
+    stayed.errors.filter((entry) => entry.id === 'toast').length,
+    0,
+    'the page that still owns the session gets the inline error only — a second toast would be double reporting',
+  )
 
   const moved = buildSendSandbox()
   const abandoned = moved.run()
@@ -356,6 +365,9 @@ test('B-5 a failed send restores the text only into the session it belonged to',
   await abandoned
   assert.equal(moved.value(), '', 'and stays out of the composer once the page moved on')
   assert.equal(moved.prompts(), 0, 'the optimistic bubble is withdrawn either way')
+  const toasts = moved.errors.filter((entry) => entry.id === 'toast')
+  assert.equal(toasts.length, 1, 'a send abandoned after the reader left must still say so')
+  assert.equal(toasts[0].error.message, 'send failed', 'and say it with the existing copy key')
 })
 
 // ---------------------------------------------------------------------------- B-6

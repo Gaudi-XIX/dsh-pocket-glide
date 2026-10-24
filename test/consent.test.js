@@ -213,7 +213,7 @@ test('consent gate reachability: the SW bypasses /consent and the app rpc walks 
   const sw = pocketPages.renderServiceWorker()
   const bypassLine = sw.split('\n').find((line) => line.includes('const BYPASS='))
   assert.ok(bypassLine, 'the SW ships a BYPASS list')
-  assert.match(bypassLine, /\|consent\|bye\)/, 'the BYPASS list must include consent (SW half of W1); the restart goodbye joins the list (0.4.34)')
+  assert.match(bypassLine, /\|consent\|bye\|bot\)/, 'the BYPASS list must include consent (SW half of W1); bye (0.4.34) and the Bot page (2026-10-24) join it')
   const mark = 'const BYPASS=/^\\/('
   const start = bypassLine.indexOf(mark)
   const end = bypassLine.indexOf(')(\\/|$)/', start)
@@ -223,6 +223,10 @@ test('consent gate reachability: the SW bypasses /consent and the app rpc walks 
   assert.equal(bypass.test('/consent/accept'), true, 'the accept path is bypassed too')
   assert.equal(bypass.test('/consentFake'), false, 'the bypass does not over-match prefixes')
   assert.equal(bypass.test('/api/rpc'), true, 'the pre-existing bypass arms stay')
+  assert.equal(bypass.test('/bot'), true, 'the Bot page reaches the network instead of the cached shell')
+  // 脚本不进 bypass，也不需要：BYPASS 只在 fetch 里挡 `navigate` 那一支，而 `/bot.js`
+  // 是子资源（走最后的 cache-first 分支）。写死这一条，免得以后有人以为漏登记而把它加宽。
+  assert.equal(bypass.test('/bot.js'), false, 'the script is a subresource — it never takes the navigate branch')
 
   const { js } = pocketPages.mobilePageAssets({ locale: 'zh' })
   assert.match(js, /if\(r\.url&&new URL\(r\.url\)\.pathname==='\/consent'\)/,

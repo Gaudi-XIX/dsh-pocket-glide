@@ -281,6 +281,10 @@ function wsReadFrames(socket, onText) {
  *   record: captures the args of POST /api/session/prompt.
  *   respond: per-POST override; return an envelope `result`
  *     ({ok:true,value} or {ok:false,error:{message}}), undefined for default.
+ *   botRespond: answers the roster route `POST /api/bot`, whose envelope is
+ *     native (`{ok,value}` / `{ok:false,error,code}` — src/host/channel.js:347)
+ *     rather than the client-request `{rpcId,result}` one. Called with
+ *     (endpoint, payload); undefined keeps the default `{ok:true,value:{}}`.
  *   get: handles GET/HEAD requests (e.g. /api/session.export); truthy = handled.
  */
 export function startFakeHarness(options = {}) {
@@ -308,6 +312,15 @@ export function startFakeHarness(options = {}) {
       options.record?.(body.payload?.args)
     }
     const override = options.respond?.(parsedUrl.pathname, body.payload?.args, body)
+    if (parsedUrl.pathname === '/api/bot') {
+      // The roster route answers its own envelope, unwrapped (see the option's
+      // comment above); a bare `{ok:true,value:{}}` keeps a bridge that asks
+      // without being told anything from failing a test that never asked.
+      const answer = options.botRespond?.(body?.endpoint, body?.payload)
+      res.writeHead(200, { 'content-type': 'application/json', 'Connection': 'close' })
+      res.end(JSON.stringify(answer ?? { ok: true, value: {} }))
+      return
+    }
     if (override !== undefined) {
       res.writeHead(200, { 'content-type': 'application/json', 'Connection': 'close' })
       res.end(JSON.stringify({ rpcId: body.rpcId, result: override }))

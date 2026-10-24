@@ -147,7 +147,11 @@ test('T1 showError/clearTransientError chatError call sites unchanged (zero JS d
   // itself unwinds through send()'s own catch instead of ensureSession()'s.
   // 2026-10-21 earlier-parts: fetchEarlierPage reports a failed bot.earlier call
   // on the same chat error line — an additive call site, not drift.
-  assert.equal(shown, 24, 'showError chatError call count: 21 + the two new send() failure reports (2026-10-16: the pre-flight rejection and the materialize-and-send rollback) + 1 earlier-parts fetch failure (2026-10-21)')
+  // 2026-10-24 loadOlder 合并重画: the coalesced repaint runs inside loadOlder's
+  // finally, so it needs its own catch — a throw there would otherwise escape the
+  // finally and leave olderRunBusy pinned true for the rest of the visit. One more
+  // additive call site on the same line, not drift.
+  assert.equal(shown, 25, 'showError chatError call count: 21 + 2 send() failure reports (2026-10-16) + 1 earlier-parts fetch (2026-10-21) + 1 loadOlder repaint catch (2026-10-24)')
   // 3 baseline sites + the banner dismiss (2026-10-07-fix-pocket-banner-dismiss-and-ttl):
   // the tap-the-right-end exit must leave through the same guard as the frame exit, so it
   // is a fourth call site by construction, not a drift.
@@ -795,6 +799,7 @@ function buildQueueSendSandbox(opts) {
   const make = new Function('box', `
     let activeSession='s1',agentRunning=${String(opts && opts.agentRunning === true)},busyEnter='queue',sendBusy=false,sessionBlank=false
     let optimisticPrompts=[],lastHistoryKey='',composerDrafts=[]
+    let pendingSend=new Map()
     const rpcCalls=[],toasts=[],errors=[]
     let flight=null
     async function ensureSession(){return activeSession}
@@ -826,8 +831,11 @@ function buildQueueSendSandbox(opts) {
     async function refreshActiveSessionSummary(){}
     async function rpc(method,payload){rpcCalls.push({method,payload});await new Promise((resolve)=>{flight=resolve})}
     function currentTranscript(){return []}
-    const L={sendFailed:'send failed',draftUploading:'uploading',draftFailed:'failed',attachNotAccepted:'no {command}',attachTooLarge:'too large'}
+    const L={sendFailed:'send failed',draftUploading:'uploading',draftFailed:'failed',attachNotAccepted:'no {command}',attachTooLarge:'too large',streamDownFailed:'desktop down'}
     ${extractFunction(js, 'attachFailureCopy')}
+    const SEND_KEY='${/const SEND_KEY='([^']+)'/.exec(js)[1]}'
+    ${extractFunction(js, 'stashSend')}
+    ${extractFunction(js, 'stashTake')}
     ${echo}
     ${body}
     return {run:send,accept:()=>flight(),rpcCalls,toasts,errors,bubbles:()=>messagesWithOptimistic([]).length}

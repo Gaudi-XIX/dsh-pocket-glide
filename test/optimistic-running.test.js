@@ -41,6 +41,7 @@ function buildSandbox() {
     let now = 1000000;
     const Date = { now: () => now };
     let pendingSendAt = new Map();
+    let pendingSend = new Map();
     let sessionSummaries = [];
     let activeSession = null;
     const SEND_TRUST_MS = ${TRUST_MS};

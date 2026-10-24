@@ -726,7 +726,10 @@ test('the offline page copy is bilingual-tight and the SW still satisfies the ol
   const sw = renderServiceWorker()
   const bypassLine = sw.split('\n').find((line) => line.includes('const BYPASS='))
   assert.match(bypassLine, /\(api\|/, 'api stays bypassed (no-store boundary)')
-  assert.match(bypassLine, /\|consent\|bye\)/, 'consent stays bypassed; the restart goodbye joins the list (0.4.34)')
+  // `bot` joined the list with the Bot page (2026-10-24): every navigation that
+  // is not bypassed is answered with the cached landing shell, so a route of its
+  // own only works if the worker lets it through to the network.
+  assert.match(bypassLine, /\|consent\|bye\|bot\)/, 'consent and bye stay bypassed; the Bot page joins them')
   assert.match(sw, /const V='pocket-v3'/)
   assert.match(renderServiceWorker('9f2c1a4b7e01'), /const V='pocket-9f2c1a4b7e01'/)
   assert.doesNotMatch(sw, /nonce/)

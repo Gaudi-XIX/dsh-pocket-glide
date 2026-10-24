@@ -83,7 +83,7 @@ test('the list fingerprint covers every row, including the ones the document hid
   // keep painting stale titles and clocks until some visible row happened to move.
   assert.match(
     bridgeSource,
-    /const fingerprint = listFingerprint\(rows\)/,
+    /const fingerprint = listFingerprint\(shown\)/,
     'the fingerprint is taken over the whole catalogue before any trimming',
   )
   const buildBody = bridgeSource.slice(

@@ -101,11 +101,19 @@ test('the retry path clears the stale optimistic bubble even when the reader lef
   // The bubble is only withdrawn for the session that owns it, but it is
   // withdrawn either way — an unconditional early return left it on the
   // transcript of a session the reader had switched to.
-  const switchGuardAt = sendBody.indexOf('if(activeSession===owner&&optimisticPrompts.includes(optimistic))')
-  assert.notEqual(switchGuardAt, -1, 'the reply branch confirms its session before touching live UI')
-  assert.match(
-    sendBody,
-    /\}else\{optimisticPrompts=optimisticPrompts\.filter\(item=>item\.id!==optimistic\.id\)\}/,
-    'and the bubble is dropped on the abandoned path too',
+  //
+  // 2026-10-24 (A 组账本): the gate is no longer "is the bubble still in the
+  // array" but "is this page still that session". optimisticPrompts is
+  // per-screen state and is emptied the moment the reader leaves, so
+  // includes() went false exactly while the report was still owed — the
+  // abandoned failure fell into the silent branch. test/send-pending-ledger
+  // owns the ledger that now carries it.
+  assert.notEqual(sendBody.indexOf('if(activeSession===owner)'), -1,
+    'the reply branch confirms its session before touching live UI')
+  assert.ok(
+    sendBody.includes('optimisticPrompts=optimisticPrompts.filter(item=>item.id!==optimistic.id);if(activeSession===owner)'),
+    'and the bubble is dropped before the branch, so the abandoned path drops it too',
   )
+  assert.ok(!sendBody.includes('optimisticPrompts.includes('),
+    'includes() is no longer the gate')
 });
