@@ -1,8 +1,10 @@
-# Pocket DSH (`@gaudi-xix/dsh-pocket`)
+# Pocket DSH
 
 > *"Curiouser and curiouser!"*
 
 DeepSeek Harness 的轻量移动端伴侣插件。
+
+本仓在 `package.json` 里的包名是 `@defws/dsh-pocket`，但它**没有发布到 npm**；它与 GitHub 上的 `shaobeichen/dsh-pocket` 是互不相干的两个项目，而 npm 上的裸名 `dsh-pocket` 又是别人发布的第三个包——别装错。
 
 它的核心定位非常明确：**不在手机端复刻桌面端的全套系统配置与复杂文件树，只保留移动交互的核心闭环——发送提示词、查看流式回复、审批工具权限与远程运维。**
 
@@ -68,7 +70,7 @@ Pocket 的选择是做明确的减法：桌面端负责完整的代码生产与�
 ## 快速使用
 
 ### 1. 安装与启用
-在 DSH 桌面端将 `@gaudi-xix/dsh-pocket` 添加至配置文件（或通过插件市场安装并启用）。
+本仓是**本地插件**，没有发布到任何包市场，装法只有一条：在仓库根目录先跑 `node tools/install-to-profile.mjs --dry-run` 看它要改什么，确认后跑 `node tools/install-to-profile.mjs` —— 它只改 DSH profile 的 `package.json` 两处（依赖指向本仓、`dsh.profile.bundles` 加一条），改前自动备份，加 `--install` 会顺带跑 `pnpm install`；装完重启 DSH 生效。
 
 ### 2. 扫码配对
 1. 点击 DSH 桌面端侧边栏的 **Pocket** 图标打开配对面板；
