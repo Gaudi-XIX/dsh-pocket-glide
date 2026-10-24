@@ -76,7 +76,14 @@ test('pick toggle: 点开另一个字段时原来的收回去', () => {
 
 // ─── 2) restoreTranscriptAnchor ────────────────────────────────────────
 
-const RESTORE = slice(js, 'function restoreTranscriptAnchor(box,anchor,tries,turn){', '// 键盘收/放')
+// 原来钉什么：结束锚 `'// 键盘收/放'` —— restoreTranscriptAnchor 之后紧邻的整行注释。
+//   S1 之后整行注释已从出货 js 剥掉，锚必然命中 -1 而红。
+// 现在钉什么：结束锚改成该注释之后紧接着的真代码 `function settleOlderShift(box,anchor,tries,turn){`。
+//   为什么等价：`// 键盘收/放` 那一段（连同其缩进的续注）位于 restore 与 settleOlderShift
+//   之间且紧邻两段代码；本测试只把 RESTORE 交给 new Function 独立运行，restore 体内不调用
+//   settle*（已核），故「止于注释首行」与「止于下一函数名」交给 new Function 的是同一段函数体，
+//   差别只是少了那段纯说明文字。判据未放宽：仍是 restoreTranscriptAnchor 完整函数体。
+const RESTORE = slice(js, 'function restoreTranscriptAnchor(box,anchor,tries,turn){', 'function settleOlderShift(box,anchor,tries,turn){')
 
 function buildRestore(rows, boxTop = 0, opts = {}) {
   const marks = []
@@ -163,7 +170,13 @@ test('anchor restore: 重试之间只是被布局钳位（仍在底带内）时�
 // 与上面那条（restoreTranscriptAnchor）的分工：那条守的是「重渲中间态行数不足，别照错行写」，
 // 这条守的是「行数齐了但高度还是估的，按当下真实布局重瞄」。两者共用 transcriptAnchor。
 
-const SETTLE = slice(js, 'function settleOlderShift(box,anchor,tries,turn){', '// 键盘收/放')
+// 原来钉什么：结束锚 `'// 键盘收/放'` —— settleOlderShift 之后紧邻的整行注释段。
+//   S1 之后整行注释已从出货 js 剥掉，锚必然命中 -1 而红。
+// 现在钉什么：结束锚改成该注释段之后紧接着的真代码 `function settleTailStick(box,tries,turn,pinned){`。
+//   为什么等价：settleOlderShift 体内不引用 settleTailStick（已核），两者中间只夹那段
+//   纯说明注释；交给 new Function 的是同一段函数体，只是少了说明文字。
+//   判据未放宽：仍是 settleOlderShift 完整函数体。
+const SETTLE = slice(js, 'function settleOlderShift(box,anchor,tries,turn){', 'function settleTailStick(box,tries,turn,pinned){')
 
 // rows 可以是数组，也可以是函数（每次查询返回不同行高，模拟「估高→真高」）。
 // $('messages') 默认返回 box 本身：settleOlderShift 第一道守卫就是 live!==box（会话已切走就不写）。
@@ -241,7 +254,14 @@ test('older settle: 会话已切走（box 不是当前 #messages）时一个字�
 // scrollTop 变小只可能是读者动过手——这就是出口的判据。
 // 判据不能只看「变小」：视口变高时浏览器会把 scrollTop 往新的最大值钳一次（实测
 // 450→735 时 1541→1256），那不是读者的意图，所以再加「离底已超 SCROLL_FOLLOW_PX」。
-const TAILSTICK = slice(js, 'function settleTailStick(box,tries,turn,pinned){', '// 返工③补')
+// 原来钉什么：结束锚 `'// 返工③补'` —— settleTailStick 之后紧邻的整行注释。
+//   S1 之后整行注释已从出货 js 剥掉，锚必然命中 -1 而红。
+// 现在钉什么：结束锚改成该注释之后紧接着的真代码——那段自执行 IIFE 的开头
+//   `(()=>{const box=$('messages');if(!box)return;box.addEventListener('scroll'`。
+//   为什么等价：`// 返工③补` 紧邻 settleTailStick 之后、该 IIFE 之前（中间只有空白），
+//   取到锚串为止覆盖的是同一段文本；settleTailStick 体内不引用该 IIFE 的任何标识符。
+//   判据未放宽：仍是 settleTailStick 完整函数体。
+const TAILSTICK = slice(js, 'function settleTailStick(box,tries,turn,pinned){', "(()=>{const box=$('messages');if(!box)return;box.addEventListener('scroll'")
 const SCROLL_FOLLOW_PX = Number(js.match(/const SCROLL_FOLLOW_PX=(\d+),/)[1])
 
 function buildTailStick(start) {
@@ -335,7 +355,14 @@ test('tail stick: 塌盒（无可滚范围）时一个字都不写', () => {
 // 点 ↑ 起一条 100ms×4 的重瞄链；它不认令牌，于是点 ↓ 之后两股相反的写入交替——
 // 用户 2026-10-15 口述「点那个上下按钮的时候也有跳动」。现在入口夺令牌（后上膛者赢），
 // 重试回来发现令牌已被夺走就终止自己。
-const PROMPTJUMP = slice(js, 'function settlePromptJump(box,anchor,tries){', "// ↑ 只跳转、不再顺手拉历史")
+// 原来钉什么：结束锚 `'// ↑ 只跳转、不再顺手拉历史'` —— settlePromptJump 之后紧邻的整行注释。
+//   S1 之后整行注释已从出货 js 剥掉，锚必然命中 -1 而红。
+// 现在钉什么：结束锚改成该注释之后紧接着的真代码 `$('scrollAnchors').onclick=`。
+//   为什么等价：注释紧邻 settlePromptJump 之后、scrollAnchors 点击处理之前（中间只有空白），
+//   取到锚串为止覆盖的是同一段文本；PROMPTJUMP 只被交给 new Function 运行，
+//   settlePromptJump 体内不引用 scrollAnchors 的任何标识符。
+//   判据未放宽：仍是 settlePromptJump 完整函数体。
+const PROMPTJUMP = slice(js, 'function settlePromptJump(box,anchor,tries){', "$('scrollAnchors').onclick=")
 
 function buildPromptJump() {
   const marks = []

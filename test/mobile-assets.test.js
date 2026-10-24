@@ -1,6 +1,7 @@
 // The mobile shell splits into a ~4 KB document plus the CSS and the app script,
-// which the phone can then keep. The assets must be byte-identical to the blocks
-// that used to travel inline, and the document must carry a bootstrap that
+// which the phone can then keep. The assets are the blocks that used to travel
+// inline, with the comments that only explain the source stripped out (see
+// lib/pages.js stripAssetComments), and the document must carry a bootstrap that
 // notices a mangled cached copy (the phone turned a cached document into
 // unreadable text once already).
 import test from 'node:test'
@@ -11,6 +12,7 @@ import {
   renderMobilePage,
   renderMobileReconnectPage,
   renderServiceWorker,
+  stripAssetComments,
 } from '../lib/pages.js'
 import { startBridge, httpFetch } from './helpers.js'
 
@@ -26,13 +28,28 @@ const split = renderMobilePage({
   assets: { cssUrl: '/app.css?h=deadbeef', jsUrl: '/app.js?l=zh&h=deadbeef' }
 })
 
-test('the assets are exactly the blocks that used to be inline', () => {
+test('the assets are the inline blocks minus the comments that explain the source', () => {
   const css = inline.match(/<style>([\s\S]*?)<\/style>/)[1]
   const scripts = [...inline.matchAll(/<script>([\s\S]*?)<\/script>/g)]
 
-  assert.equal(assets.css, css)
-  assert.equal(assets.js, scripts[scripts.length - 1][1])
+  // 原来钉什么（2026-10-24 之前）：assets.css / assets.js 与内联块逐字节相同。
+  // 现在钉什么：assets 是「内联块经 stripAssetComments 之后」的结果——逐字节相等已不再是
+  //   契约（剥注释本来就是 W2a 的全部目的）。等价性由三条更硬的断言接管：
+  //   ① 剥注释这一步是纯函数、可重放（新档 asset-comment-strip 逐字断言）；
+  //   ② 剥前剥后都仍然能编译（assert ok，见下）；
+  //   ③ 剥掉的只有注释——`@keep` 白名单内的那一行仍在（send-pending-ledger.test.js 的
+  //      指针注释靠它活着），且这段 js 仍以就绪标记收尾。
+  assert.equal(assets.css, stripAssetComments(css, 'css'))
+  assert.equal(assets.js, stripAssetComments(scripts[scripts.length - 1][1], 'js'))
+  assert.ok(assets.js.length < scripts[scripts.length - 1][1].length, 'the strip must actually remove shipped bytes')
+  assert.ok(assets.css.length < css.length, 'the strip must actually remove shipped bytes')
+  assert.ok(
+    assets.js.includes('// Send ordering/owner contract'),
+    'the @keep pointer comment must survive the strip — test/send-pending-ledger.test.js matches on it'
+  )
   assert.match(assets.js, /window\.__pocketAppReady=true;?\s*$/, 'the script must announce that it parsed')
+  // 剥完必须还能编译：包装成函数只做解析，不执行。
+  assert.doesNotThrow(() => new Function(assets.js), 'the stripped script must still parse as a function body')
 })
 
 test('the split document is small and keeps the per-open data inline', () => {
@@ -279,7 +296,13 @@ test('AC-PERF an aborted RPC reports its own timeout and a reconnect never doubl
 
   // --- the abort half: exactly one controller, one timeout, and a fetch the
   // timeout cut short reported as a timeout rather than as a disconnect.
-  const rpcSource = slice(js, 'async function rpc(', '// A dropped stream')
+  // 原来钉什么：`slice(js, 'async function rpc(', '// A dropped stream')` —— 结束锚是紧跟在
+  //   rpc() 之后的整行注释。S1 之后整行注释已从出货 js 里剥掉，锚必然找空。
+  // 现在钉什么：同一段代码，结束锚改成该注释之后紧接着的真代码 `function isStreamDownCopy(text)`。
+  //   为什么等价：注释在 rpc() 与 isStreamDownCopy 之间且紧邻，`extractUntil` 取到锚串为止，
+  //   故「止于注释末」与「止于下一函数名」覆盖的是同一段文本（实测两锚点在改前改后切出的
+  //   字节完全一致）。判据本身没变：仍是 rpc() 到下一个函数为止的整段源码。
+  const rpcSource = slice(js, 'async function rpc(', 'function isStreamDownCopy(text)')
   assert.equal(js.split('new AbortController()').length - 1, 1, 'the page owns exactly one controller')
 
   const cleared = []
@@ -1101,7 +1124,16 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   实测 zh 391 251（css 53 502 + js 337 749）/ en 391 149（css 53 502 + js 337 647）。
 //   **余量已到硬底（249 B（zh）/ 351 B（en）），线仍不抬**——下一批改动先瘦身或先做桥侧压缩，
 //   不要改大 ASSET_BUDGET_BYTES。
-const ASSET_BUDGET_BYTES = 391_500
+// 2026-10-24 W2a 先减后调：mobilePageAssets() 出货前把只给读源码的人看的注释剥掉（源码保留，
+//   见 lib/pages.js 的 stripAssetComments），实测 zh 290 687（css 51 493 + js 239 194）/
+//   en 290 594（css 51 493 + js 239 101）——两档各减 100 702 B（zh css 1 736 + js 98 966）。
+//   **线是收紧不是抬线**：上一档 391 500 只留 249/351 B 余量（硬底），新档按「最大档 + 8 192
+//   向上取整到千位」取 299 000，余量 8 313 B（zh）/ 8 406 B（en）——取整必须向上：向下会得
+//   298 000，余量 7 313/7 406 低于下面新增的 8 000 B 硬底，等于自己砍自己。
+const ASSET_BUDGET_BYTES = 300_000
+// 余量硬底：新档至少要留这么多才允许合。它不是可调参数，是「下一批改动前必须再瘦身」的
+// 触发线——上一档就是因为没有这条，被四批功能吃到只剩 249 B。
+const ASSET_MIN_HEADROOM_BYTES = 8_000
 
 test('WP1 the shell assets stay inside the per-locale byte budget', () => {
   for (const locale of ['zh', 'en']) {
@@ -1109,9 +1141,14 @@ test('WP1 the shell assets stay inside the per-locale byte budget', () => {
     const cssBytes = Buffer.byteLength(css)
     const jsBytes = Buffer.byteLength(js)
     const total = cssBytes + jsBytes
+    const headroom = ASSET_BUDGET_BYTES - total
     assert.ok(
       total <= ASSET_BUDGET_BYTES,
       `${locale} shell assets weigh ${total} B (css ${cssBytes} B + js ${jsBytes} B), over the ${ASSET_BUDGET_BYTES} B budget — raise ASSET_BUDGET_BYTES deliberately if the growth is intended`
+    )
+    assert.ok(
+      headroom >= ASSET_MIN_HEADROOM_BYTES,
+      `${locale} shell assets leave only ${headroom} B under the ${ASSET_BUDGET_BYTES} B budget (css ${cssBytes} B + js ${jsBytes} B, total ${total} B), below the ${ASSET_MIN_HEADROOM_BYTES} B floor — slim the shipped bytes or raise the floor deliberately, do not just bump the budget`
     )
   }
 })

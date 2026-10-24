@@ -855,7 +855,13 @@ test('the pull gesture gates on the same condition as the button and the auto fi
 
 function buildRpcSandbox(response) {
   const codesLine = js.match(/const BRIDGE_TRANSPORT_CODES=[^\n]*/)[0]
-  const source = 'async ' + extractUntil('rpc', '// A dropped stream')
+  // 原来钉什么：`extractUntil('rpc', '// A dropped stream')` —— 结束锚是 rpc() 之后紧邻的
+  //   整行注释。S1 之后整行注释已从出货 js 剥掉，锚会命中 indexOf=-1 而红。
+  // 现在钉什么：结束锚改成该注释之后紧接着的真代码 `function isStreamDownCopy(text)`。
+  //   为什么等价：注释紧邻 rpc() 之后、isStreamDownCopy 之前，extractUntil 取到锚串为止，
+  //   「止于注释末」与「止于下一函数名」覆盖同一段文本（实测两锚切出的字节逐字节相同）。
+  //   判据未放宽：仍是 rpc() 全函数体，仍由 new Function 包起来真跑。
+  const source = 'async ' + extractUntil('rpc', 'function isStreamDownCopy(text)')
   const make = new Function('fetch', 'setTimeout', 'clearTimeout', `
     const L=${JSON.stringify(L)}
     const RPC_TIMEOUT_MS=12000,RPC_SLOW_TIMEOUT_MS=180000

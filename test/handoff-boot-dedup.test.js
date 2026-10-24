@@ -303,8 +303,22 @@ test('AC-8 three metrics on one fixture: boot fetches, payload bytes, document b
 
 test('AC-9 the shell budget is untouched: no new bytes, no raised ceiling', () => {
   const source = readFileSync(join(HERE, 'mobile-assets.test.js'), 'utf8')
+  // 原来钉什么：ceiling === 391_500（W2b 留下的历史具体值）。2026-10-24 W2a 剥注释后
+  //   两档各瘦 100 KB，线按裁定改成 299_000，硬编码的具体值必然腐烂成假红。
+  // 现在钉什么：那条不随时间腐烂的关系——线必须始终高于实测最大档一个最小余量。
+  //   常量只从 mobile-assets.test.js 读（两处同源），这里不引入第二份定义。
   const ceiling = Number(source.match(/ASSET_BUDGET_BYTES = ([\d_]+)/)[1].replace(/_/g, ''))
-  assert.equal(ceiling, 391_500, 'the ceiling stays where W2b left it')
+  const minHeadroom = Number(source.match(/ASSET_MIN_HEADROOM_BYTES = ([\d_]+)/)[1].replace(/_/g, ''))
+  assert.ok(minHeadroom > 0, 'the minimum-headroom floor must be defined in mobile-assets.test.js')
+  const measured = ['zh', 'en'].map((locale) => {
+    const { css, js } = mobilePageAssets({ locale })
+    return Buffer.byteLength(css) + Buffer.byteLength(js)
+  })
+  const heaviest = Math.max(...measured)
+  assert.ok(
+    ceiling >= heaviest + minHeadroom,
+    `the ceiling must sit at least ${minHeadroom} B above the heaviest shell (${heaviest} B) — it is ${ceiling} B, which no longer leaves the promised headroom`,
+  )
   // 本卡对 lib/pages.js / lib/constants.js 零改动，所以壳资产的实测值必须仍是
   // 改前那一档；这条按渲染结果量，而不是按 diff 推断。
   for (const locale of ['zh', 'en']) {

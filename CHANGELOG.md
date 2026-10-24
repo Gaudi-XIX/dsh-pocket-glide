@@ -57,13 +57,21 @@
 - **怎么验**：`test/handoff-boot-dedup.test.js` 11 条，全走**真链路**（`createServer` + `LanMobileBridge` + 真 socket，不手工造 response 对象）：先真取 `/api/boot`，再用同一 UA 真取文档断言不再内嵌；换 UA / 超窗 / 交过之后，三种情况都恢复内嵌；跳过内嵌的那一跳不带 `x-pocket-cache: app`，恢复内嵌的那一跳带；开关三档（未设、空串、`1` 开，`0` 关）；`/api/boot` 未交付成功（如 UNAUTHORIZED 短路）不记台账。
 - **壳字节 0 B**：本卡不碰 `lib/pages.js` 与 `lib/constants.js`，`ASSET_BUDGET_BYTES = 391_500` 未抬线；改后实测 zh **391,383 B（余 117）** / en **391,290 B（余 210）**，与 HEAD 同值。
 
+### W2a：出货壳剥掉注释，预算线从 391,500 收到 300,000（2026-10-25，卡 `2026-10-24-pocket-shell-budget`）
+
+- **为什么改**：0.4.59 前壳余量只剩 **117 B**，任何再碰手机页的改动都会先撞预算门——这不是「优化」，是让下一张卡没法动手的硬阻塞。
+- **改成什么**：出货资产（`/app.css`、`/app.js`）在 `mobilePageAssets()` 出口统一剥掉**纯文档性注释**——CSS 块注释 9 块全剥；JS 整行 `//` 剥掉、**行尾注释与真正的 JS 块注释一律保留**（剥块注释的正则会被行注释里的 `'__bridge/*'` 骗掉近 30 KB 真代码，已列为反用例）。源码里的注释一字未删，只是不再随货发到手机上；需要随货发的那一行用 `@keep` 白名单点名（当前 1 条：发送时序契约的指针）。
+- **改成什么（预算）**：`ASSET_BUDGET_BYTES` 391,500 → **300,000**（−91,500 B 的**收紧**），并新增「余量 ≥ 8,000 B」断言；预算线按实测重算 `ceil((max+8,192)/1000)*1000`，不是抬线。
+- **怎么验**：`test/asset-comment-strip.test.js` 10 条（剥离量 >90 KB、幂等、反用例、花括号平衡、`new Function` 可编译、`@keep` 双向、行尾/块注释保留）＋ `test/mobile-assets.test.js` 的逐字节契约改为「出货 = 剥离后的内联块」并新增余量断言。定向 6 档 160 条全过，全量 1,637 / 1,633 pass（2 红是本机 tar 环境红，与本卡无关）。
+- **顺带**：`lib/pages.js`「冷开画缓存壳」与 `lib/bridge.js`「文档不再带 payload」两处与实现相反的注释改成事实（只改注释，不改行为）。
+
 ### 未做：C 组 cookie `Secure`（0.4.59 发布前已由 W3 补做）
 
 按「这一跳是否 TLS」判要碰登录态：判错一次就是手机掉登录，而验证它需要 LAN 直连、隧道、反代三档真机各走一遍。本版不修（`F:\defws\.agents\flow\changes\2026-10-24-pocket-send-loss-and-tunnel-p0\tasks.md` T4 标 `SKIP-BY-LEAD`），隧道态登录态维持现状。**2026-10-25 由卡 `2026-10-24-pocket-tunnel-resilience` 的 W3 补做（见上节）；三档真机走查仍未做**，本机只有单测与真实 HTTP 端到端用例。上面这段保留为当时的判断与理由。
 
 ### 读数
 
-壳脚本实测（直调 `mobilePageAssets({locale})`；`node --test test/mobile-assets.test.js` 20 条全过，预算门读的就是这条数）：zh **391,383 B**（余 **117 B**）/ en **391,290 B**（余 **210 B**），`ASSET_BUDGET_BYTES = 391_500` 未抬线。读数取自提交树 `ed12331`（2026-10-25 00:3x）；余量已经很薄，本版之后任何再加壳的行为都应先减后加（见卡 `2026-10-24-pocket-shell-budget`）。
+壳脚本实测（直调 `mobilePageAssets({locale})`；`node --test test/mobile-assets.test.js` 20 条全过，预算门读的就是这条数）：W2a 之前 zh **391,383 B**（余 117）/ en **391,290 B**（余 210），线 `391_500`；W2a 之后 zh **291,053 B**（余 **8,947 B**）/ en **290,960 B**（余 **9,040 B**），线 **`300_000`**（收紧 −91,500）。读数取自工作树（W2a 未提交时实测），`ASSET_MIN_HEADROOM_BYTES = 8_000`。
 
 ## 0.4.58 — 2026-10-23
 

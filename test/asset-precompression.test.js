@@ -104,10 +104,16 @@ test('AC1.4 brotli-9 clears the br tier and gzip-9 clears the gzip tier', () => 
     assert.ok(entry.br.length <= 100 * 1024, `${locale} brotli must be ≤ 100 KB, got ${entry.br.length}`)
     assert.ok(entry.gzip.length <= 120 * 1024, `${locale} gzip must be ≤ 120 KB, got ${entry.gzip.length}`)
     // The shape of the decision, so a regression to a weak quality setting dies
-    // here rather than in a hand-measured table: brotli is the only product under
-    // 110 KB, and it is always smaller than gzip.
+    // here rather than in a hand-measured table: brotli is the tier that fits
+    // under 110 KB, and it must stay clearly below gzip.
+    // 2026-10-24 W2a（剥注释）之后，原来的「gzip > 110 KB」绝对值断言失效——zh gzip
+    //   从 116,630 掉到 67,143 B，已稳在 110 KB 以下（br 59,422 B）。brotli 那条
+    //   ≤110 KB 仍在（59,422 B），但 gzip 侧不再有任何绝对值可钉。改钉不绑定具体
+    //   字节的形状：gzip 必须比 br 大出一个可测量的裕度（br 9 与 gzip 9 的压缩率
+    //   差距，实测比值 1.13×，取 1.05 作下限，给未来调参留余量而不放过「gzip 反而
+    //   更小」这种回归）。
     assert.ok(entry.br.length < 110 * 1024, `${locale} brotli must stay under 110 KB`)
-    assert.ok(entry.gzip.length > 110 * 1024, `${locale} gzip is not expected under 110 KB`)
+    assert.ok(entry.gzip.length > entry.br.length * 1.05, `${locale} gzip must stay measurably above brotli (gzip ${entry.gzip.length} vs br ${entry.br.length})`)
     assert.ok(entry.br.length < entry.gzip.length, `brotli must beat gzip (${locale})`)
     assert.ok(entry.br.length < entry.identity.length, 'compression must actually shrink the asset')
   }
