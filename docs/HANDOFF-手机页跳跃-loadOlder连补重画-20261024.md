@@ -251,3 +251,82 @@ EOF
 ## 十二、所属更大议题
 
 同日另发现（**不是本次跳屏成因**，勿混算）：`session.list` 一次读 **17 MB、30–68 秒**，`01:02:30`/`01:03:39` 各有一次 `session.list … aborted due to timeout`；一次超时会**成批**带走同刻在飞的 `session.history`／`session.tails`。这属 **S2 系列（流量/延迟）**——0.4.58 就是 S2-0（埋点第一步），S2-2 是 `{unchanged:true}` 应答。相关判据：`lib/bridge.js:6275` `noteHistoryAttempt`、`:6305` `noteHistoryAnswer`（`unchanged` 在 S2-2 落地前**恒为 0**，读成「尚未实现」）、`:6509` `list read` 分桶（`miss+stale+force` 是入口次数、`host` 是真读宿主次数，**不可相加**）。
+
+---
+
+## 十三、第 2 轮：甲方案（增量插入）— 2026-10-24 19:36 用户拍板
+
+**用户原话（m00171）**：「我刚刚确实感觉已经减缓了很多，但是我有个没搞明白的：为什么每次向上刷新的时候，会有一次跳动？就不能不跳动吗？加载历史消息的时候，就加载就行了吗」
+
+**用户拍板（m00186）**：「那就按甲来做」。
+
+### 13.1 方案 A 已由 `d290551` 落地，但还剩一次跳
+
+`d290551`（2026-10-24 17:41）把「每页一画」改成「循环内不画、`finally` 统一画一次」。真机读数：今天 18:00 起 `ol` 全天仅 **1** 条（对照昨晚一次上拉 4 条）⇒ 合并重画已生效，这就是用户感到的「减缓了很多」。
+
+**剩下那一次跳的机制**（北京 19:18:40 样本）：
+```
+11:18:31.792 pt@14360|1|0|1|17 bf@617|1352
+11:18:33.256 pt@15781|4|1|4|17 bf@1032|1767
+11:18:40.157 pt@22637|6|4|6|1  ol@22759|1277|3044|735
+```
+`settleOlderShift` 首轮是**同步立即**执行的，它没写（偏差 ≤2 px ⇒ 画完立刻补偿是准的）；**122 ms 后**那次重试才写 `ol` ⇒ **这 122 ms 内页面高度变了**。原因是整屏 `innerHTML` 重画把图片/代码块节点**重新创建**，重新渲染后高度才定下来，位置随即漂移并被掰回。用户看到的那一次跳就是这一下。
+
+### 13.2 甲方案：只插新节点，已有节点一个不动
+
+`loadOlder` 的 `finally` 不再 `paintMessages` 整屏重建，改为把**新增的老消息**用 `insertAdjacentHTML('beforebegin')` 插到第一个已有 `.message` 之前：
+- 已有节点不销毁 ⇒ 图片不重载、不重新布局 ⇒ **高度在插入瞬间就是终值** ⇒ 不需要事后对位（也就没有那 122 ms 后的 `ol`）
+- 位置补偿仍用 `scrollTop += (scrollHeight - scrollHeightBefore)`，这次它是**准确的**，因为只有增量部分贡献高度
+
+**判据（拿不到就退回整屏重画）**：`next.map(olderKey)` 的后缀必须与画前 `oldKeys` 逐项全等（`grown>0 && oldKeys.every((k,i)=>keys[grown+i]===k)`）。`olderKey`：
+```js
+function olderKey(m){return m.turn?'t'+m.turn.key+m.turn.nodes.length:'s'+m._seq+m.role}
+```
+`turn` 节点带上 `nodes.length`——补页可能把更早的步骤并进**同一个 turn**，那时 turn 的 `key` 不变但内容变了，只看 `key` 会漏判。
+
+**保留的兜底**：`paintOlder` 返回 `false`（没插成功 / 画前 DOM 为空 / 后缀对不上）时，仍走原来的 `paintMessages + settleOlderShift`。所以 `test/older-pull-coalesce.test.js` 第 4 个测试钉的那条字面串**必须留在原处**。
+
+**已知不解决**：新插入的老消息若含**图片**，图片加载完高度仍会变（无占位高度）。本轮不做图片占位——它属乙方案的活。
+
+### 13.3 预算减法：从正文搬出的注释原文（逐字存档）
+
+壳预算是 **UTF-8 字节**、`ASSET_BUDGET_BYTES = 391_500`（`test/mobile-assets.test.js:1104`，**不许抬**）。本轮动手前实测（2026-10-24 19:5x，`Buffer.byteLength`）：zh `css 53,818 + js 337,297 = 391,115` ⇒ **余 385 B**；en 余 478 B。（`.length` 只有 372,278——**中文按 3 字节算，别看 `.length`**。）
+
+为给增量插入腾地方，从 `lib/pages.js` 正文搬出下面两段注释，正文只留一行短指针。**内容是逐字存的，别删这一节。**
+
+**(1) `paintMessages` 入口的 R3 现场注释**（原在 `lib/pages.js:1741-1745`，六行）：
+```
+// R3（m00002/m00134 现场）：入口 br 只解锁了 followStream，stickToBottom/bf 两个贴底分支仍会
+// 无条件把读者写回盒底——日志里 br 与 bt/bf 同帧相邻（09:40:59 bt 把 2824→3205、09:43:14 bf
+// 把 534→1072、09:43:25 bt 把 2115→2495、09:45:26 bt 把 1623→2096）就是它的签名。读者此刻
+// 人不在盒底，这一帧的意图就是「停在原处」，所以贴底分支必须让位于 keepAnchor 复原。
+// 判据只看实时几何，不看 followStream 这个可能已被上一帧解锁的陈旧布尔。
+```
+下一行是正文 `const readerAway=typeof isNearBottom==='function'&&!isNearBottom(box);`，**这一行不能动**——它就是这段注释说的判据。
+
+**(2) `ensureTranscriptFilled` 的分页理由注释**（原在 `lib/pages.js:1750-1755`，六行）：
+```
+// The transcript is paged by records, not by screenfuls: 30 records is often
+// less than a single turn, and "show the last N messages" only moves the
+// goalpost (3 is short, so 5, so 10…). Keep pulling older pages until the
+// transcript really does fill the viewport, the conversation starts, or the
+// budget runs out. It only ever runs while the content is shorter than the
+// viewport, so it cannot disturb someone already reading further up.
+```
+
+## 十四、2026-10-24 21:0x 用户定调：第一性要求是「不跳」，改为「读够再画」
+
+用户原话（m00399）：「这种情况下，我觉得就应该多读取一些，或者少读一些，读完一轮就不要跳。我的第一性要求是不要跳屏」。
+
+**上一版留下的缺口**：增量插入只在「新增部分是纯前缀」时命中。若上拉补回的记录正好落在某个已显示回合的中间（读到半个回合）， 里带的 `turn.nodes.length` 就会对不上，于是退回整屏重画——那一次仍跳。
+
+**改法（比加内容指纹更根本）**：让切点永远落在回合边界上，增量插入就永远命中。回合的起点必是一条用户消息，而 `loadOlder` 的循环本来就有天然出口 `if(olderUserCount()>before)break`——读到更早的一条用户消息才停。破坏这个出口的只有两个保底上限，把上限放宽到「覆盖任何单个回合」之后，切在中间就只可能出现在超长回合里：
+
+- `lib/pages.js:1765` `deadline=Date.now()+8000` → `+12000`
+- `lib/pages.js:1766` `pages<8` → `pages<20`（一页 30 条原始记录，600 条足够任何回合）
+- `test/transcript-order.test.js:249/250` 两条钉住字面量的断言同步改
+- 字节代价 ≈ 0（数字同长），zh 余 194 B / en 余 287 B
+
+**代价与残余**：弱网下一次上拉最多多花约 4 秒（多读几页）；单个回合超过 600 条原始记录才会再切在中间，那时仍退回整屏重画跳一次。**不采用「少读」**：把不完整的首回合整个藏起来会让内容凭空消失/再出现，同样是跳。
+
+**真机验收**：上拉后 `pocket.log` 里出现 `pt@…|n|prev|…` 且**没有** `ol@`；若两者同时出现，说明当次走了重画兜底（把当时的记录发我，看是不是超长回合）。

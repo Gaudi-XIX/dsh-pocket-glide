@@ -246,8 +246,8 @@ test('a tap keeps pulling older pages until an earlier user message appears', ()
   assert.ok(js.includes('function olderUserCount()'), 'progress is measured in user messages, not records')
   assert.ok(js.includes('const before=olderUserCount()'))
   assert.ok(js.includes('if(olderUserCount()>before)break'), 'stop as soon as an earlier user message lands')
-  assert.ok(js.includes('deadline=Date.now()+8000'), 'the multi-page pull needs a time budget')
-  assert.ok(js.includes('pages<8'), 'the multi-page pull must be bounded')
+  assert.ok(js.includes('deadline=Date.now()+12000'), 'the multi-page pull needs a time budget')
+  assert.ok(js.includes('pages<20'), 'the multi-page pull must be bounded')
   assert.ok(js.includes('function oldestEventSeq()'), 'the anchor must not assume windowEvents()[0] is oldest')
   assert.ok(js.includes('box.scrollTop=prevTop+(box.scrollHeight-prevHeight)'), 'paging in must keep the reading position')
   // The fill loop must call the single-page primitive: nesting loadOlder inside
@@ -910,6 +910,12 @@ test('M17 the send records what retirement needs', () => {
 function buildPullSandbox(opts) {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const source = 'async ' + extractFunction(js, 'loadOlder')
+  // 2026-10-24 甲方案（增量插入）：loadOlder 现在先取一份旧行 key 清单，画的时候优先
+  // 把新增行插到顶部，失败才退回整屏重画。沙箱里一行都画不出来，于是 paintOlder
+  // 必然退回 paintMessages。两条路各留一个计数器、其余依赖补成空壳，缺一个就是
+  // ReferenceError 而不是一条可读的断言失败。
+  const keySource = extractFunction(js, 'olderKey')
+  const olderSource = extractFunction(js, 'paintOlder')
   return new Function('opts', `
     let olderRunBusy=false,olderHasMore=${String(opts.olderHasMore ?? false)},activeSession='s1',subagentView=null
     let streamEvents=[],olderEvents=[]
@@ -924,6 +930,16 @@ function buildPullSandbox(opts) {
     let transcriptAnchor=null,skipAnchorOnce=false
     function readTranscriptAnchor(){return null}
     function restoreTranscriptAnchor(){return false}
+    function visibleMessages(list){return list}
+    function messagesWithOptimistic(list){return list}
+    const paintBox={scrollHeight:0,scrollTop:0,clientWidth:0,querySelectorAll(){return []}}
+    const $=()=>paintBox
+    function paintMessages(){calls.push('paint')}
+    function settleOlderShift(){calls.push('settle')}
+    function programmaticScroll(){}
+    function renderMessage(){return ''}
+    ${keySource}
+    ${olderSource}
     ${source}
     return { run: loadOlder, calls, state: () => ({ olderRunBusy }) }
   `)(opts)

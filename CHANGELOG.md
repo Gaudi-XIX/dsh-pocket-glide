@@ -6,8 +6,8 @@
 
 ## 未发布 — 目标 0.4.59
 
-本版修两件真事：**手机发出去的消息会静默丢掉**（A 组），以及隧道侧的五条缺陷（B 组，其中三条 P0）。
-C 组（cookie `Secure` 改成按「这一跳是否 TLS」判）**本版未做**，理由写在节末。
+本版修三件事：**手机发出去的消息会静默丢掉**（A 组）、隧道侧的五条缺陷（B 组，其中三条 P0），
+以及手机首屏静态资产的传输体积（D 组）。C 组（cookie `Secure` 改成按「这一跳是否 TLS」判）**本版未做**，理由写在节末。
 
 ### A 组：发送改成一本账，离页不再静默
 
@@ -23,6 +23,21 @@ C 组（cookie `Secure` 改成按「这一跳是否 TLS」判）**本版未做**
 - **B4 致命错误分诊 + 单飞守卫**：`isFatalCloudflaredError()` 只把「换 token 才有救」的五类错（invalid tunnel secret / failed to unmarshal / invalid token / 401 unauthorized / not a valid tunnel）判为致命，并给 error 打 `fatal = true`、`code = 'tunnel/fatal'`；其余退出按「还能重拨」处理。quick 腿连开两次会先终止仍在跑的旧载体，模块内只留一个活引用；URL 已交出去之后载体再死，`onExit` 恰好报一次。
 - **B5 服务面 keepalive 补全**：accept 到的 socket 打 `setKeepAlive(true, 20_000)`；同时钉 `server.keepAliveTimeout = 20_000`、`server.headersTimeout = 25_000`——这组值把空闲上限从 Node 默认的 5 s 抬到 20 s（探测仍在同一时刻到点，探测本身抢不到关闭之前，真实收益是 5 s→20 s）；`headersTimeout` 必须严格大于 `keepAliveTimeout`，否则 Node 启动即抛 `ERR_INVALID_ARG_VALUE`。
 - **这条的边界**：隧道「两条腿」里 cloudflared → Cloudflare 边缘那条是外部进程，本仓拿不到它的 socket，改不到。所以 keepalive 只在 **LAN 直连**档有真实收益；隧道态空闲 5 分钟后仍有一次重连代价，验收判据见 `F:\defws\docs\dsh-mobile-ecosystem-survey-final-20261023.md` §8 的 P0-2 行（真机：隧道态下页面挂 5 分钟不发请求，再次操作首包 < 2 s）与 §10.1 的现状表。
+
+### D 组：手机静态资产改成压缩送达
+
+- **为什么改**：手机首屏要下一份 337 KB 的 `/app.js` 和一份 53 KB 的 `/app.css`，而源站一直**刻意不压缩**
+  （2026-10-01 有过两次事故：一次 `max-age` 让手机重放了坏壳，一次源站 gzip 让手机把压缩字节当文本渲染）。
+  不压缩的原因是那两起事故，不是不想省流量——所以这次的改法把适用范围钉死在能自证新鲜的那两条路由上。
+- **改成什么**：新增 `lib/asset-compression.js`，桥**构造期**把两档内容各压一份放内存（br-9 → gzip-9）；
+  请求 `/app.css`·`/app.js` 时按 `Accept-Encoding` 择优，命中就发压缩体并带 `content-encoding`，
+  未命中、压缩器失败、URL 上的 12 位内容哈希与当前产物不符，一律回落 **200 + 明文**。文档 HTML 与 SSE
+  一行不碰——那正是 2026-10-01 出事的地方。开关 `DSH_POCKET_PRECOMPRESS=0` 可整体关掉。
+  每请求 CPU 为 0（压缩只在构造期做一次，br-9 实测约 56 ms/语言）。
+- **实测**：zh `/app.js` 明文 337,471 B ⇒ br-9 **99,280 B**（−70.6%）/ gzip-9 116,338 B；`/app.css` ⇒ br-9 10,334 B。
+- **怎么验**：`test/asset-precompression.test.js` 29 条（哈希门、真 socket 端到端、压缩器失败降级、
+  开关、每桥只渲染一次）。
+- **已知取舍**：`preferredEncoding()` 不解析 `q=` 权重、不认 `*`，只按 br → gzip → identity 的固定顺序取第一个显式 token。
 
 ### 未做：C 组 cookie `Secure`
 
