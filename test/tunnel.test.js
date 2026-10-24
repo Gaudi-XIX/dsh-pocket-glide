@@ -12,7 +12,7 @@ import { EventEmitter } from 'node:events'
 import { Readable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { startCloudflareNamedTunnel, resolveCloudflared, ensureCloudflared, extractTryCloudflareUrl } from '../lib/tunnel.js'
+import { startCloudflareNamedTunnel, startCloudflareQuickTunnel, isFatalCloudflaredError, resolveCloudflared, ensureCloudflared, extractTryCloudflareUrl, buildCloudflaredEnv } from '../lib/tunnel.js'
 import { createSettingsStore, SETTINGS_FILE_NAME } from '../lib/settings-store.js'
 import { LanMobileBridge } from '../lib/bridge.js'
 import { TUNNEL_HOSTNAME_MAX_LENGTH } from '../lib/constants.js'
@@ -91,6 +91,17 @@ test('extractTryCloudflareUrl pulls the first quick-tunnel URL', () => {
     'https://abc-1.trycloudflare.com',
   )
   assert.equal(extractTryCloudflareUrl('no url here'), null)
+  // The API host is not a tunnel. cloudflared prints it in its own error text,
+  // and a phone handed that hostname reaches Cloudflare's API, not this bridge.
+  assert.equal(
+    extractTryCloudflareUrl('failed to reach https://api.trycloudflare.com/v4/accounts'),
+    null,
+  )
+  assert.equal(
+    extractTryCloudflareUrl('https://api.trycloudflare.com then https://abc-2.trycloudflare.com'),
+    'https://abc-2.trycloudflare.com',
+    'a real tunnel line after an API line is still found',
+  )
 })
 
 test('resolveCloudflared falls through to the bare command name', () => {
@@ -1585,4 +1596,268 @@ test('desktop tunnel config: masked readback, hostname validation, desktop gate'
     await t.stop()
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+// ============================================================================
+// Report §8 P0 (2026-10-24). The report's own boundary holds here: the changes
+// are justified by code facts, while the severity comes from peers' archives.
+// P0-1 — cloudflared must dial the Cloudflare edge itself, so the proxy
+// variables the desktop shell exports must not reach the child. P0-3 — the
+// edge leg is pinned to http2, because a blackholed QUIC leg still lets
+// cloudflared print a hostname. P0-2 — the sockets we own stay alive.
+// ============================================================================
+
+// Enumerated, not matched with `/_proxy$/i`: that suffix is exactly what the
+// implementation used to leak `NODE_USE_ENV_PROXY` through, so a filter with
+// the same regex would let the bug prove itself innocent.
+const PROXY_ENV_KEYS = [
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'FTP_PROXY', 'NO_PROXY',
+  'http_proxy', 'https_proxy', 'all_proxy', 'ftp_proxy', 'no_proxy',
+]
+
+test('P0-1: cloudflared env drops every proxy variable and keeps the rest', () => {
+  const env = buildCloudflaredEnv({
+    PATH: '/usr/bin',
+    HTTP_PROXY: 'http://127.0.0.1:7890',
+    https_proxy: 'http://127.0.0.1:7890',
+    ALL_PROXY: 'socks5://127.0.0.1:7891',
+    NO_PROXY: 'localhost,127.0.0.1',
+    no_proxy: 'localhost',
+    TUNNEL_TOKEN: 'keep-me',
+    NODE_USE_ENV_PROXY: '1',
+    CDP_PROXY_PORT: '41770',
+  })
+  assert.deepEqual(
+    Object.keys(env).sort(),
+    ['CDP_PROXY_PORT', 'NODE_USE_ENV_PROXY', 'PATH', 'TUNNEL_TOKEN'],
+    'exactly the non-proxy keys survive — a suffix filter also eats NODE_USE_ENV_PROXY'
+  )
+  assert.equal(env.PATH, '/usr/bin', 'the rest of the environment still reaches the child')
+  assert.equal(env.TUNNEL_TOKEN, 'keep-me', 'the named-tunnel token survives the strip')
+})
+
+test('P0-1: a proxy in the shell environment never reaches the named tunnel child', async () => {
+  const child = fakeNamedChild()
+  const spawned = []
+  const saved = {
+    HTTP_PROXY: process.env.HTTP_PROXY,
+    https_proxy: process.env.https_proxy,
+    NODE_USE_ENV_PROXY: process.env.NODE_USE_ENV_PROXY,
+  }
+  process.env.HTTP_PROXY = 'http://127.0.0.1:7890'
+  process.env.https_proxy = 'http://127.0.0.1:7890'
+  process.env.NODE_USE_ENV_PROXY = '1'
+  try {
+    const instance = await startCloudflareNamedTunnel({
+      port: 43127,
+      token: 'ey-named-token-value',
+      hostname: 'phone.example.com',
+      ensureImpl: NAMED_STUB_ENSURE,
+      spawnImpl: (bin, args, opts) => {
+        spawned.push({ bin, args, opts })
+        return child
+      },
+      graceMs: 20,
+    })
+    assert.deepEqual(
+      Object.keys(spawned[0].opts?.env ?? {}).filter((key) => PROXY_ENV_KEYS.includes(key)),
+      [],
+      'the shell proxy must not ride into the cloudflared child'
+    )
+    assert.equal(
+      spawned[0].opts.env.NODE_USE_ENV_PROXY,
+      '1',
+      "and Node's own proxy switch is not collateral damage"
+    )
+    await instance.stop()
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
+test('P0-3: the quick tunnel argv pins http2 and its env carries no proxy', async () => {
+  const spawned = []
+  const saved = process.env.HTTP_PROXY
+  process.env.HTTP_PROXY = 'http://127.0.0.1:7890'
+  try {
+    const pending = startCloudflareQuickTunnel({
+      port: 43128,
+      ensureImpl: async () => 'stubbed-cloudflared',
+      spawnImpl: (bin, args, opts) => {
+        spawned.push({ bin, args, opts })
+        throw new Error('captured — nothing was really launched')
+      },
+      timeoutMs: 20,
+    })
+    await assert.rejects(pending)
+    assert.deepEqual(
+      spawned[0].args,
+      ['tunnel', '--url', 'http://127.0.0.1:43128', '--protocol', 'http2'],
+      'the quick tunnel must not leave the edge protocol on QUIC'
+    )
+    assert.deepEqual(
+      Object.keys(spawned[0].opts?.env ?? {}).filter((key) => PROXY_ENV_KEYS.includes(key)),
+      [],
+      'the quick tunnel child is stripped too'
+    )
+  } finally {
+    if (saved === undefined) delete process.env.HTTP_PROXY
+    else process.env.HTTP_PROXY = saved
+  }
+})
+
+test('P0-2: the bridge server arms keepalive on every socket it accepts', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('../lib/bridge.js', import.meta.url)), 'utf8')
+  assert.match(
+    src,
+    /\.on\('connection', \(socket\) => socket\.setKeepAlive\(true, 20_000\)\)/,
+    'an idle socket must keep itself alive — dropping it leaves nothing in either log'
+  )
+})
+// ---------------------------------------------------------------------------
+// 2026-10-24 — change 2026-10-24-pocket-send-loss-and-tunnel-p0, B4 / B5.
+//
+// P0-1 (报告 §8) 剩两个缺口：子进程在 URL 交出去之后死掉无人接应，以及重复
+// start 叠进程。P0-2 上一批只做了服务面的一半：socket 探活挂了，但 Node 自己的
+// idle 计时器（默认 5 s）会先掐断连接，探活等于白挂。
+// ---------------------------------------------------------------------------
+
+test('B4: only a refused credential is fatal — a transient exit is worth another dial', () => {
+  assert.equal(isFatalCloudflaredError('failed to unmarshal quick Tunnel: invalid tunnel secret'), true,
+    'a rejected secret cannot be retried away')
+  assert.equal(isFatalCloudflaredError('ERROR: Request failed: 401 Unauthorized'), true)
+  assert.equal(isFatalCloudflaredError('invalid token in tunnel credentials file: /root/.cloudflared/cert.pem'), true)
+  assert.equal(isFatalCloudflaredError('not a valid tunnel: could not find tunnel abc'), true)
+  assert.equal(isFatalCloudflaredError('failed to dial edge: connect: connection refused'), false,
+    'a refused dial is what the next attempt is for')
+  assert.equal(isFatalCloudflaredError(''), false)
+  assert.equal(isFatalCloudflaredError(undefined), false)
+})
+
+test('B4: an early exit caused by a refused credential is tagged so the caller stops re-dialling', async () => {
+  const fatalChild = fakeNamedChild()
+  const fatalPending = startCloudflareQuickTunnel({
+    port: 43127,
+    ensureImpl: NAMED_STUB_ENSURE,
+    spawnImpl: () => fatalChild,
+  })
+  // start() 先 await ensureImpl 才 spawn，监听器是 spawn 之后挂的；不等一轮就 emit，
+  // 事件会掉在地上，断言最后是「30 s 超时」走了同一段 finishReject 而假绿。
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  fatalChild.stderr.push(Buffer.from('failed to unmarshal quick Tunnel: invalid tunnel secret\n', 'utf8'))
+  fatalChild.exitCode = 1
+  fatalChild.emit('close', 1, null)
+  const fatalError = await fatalPending.then(() => null, (error) => error)
+  assert.ok(fatalError, 'the start rejects instead of resolving a URL that never came')
+  assert.match(fatalError.message, /exited unexpectedly with code 1/, 'the early-exit leg, not the timeout leg')
+  assert.equal(fatalError.fatal, true, 'the caller can tell this apart from a transient exit')
+  assert.equal(fatalError.code, 'tunnel/fatal')
+  assert.match(fatalError.message, /invalid tunnel secret/, 'and the tail still explains it')
+
+  // 对照：同样的早退，但错因是暂时的 ⇒ 不带 fatal 标记，重连仍由调用方决定。
+  const plainChild = fakeNamedChild()
+  const plainPending = startCloudflareQuickTunnel({
+    port: 43127,
+    ensureImpl: NAMED_STUB_ENSURE,
+    spawnImpl: () => plainChild,
+  })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  plainChild.stderr.push(Buffer.from('failed to dial edge: connection refused\n', 'utf8'))
+  plainChild.exitCode = 1
+  plainChild.emit('close', 1, null)
+  const plainError = await plainPending.then(() => null, (error) => error)
+  assert.match(plainError.message, /exited unexpectedly with code 1/)
+  assert.equal(plainError.fatal, undefined, 'a transient exit is not a credential problem')
+  assert.equal(plainError.code, undefined)
+})
+
+test('B4: a carrier that dies after the URL was handed out reports its exit exactly once', async () => {
+  const child = fakeNamedChild()
+  const exits = []
+  const pending = startCloudflareQuickTunnel({
+    port: 43127,
+    ensureImpl: NAMED_STUB_ENSURE,
+    spawnImpl: () => child,
+    onExit: (info) => exits.push(info),
+  })
+  child.stderr.push(Buffer.from('compiling https://aaa-11.trycloudflare.com for 127.0.0.1:43127\n', 'utf8'))
+  const instance = await pending
+  assert.equal(instance.url, 'https://aaa-11.trycloudflare.com')
+  assert.equal(exits.length, 0, 'a tunnel that is still up reports nothing')
+
+  // 真机上 SIGTERM 之后还会再来一次 close：报告必须在 decided 之后仍然发且只发一次。
+  child.emit('close', 1, null)
+  assert.equal(exits.length, 1, 'the exit is no longer swallowed by `decided`')
+  assert.deepEqual(exits[0], { code: 1, signal: null, fatal: false })
+  child.emit('close', 1, 'SIGTERM')
+  assert.equal(exits.length, 1, 'and a second close does not report a second death')
+})
+
+test('B4: a named tunnel reports its exit the same way, once', async () => {
+  const child = fakeNamedChild()
+  const exits = []
+  const pending = startCloudflareNamedTunnel({
+    port: 43127,
+    token: 'ey-named-token-value',
+    hostname: 'phone.example.com',
+    ensureImpl: NAMED_STUB_ENSURE,
+    spawnImpl: () => child,
+    graceMs: 20,
+    onExit: (info) => exits.push(info),
+  })
+  const instance = await pending
+  assert.equal(instance.url, 'https://phone.example.com')
+  assert.equal(exits.length, 0)
+  child.emit('close', 0, null)
+  child.emit('close', 0, null)
+  assert.equal(exits.length, 1, 'one death, one report')
+  assert.equal(exits[0].code, 0)
+})
+
+test('B4: a second quick start terminates the carrier that still holds the old URL', async () => {
+  const first = fakeNamedChild()
+  const second = fakeNamedChild()
+  let spawned = 0
+  const spawnImpl = () => {
+    spawned += 1
+    return spawned === 1 ? first : second
+  }
+  const firstPending = startCloudflareQuickTunnel({ port: 43127, ensureImpl: NAMED_STUB_ENSURE, spawnImpl })
+  first.stderr.push(Buffer.from('compiling https://aaa-11.trycloudflare.com for 127.0.0.1:43127\n', 'utf8'))
+  const firstInstance = await firstPending
+  assert.equal(firstInstance.url, 'https://aaa-11.trycloudflare.com')
+  assert.deepEqual(first.killed, [], 'being started does not kill a carrier')
+
+  const secondPending = startCloudflareQuickTunnel({ port: 43127, ensureImpl: NAMED_STUB_ENSURE, spawnImpl })
+  // start() 先 await ensureImpl 才 spawn，所以得让出一轮宏任务再断言。
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.deepEqual(first.killed, ['SIGTERM'],
+    'the replaced carrier is terminated instead of left racing over the same local port')
+  second.stderr.push(Buffer.from('compiling https://bbb-22.trycloudflare.com for 127.0.0.1:43127\n', 'utf8'))
+  const secondInstance = await secondPending
+  assert.equal(secondInstance.url, 'https://bbb-22.trycloudflare.com')
+  assert.deepEqual(second.killed, [], 'and only the new one is live')
+  assert.notEqual(first.exitCode, null, 'the old handle is gone, not merely forgotten')
+  await secondInstance.stop()
+})
+
+test('P0-2: the idle window is raised to 20 s; the probe never lands after the timeout it shares (AC3.5)', () => {
+  const src = fs.readFileSync(fileURLToPath(new URL('../lib/bridge.js', import.meta.url)), 'utf8')
+  const probe = Number(/setKeepAlive\(true, ([\d_]+)\)/.exec(src)[1].replaceAll('_', ''))
+  const keepAlive = Number(/server\.keepAliveTimeout = ([\d_]+)/.exec(src)[1].replaceAll('_', ''))
+  const headers = Number(/server\.headersTimeout = ([\d_]+)/.exec(src)[1].replaceAll('_', ''))
+  assert.equal(keepAlive, 20_000, 'the idle window is raised from the Node default 5 s to 20 s')
+  assert.ok(probe <= keepAlive,
+    'AC3.5: the probe must not land after the idle timeout; at equal 20 s values they expire together, so the real gain is 5 s -> 20 s, not a probe that beats the close')
+  assert.ok(headers > keepAlive, 'Node throws ERR_INVALID_ARG_VALUE at the first request when this pair is inverted')
+
+  // AC3.5 的口径：`lib/` 全域从 0 命中变成 ≥1。
+  const libDir = fileURLToPath(new URL('../lib/', import.meta.url))
+  const hits = fs.readdirSync(libDir)
+    .filter((name) => name.endsWith('.js'))
+    .filter((name) => /setKeepAlive|new http\.Agent/.test(fs.readFileSync(path.join(libDir, name), 'utf8')))
+  assert.ok(hits.length >= 1, 'the keepalive must live in the shipped lib, not only in a test double')
 })

@@ -4,6 +4,34 @@
 在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
+## 未发布 — 目标 0.4.59
+
+本版修两件真事：**手机发出去的消息会静默丢掉**（A 组），以及隧道侧的五条缺陷（B 组，其中三条 P0）。
+C 组（cookie `Secure` 改成按「这一跳是否 TLS」判）**本版未做**，理由写在节末。
+
+### A 组：发送改成一本账，离页不再静默
+
+- **为什么改**：手机页发消息是「先把气泡塞进 `optimisticPrompts` 就发 RPC」，结果只按「数组里还有没有这单」判断。手机锁屏、切后台、导航回列表都可能把页面连同数组一起回收——RPC 这时失败，既没有人提示，正文也没留底，用户看到的就是「按了发送，什么都没发生」。
+- **改成什么**：`pendingSend` 一本账（会话 → 在途单，落 `localStorage`），发前落账、结果撤账、再进会话结账（先读内存账本、再读 localStorage，最后才结账清两处——页面被系统回收后靠这一步把正文认回来）；失败提示门从 `optimisticPrompts.includes()` 换成 `activeSession === owner`。离页时失败的单标 `failed` 落盘；重进会话时，未失败的回填正文、失败的回填正文并给一条提示，列表里该行标红（`row.error = true`），账目在结清后立即清空。超过 10 分钟的在途单一律丢弃，不复活也不回填。
+- **怎么验**：`test/send-pending-ledger.test.js`（A0–A7、A1b/c/d/e、A3b、A4b 共 13 条；A3b 钉「在途期间发生一次重画」那一行失败门，A4b 钉页面回收后的结账顺序）。另把 `send()` 上方那段 23 行时序契约注释整体迁进该档档头（源码侧只留一行指针），壳脚本毛删 −1,467 B；A 组账本吃回 +845 B（含本轮兜底修复 +26 B），整笔净 **−622 B**（本卡自身账目）；同树另有并行线 bot-fab 的 CSS 增量 +316 B，故整棵树 HEAD 391,421 → 现 **391,115 B**（zh），合计 **−306 B**。
+
+### B 组：隧道五条
+
+- **B1 子进程环境闭集**：`buildCloudflaredEnv()` 先剥掉 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`（含小写变体）再注入 token，cloudflared 不再被宿主的代理变量引到 fake-ip 黑洞里。
+- **B2 quick 腿固定 `--protocol http2`**：fake-ip TUN 下 HTTP/3 不可用，走 QUIC 会连不上。
+- **B3 隧道 URL 正则加 `(?!api\.)` 负前瞻**：cloudflared 日志里会打印 `api.trycloudflare.com`，原先会被误当成隧道地址。
+- **B4 致命错误分诊 + 单飞守卫**：`isFatalCloudflaredError()` 只把「换 token 才有救」的五类错（invalid tunnel secret / failed to unmarshal / invalid token / 401 unauthorized / not a valid tunnel）判为致命，并给 error 打 `fatal = true`、`code = 'tunnel/fatal'`；其余退出按「还能重拨」处理。quick 腿连开两次会先终止仍在跑的旧载体，模块内只留一个活引用；URL 已交出去之后载体再死，`onExit` 恰好报一次。
+- **B5 服务面 keepalive 补全**：accept 到的 socket 打 `setKeepAlive(true, 20_000)`；同时钉 `server.keepAliveTimeout = 20_000`、`server.headersTimeout = 25_000`——这组值把空闲上限从 Node 默认的 5 s 抬到 20 s（探测仍在同一时刻到点，探测本身抢不到关闭之前，真实收益是 5 s→20 s）；`headersTimeout` 必须严格大于 `keepAliveTimeout`，否则 Node 启动即抛 `ERR_INVALID_ARG_VALUE`。
+- **这条的边界**：隧道「两条腿」里 cloudflared → Cloudflare 边缘那条是外部进程，本仓拿不到它的 socket，改不到。所以 keepalive 只在 **LAN 直连**档有真实收益；隧道态空闲 5 分钟后仍有一次重连代价，验收判据见 `F:\defws\docs\dsh-mobile-ecosystem-survey-final-20261023.md` §8 的 P0-2 行（真机：隧道态下页面挂 5 分钟不发请求，再次操作首包 < 2 s）与 §10.1 的现状表。
+
+### 未做：C 组 cookie `Secure`
+
+按「这一跳是否 TLS」判要碰登录态：判错一次就是手机掉登录，而验证它需要 LAN 直连、隧道、反代三档真机各走一遍。本版不修（`F:\defws\.agents\flow\changes\2026-10-24-pocket-send-loss-and-tunnel-p0\tasks.md` T4 标 `SKIP-BY-LEAD`），隧道态登录态维持现状。
+
+### 读数
+
+壳脚本实测（直调 `mobilePageAssets({locale})`；`node --test test/mobile-assets.test.js` 20 条全过，预算门读的就是这条数）：zh **391,115 B**（余 **385 B**）/ en **391,022 B**（余 **478 B**），`ASSET_BUDGET_BYTES = 391_500` 未抬线。
+
 ## 0.4.58 — 2026-10-23
 
 **先量、再改**：第二步（把手机的提问变便宜）在动手之前先补两行读数——否则「宿主列表到底被读了几次、历史回包到底多重」只能靠推算，改完也无法证明有效。本版**只加观测，不改任何行为**。
