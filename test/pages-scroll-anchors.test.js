@@ -607,12 +607,12 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   assert.match(js, /if\(typeof isNearBottom==='function'&&typeof followStream!=='undefined'&&followStream&&!isNearBottom\(box\)\)\{followStream=false;/, '2026-10-15 ③五轮：整段重建那条路同样先量——否则流式全量重绘一帧就把上滑的读者拽回底（bt 现场）')
   assert.match(assets.zh.document, /id="scrollAnchors"/, 'the anchor deck ships in the document')
   assert.match(js, /anchor-fab/, 'the fab styling ships')
-  assert.doesNotMatch(assets.zh.css, /(?<!\.cv )\.msg-hist\{content-visibility/, 'CV 只在 .cv 门后（注释里提到该词不算），无门直挂仍判红——遥测实证它让 scrollHeight 在 1828↔4711↔2090 间摆动、浏览器自动滚动锚定把 scrollTop 推到 3980 再掉回 1359（这正是 cvVerdict 夹具的先手）')
+  assert.doesNotMatch(assets.zh.css, /(?<!\.cv )\.msg-hist\s*\{content-visibility/, 'CV 只在 .cv 门后（注释里提到该词不算），无门直挂仍判红——遥测实证它让 scrollHeight 在 1828↔4711↔2090 间摆动、浏览器自动滚动锚定把 scrollTop 推到 3980 再掉回 1359（这正是 cvVerdict 夹具的先手）')
   // 默认不带（上一行钉）+ 只有 ?cv=1 才带——两侧合起来才等价于原判据。
   assert.match(assets.zh.css, /\.messages\.cv \.msg-hist\{content-visibility:auto;contain-intrinsic-size:auto 56px\}/, '2026-10-24 CV 门：门后声明按 56px 估（旧 120px 高估 124%）')
-  assert.match(js, /const CV_ON=!\/\[\?&\]cv=0\/\.test\(location\.search\)&&\(\/\[\?&\]cv=1\/\.test\(location\.search\)\|\|Date\.now\(\)<\(\+localStorage\.getItem\('pocketCv'\)\|\|0\)\);/, 'CV 门：?cv=1 或 6h 凭据才开（standalone 启动丢 query，故要有凭据）')
+  assert.match(js, /const CV_ON=\(\(\)=>\{try\{return !\/\[\?&\]cv=0\/\.test\(location\.search\)&&\(\/\[\?&\]cv=1\/\.test\(location\.search\)\|\|Date\.now\(\)<\(\+localStorage\.getItem\('pocketCv'\)\|\|0\)\)\}catch\{return false\}\}\)\(\);/, 'CV 门：?cv=1 或 6h 凭据才开（standalone 启动丢 query，故要有凭据）；读写 localStorage 都进 try（隐私模式会抛），异常按关处理')
   assert.match(js, /function applyContentVisibility\(\)\{const b=\$\('messages'\);if\(!b\|\|!CV_ON\)return;try\{localStorage\.setItem\('pocketCv',String\(Date\.now\(\)\+216e5\)\)\}catch\{\}if\(!CSS\.supports\('content-visibility','auto'\)\)\{probeMark\('cvna'\);return\}b\.classList\.add\('cv'\)\}/, 'CV 开关只由 ?cv=1 / 6h 凭据打开，且老浏览器静默忽略要打 cvna（否则 N1≈N0 被误读成有效）')
-  assert.equal((assets.zh.css.match(/content-visibility:auto/g) || []).length, 1, '全文只此一处 CV 声明（门后那一处），删掉门就等于把 CV 常开')
+  assert.equal((assets.zh.css.match(/content-visibility\s*:\s*auto/g) || []).length, 1, '全文只此一处 CV 声明（门后那一处），删掉门就等于把 CV 常开')
   assert.match(assets.zh.css, /@media\(prefers-reduced-motion:reduce\)\{\.anchor-fab\{transition:none\}\.workspaces\{transition:none\}\}/, 'the fade respects reduced motion (0.4.39 shares the block with the landing glow)')
   assert.match(assets.zh.css, /\.task-row\.is-unread \.task-status::after/)
   // the stream-watermark paint sandbox extracts paintMessages WITHOUT the new
