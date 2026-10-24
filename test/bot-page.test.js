@@ -355,8 +355,8 @@ test('a Host that stops answering keeps the last workspace hidden', async () => 
 // 覆盖四条分支 —— 审批卡两态、点击回话、发消息、读消息流。
 // ---------------------------------------------------------------------------
 
-/** 页面脚本要的全部节点（lib/bot-page.js 的 `$('…')` 一共十个）。 */
-const PAGE_IDS = ['bpBack', 'bpReload', 'bpChatTitle', 'bpHint', 'bpList', 'bpMsgs', 'bpComposer', 'bpPrompt', 'bpSend', 'bpToast']
+/** 页面脚本要的全部节点（lib/bot-page.js 的 `$('…')` 一共十一个，多一个回 Pocket 的浮窗）。 */
+const PAGE_IDS = ['bpBack', 'bpHome', 'bpReload', 'bpChatTitle', 'bpHint', 'bpList', 'bpMsgs', 'bpComposer', 'bpPrompt', 'bpSend', 'bpToast']
 
 /**
  * A browser stand-in holding just what `/bot`'s script touches: ten elements
@@ -364,7 +364,7 @@ const PAGE_IDS = ['bpBack', 'bpReload', 'bpChatTitle', 'bpHint', 'bpList', 'bpMs
  * that answers `/api/rpc` from `answer(method, payload)`, and timers that never
  * fire (the page's pollers are not what these tests are about).
  */
-function fakeBrowser({ answer = () => ({}) } = {}) {
+function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
   const nodes = new Map()
   const nodeListeners = new Map()
   const windowListeners = new Map()
@@ -401,13 +401,46 @@ function fakeBrowser({ answer = () => ({}) } = {}) {
     return made
   }
   for (const id of PAGE_IDS) node(id)
+  // The page marks its two views on the body (`bp-list` / `bp-chat`) so the
+  // floating buttons can trade places, and it drops `bp-ready`'s hairline once
+  // a read lands. Both are assertions now, so the classes are recorded rather
+  // than thrown away.
+  const classes = new Set(['bp-list'])
+  const body = {
+    classList: {
+      add: (name) => classes.add(name),
+      remove: (name) => classes.delete(name),
+      contains: (name) => classes.has(name),
+    },
+  }
+  const store = new Map()
+  if (seed) for (const [key, value] of Object.entries(seed)) store.set(key, String(value))
+  const localStorage = {
+    getItem: (key) => (store.has(key) ? store.get(key) : null),
+    setItem: (key, value) => store.set(key, String(value)),
+    removeItem: (key) => store.delete(key),
+  }
   const document = {
     title: 'DS Bot',
     hidden: false,
+    body,
     getElementById: (id) => node(id),
     addEventListener: (type, fn) => documentListeners.set(type, fn),
   }
   const navigations = []
+  // The page says its last word on the way out with a beacon, because a plain
+  // fetch dies with the document that made it. The beacon is recorded apart
+  // from the fetch log: a test must be able to tell which of the two carried it.
+  const beacons = []
+  const navigator = {
+    // A Blob is not readable synchronously (String(blob) is just [object
+    // Blob]), so the stub takes the URL and keeps the body it can read; the
+    // payload itself is asserted on the page's side, where it was built.
+    sendBeacon: (url, body) => {
+      beacons.push({ url, body: typeof body === 'string' ? body : null })
+      return true
+    },
+  }
   const window = {
     addEventListener: (type, fn) => windowListeners.set(type, fn),
     // One entry behind this page, as after tapping the landing's corner button.
@@ -415,10 +448,28 @@ function fakeBrowser({ answer = () => ({}) } = {}) {
     // the first click, or `window.history.length = 1`.
     history: { length: 2, back: () => navigations.push('back') },
   }
-  const location = { hash: '', href: '' }
+  const location = { hash: '', href: '', origin: 'http://127.0.0.1:9896' }
+  // Timers are collected instead of fired, so a test can choose the moment: the
+  // page arms one timeout per rpc (its own give-up) and one per toast.
+  const timers = []
+  const fakeSetTimeout = (fn) => { timers.push(fn); return timers.length }
   const fetch = (url, options) => {
     const body = JSON.parse(options.body)
     calls.push({ method: body.method, payload: body.payload })
+    if (hang && hang(body.method)) {
+      // A bridge that accepts the call and never answers. The real fetch rejects
+      // when the page's own AbortController fires; so does this one.
+      return new Promise((resolve, reject) => {
+        const signal = options.signal
+        if (signal && typeof signal.addEventListener === 'function') {
+          signal.addEventListener('abort', () => {
+            const error = new Error('The operation was aborted.')
+            error.name = 'AbortError'
+            reject(error)
+          })
+        }
+      })
+    }
     const result = answer(body.method, body.payload)
     const failed = result && result.ok === false
     return Promise.resolve({
@@ -431,17 +482,23 @@ function fakeBrowser({ answer = () => ({}) } = {}) {
   }
   const neverFire = () => 1
   new Function(
-    'document', 'window', 'location', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Intl',
+    'document', 'window', 'location', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Intl', 'localStorage', 'navigator',
     BOT_PAGE_JS
-  )(document, window, location, fetch, neverFire, () => {}, neverFire, () => {}, Intl)
+  )(document, window, location, fetch, neverFire, () => {}, fakeSetTimeout, () => {}, Intl, localStorage, navigator)
   return {
     node,
     calls,
+    beacons,
+    document,
     location,
     navigations,
     window,
+    classes,
+    store,
     settle: async (rounds = 10) => { for (let i = 0; i < rounds; i += 1) await new Promise((resolve) => setImmediate(resolve)) },
     fireWindow: (type) => windowListeners.get(type)(),
+    /** Fire every timeout the page has armed so far (the page's own give-up). */
+    fireTimers: () => { for (const fn of timers.splice(0)) fn() },
     click: (id, event) => nodeListeners.get(id + ':click')(event),
   }
 }
@@ -576,6 +633,18 @@ test('a page opened with nothing behind it still finds the way home', async () =
   page.click('bpBack')
   assert.deepEqual(page.navigations, [], 'there is nothing to go back to')
   assert.equal(page.location.href, '/', 'so it names the landing itself')
+})
+
+test('a page opened from another site goes to the landing, not back to that site', async () => {
+  const page = fakeBrowser()
+  await page.settle()
+  // Opened from a chat app or a search result: there is an entry behind this
+  // page, but it is not this site's landing.
+  page.document.referrer = 'https://evil.example/post'
+  page.click('bpHome', { preventDefault() {} })
+  await page.settle()
+  assert.deepEqual(page.navigations, [], 'going back would hand the phone to the site that linked here')
+  assert.equal(page.location.href, '/', 'so the Pocket button names the landing itself')
 })
 
 // ---------------------------------------------------------------------------
@@ -844,3 +913,235 @@ test('reading further back leaves the reader looking at the same message', async
     'and the view moved down by exactly their height, so the same message is still in front of the reader')
 })
 
+// ---------------------------------------------------------------------------
+// 切页不再是一次空白（用户 2026-10-24：「每次从 Pocket 切到 bot 页面的时候会很卡」）
+//
+// 四条：列表与聊天各自该露哪个浮窗、离开前先给首页起个头、上次的名单先画出来、
+// 数据一到顶部那条线就撤。前两条是需求本身，后两条是「不空白」的判据。
+// ---------------------------------------------------------------------------
+
+test('the list shows the way home, and taking it says so before leaving', async () => {
+  const page = fakeBrowser({ answer: () => ({}) })
+  await page.settle()
+
+  assert.ok(page.classes.has('bp-list'), 'the list is the side of the page the way home belongs on')
+  assert.ok(!page.classes.has('bp-chat'))
+
+  page.click('bpHome', { preventDefault() {} })
+  await page.settle()
+
+  const beacon = page.beacons.find((entry) => entry.url === '/api/rpc')
+  assert.ok(beacon, 'the hop says so while this page is still going, on the one channel that survives it')
+  assert.deepEqual(page.navigations, ['back'], 'and the landing is reached by going back, not by a new entry')
+})
+
+test('the last word on the way out travels as a beacon, because the page is already going', async () => {
+  const page = fakeBrowser({ answer: () => ({}) })
+  await page.settle()
+
+  page.click('bpHome', { preventDefault() {} })
+  await page.settle()
+
+  // The navigation happens in the same turn, which is exactly when a plain
+  // fetch gets cancelled. The cue must ride the one channel the browser still
+  // finishes for a dying document — and must not also be sent as a fetch.
+  assert.equal(page.beacons.length, 1, 'one beacon, and nothing else, carries the cue')
+  assert.equal(page.beacons[0].url, '/api/rpc', 'and it goes to the same door every other call uses')
+  assert.equal(page.calls.filter((call) => call.method === 'page.cue').length, 0,
+    'the cue is not sent twice: the beacon is the one the browser keeps')
+})
+
+test('a chat keeps the way back to the list, not to the landing', async () => {
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') return { events: [saidByBot('在', 3)], hasMore: false }
+      return {}
+    },
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle(30)
+
+  assert.ok(page.classes.has('bp-chat'), 'the chat is the side of the page that offers the way back to the list')
+  assert.ok(!page.classes.has('bp-list'))
+})
+
+test('the last roster is on screen before the team read returns, and carries no approval card', async () => {
+  const recalled = {
+    bots: [{ id: 'b-chief', name: 'Chief', role: 'Chief of Staff', sessionId: 's-chief' }],
+    rooms: [],
+    mainBotIds: ['b-chief'],
+    questions: null,
+    at: Date.now()
+  }
+  // The read fails: whatever is on screen can only have come from the recall.
+  const page = fakeBrowser({
+    seed: { pocketBotTeam: JSON.stringify(recalled) },
+    answer: (method) => (method === 'bot.team' ? { ok: false, error: '连不上', code: 'bot/down' } : {}),
+  })
+  await page.settle(20)
+
+  assert.ok(page.node('bpList').innerHTML.includes('Chief'),
+    'the roster the phone drew last time is painted at once, before any read returns')
+  assert.ok(!page.node('bpList').innerHTML.includes('data-approve'),
+    'no 允许/拒绝 button comes back from a copy — a stale card must not be answerable')
+})
+
+test('the copy kept for the next open carries the rows and no approval card', async () => {
+  const page = fakeBrowser({
+    answer: (method) => (method === 'bot.team'
+      ? teamWith({ id: 'a-1', botId: 'chief', tool: 'bash', reason: 'needs a shell', answerable: true })
+      : {}),
+  })
+  await page.settle()
+  const kept = JSON.parse(page.store.get('pocketBotTeam'))
+  assert.ok(Array.isArray(kept.bots) && kept.bots.length > 0, 'the rows are what the shortcut is for')
+  assert.ok(!('work' in kept), 'the live approvals are left out of the copy')
+  assert.ok(!JSON.stringify(kept).includes('a-1'), 'and no card id survives in it')
+})
+
+test('the hairline stops once the team read lands', async () => {
+  const page = fakeBrowser({ answer: () => ({}) })
+  assert.ok(!page.classes.has('bp-ready'), 'a read is still in flight at the first paint')
+  await page.settle()
+  assert.ok(page.classes.has('bp-ready'), 'and the progress hairline goes away when it lands')
+})
+
+test('the hairline stops when the read fails, not only when it succeeds', async () => {
+  const page = fakeBrowser({
+    answer: (method) => (method === 'bot.team' ? { ok: false, error: '连不上', code: 'bot/down' } : {}),
+  })
+  assert.ok(!page.classes.has('bp-ready'), 'the read is in flight')
+  await page.settle()
+  assert.ok(page.classes.has('bp-ready'), 'a failed read must not leave the hairline running for ever')
+  assert.match(page.node('bpHint').textContent, /连不上 DS Bot/)
+})
+
+test('a bridge that never answers gives up instead of loading for ever', async () => {
+  const page = fakeBrowser({ hang: (method) => method === 'bot.team' })
+  await page.settle()
+  assert.ok(!page.classes.has('bp-ready'), 'still waiting, so the hairline is right to run')
+  page.fireTimers()
+  await page.settle()
+  assert.ok(page.classes.has('bp-ready'), 'the page stops waiting and says so')
+  assert.match(page.node('bpHint').textContent, /等了 12 秒没有回音/)
+})
+
+
+// ---------------------------------------------------------------------------
+// 预热（2026-10-24 用户 m00048「切到 bot 页很卡」+ m00191「不要死加载」）：
+// 首页浮窗被按下的那一刻，桥先去把 bot 页第一屏要读的东西读了。它不进
+// 白名单——白名单是「能翻成 Host 端点」的封闭集合，而 cue 是桥自己的动作，
+// 只在两个页面之间点火，所以它走前置分支、只认两个页名。
+// ---------------------------------------------------------------------------
+
+const cue = (t, cookie, page) => httpFetch(t.base + '/api/rpc', {
+  method: 'POST',
+  headers: { cookie, 'content-type': 'application/json' },
+  body: JSON.stringify({ method: 'page.cue', payload: { page } })
+})
+
+test('the cue stays outside the allowlist and only names pages that exist', async () => {
+  const { RPC_ALLOWLIST } = await import('../lib/constants.js')
+  assert.ok(!RPC_ALLOWLIST.has('page.cue'),
+    'the cue is the bridge warming itself, not another way to reach the Host')
+
+  const t = await startBridge({ harness: 'fake' })
+  try {
+    const cookie = await t.pairMobile()
+    assert.equal((await cue(t, cookie, 'bot')).status, 200)
+    assert.equal((await cue(t, cookie, 'landing')).status, 200)
+    assert.equal((await cue(t, cookie, 'nope')).status, 400, 'a page the bridge cannot warm is refused')
+    assert.equal((await cue(t, cookie, '../../etc')).status, 400, 'the name is matched, never resolved')
+
+    // 前置分支不等于绕过门：/api/rpc 整条路由都在配对门之后，cue 也不例外。
+    const reachedBefore = t.harness.records.calls.filter((c) => c.url === '/api/bot').length
+    assert.equal((await cue(t, '', 'bot')).status, 401, 'an unpaired caller cannot start a read either')
+    assert.equal(t.harness.records.calls.filter((c) => c.url === '/api/bot').length, reachedBefore,
+      'and nothing reached the Host from it')
+
+    // 前置分支也不在同源门之前：sendBeacon 正是跨站伪造的典型路径，而 cue 是
+    // 唯一由 sendBeacon 触发的调用。
+    const forged = await httpFetch(t.base + '/api/rpc', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' },
+      body: JSON.stringify({ method: 'page.cue', payload: { page: 'bot' } })
+    })
+    assert.equal(forged.status, 403, 'a forged cue is refused before it can warm anything')
+    assert.equal(t.harness.records.calls.filter((c) => c.url === '/api/bot').length, reachedBefore,
+      'and no read left the bridge for it')
+  } finally { await t.stop() }
+})
+
+test('the cue reads what the Bot page will ask for, so that page finds it ready', async () => {
+  const t = await startBridge({ harness: 'fake' })
+  try {
+    const cookie = await t.pairMobile()
+    const botCalls = () => t.harness.records.calls.filter((c) => c.url === '/api/bot').length
+
+    const before = botCalls()
+    assert.equal((await cue(t, cookie, 'bot')).status, 200)
+    // 预热心是在 respond 之后自己跑的：它不发请求给首页，等这一拍。
+    await new Promise((r) => setTimeout(r, 200))
+    const warmed = botCalls()
+    assert.equal(warmed, before + 1, 'one read starts the moment the phone is told the page will open')
+
+    const res = await httpFetch(t.base + '/api/rpc', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'bot.team', payload: {} })
+    })
+    // bot.team 的应答是 Host 的原生信封，不套 client-request 的 result 层。
+    const result = await res.json()
+    assert.equal(result.ok, true, 'the page read still works')
+    assert.equal(botCalls(), warmed, 'and it is served from the read the cue already paid for')
+  } finally { await t.stop() }
+})
+
+test('the cue never turns a failing Host read into a failed cue', async () => {
+  const t = await startBridge({
+    harness: 'fake',
+    botRespond: () => ({ ok: false, error: '宿主没起来', code: 'bot/unavailable' })
+  })
+  try {
+    const cookie = await t.pairMobile()
+    assert.equal((await cue(t, cookie, 'bot')).status, 200,
+      'the phone already left home; a warm read that fails must not surface as an error')
+  } finally { await t.stop() }
+})
+
+test('answering a card ends the warm copy, so the next read is a real one', async () => {
+  const t = await startBridge({ harness: 'fake' })
+  try {
+    const cookie = await t.pairMobile()
+    const botCalls = () => t.harness.records.calls.filter((c) => c.url === '/api/bot').length
+    const call = (method, payload) => httpFetch(t.base + '/api/rpc', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ method, payload })
+    })
+
+    assert.equal((await cue(t, cookie, 'bot')).status, 200)
+    await new Promise((r) => setTimeout(r, 200))
+    const warmed = botCalls()
+    assert.equal((await call('bot.team', {})).status, 200)
+    assert.equal(botCalls(), warmed, 'the first read is the one the cue already paid for')
+
+    // A cue read that is still flying when the phone answers: it must not be
+    // allowed to land afterwards and write the pre-answer view back into the
+    // cache. The harness answers instantly, so the window is opened by hand —
+    // a cue fired and read back before the answer, then answered while the
+    // warm promise is still the newest one in the bridge.
+    assert.equal((await cue(t, cookie, 'bot')).status, 200)
+    await new Promise((r) => setTimeout(r, 200))
+    const reWarmed = botCalls()
+    assert.equal((await call('bot.approval', { id: 'a-1', choice: 'allow' })).status, 200)
+    assert.equal((await call('bot.team', {})).status, 200)
+    // Two more calls: the answer itself, and a read that had to be real. The
+    // warm promise cleared with the value would otherwise have answered it.
+    assert.equal(botCalls(), reWarmed + 2,
+      'the view after an answer is read again — a warm copy would hand the settled card back')
+  } finally { await t.stop() }
+})
