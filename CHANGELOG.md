@@ -48,6 +48,15 @@
 - **怎么验**：`test/tunnel.test.js` 21 条（常量与开关三档、真 `child_process` 被杀触发重拨、真 cloudflared 替身打 `invalid tunnel secret` 走完 `isFatalCloudflaredError()` → `reason=fatal`、连续失败到 `reason=exhausted`、无悬挂定时器、幂等、六档 hop 判据、`hopSecureSuffix(` 4 处 / `hopIsTls(` 1 处的单一性 grep 断言）、`test/pairing.test.js` 2 条（两参调用逐字节不变 + 传第三参才多出 `Secure`）、`test/consent.test.js` 3 条。全量 `node --test --test-concurrency=1 test/*.test.js` = **1611 tests / 1609 pass / 0 fail / 2 skipped**（pwsh，2026-10-25 01:0x 时点读数）。本卡自身账目：相关四档由父提交 `56aa7df` 的 **140 / 137 pass / 2 fail / 1 skipped** 变为 **166 / 165 pass / 0 fail / 1 skipped**（+26 条，skip 是 env-gated 的 `R-T1`）。那两条 fail 是 `ensureCloudflared` 在本机 MSYS 下 `tar` 连不上 `C:` 的环境红，同样用例在 pwsh 下 0 红；父提交全量未重跑，故「1611」不当作本卡增量。
 - **壳字节 0 B（对父提交实测同值）**：本卡不碰 `lib/pages.js`，`ASSET_BUDGET_BYTES = 391_500` 未抬线；提交树与父提交 `56aa7df` 同为 zh **391,383 B（余 117）** / en **391,290 B（余 210）**。提交信息里那句「391,398 → 391,383」是**脏工作树读数**：`lib/constants.js` 一度被写成 CRLF，而 `toolActivityCategory` 的函数源码会被 `lib/pages.js` 用 `.toString()` 原文嵌进手机壳 JS，EOL 因此直接进壳；提交前已归一为 LF，两个提交树都是 391,383。
 
+### W4：配对/重连交接冷开不再付两份 boot（2026-10-25，卡 `2026-10-24-pocket-cold-open-boot`）
+
+- **为什么改**：从配对页/重连页交接进主页（`/?handoff=…`）时，同一份首屏数据被付了两次——页面先取 `/api/boot`（设计实测 **911,048 B**），紧接着文档内又内嵌了一模一样的一份（合计 **1,832,028 B**）。页侧 `takeHandoffBoot()` 让**前者**胜出，内嵌那份下载完就丢。
+- **改成什么**：桥侧记一笔**一次性窄窗台账**——`/api/boot` 应答**交付成功后**记下「这个设备指纹刚取过 boot，此刻 T0，窗口 120 s」（桥内内存，只存指纹与时间，不含身份、数据、凭据；指纹口径沿用桥里既有的 `liveMobileSession().fingerprint` ／ `deviceFingerprint(user-agent)`，不另造标识）。随后的文档渲染若命中台账，**不调 `buildMobileBoot`、不内嵌 boot**（页面因此只收一份裸壳）；台账消费掉之后（下一次文档渲染）恢复内嵌。页侧一行不改——`takeHandoffBoot()` 本来就让 sessionStorage 里那份 `/api/boot` 胜出（配对页/重连页在 `location.replace('/')` 之前写的就是它），现在它成了唯一一份，**主页刷新、SW 冷启、二次打开都不受影响**。
+- **为什么不打 `x-pocket-cache: app`**：这只头会让 Service Worker 缓存文档 HTML。跳过内嵌时文档里没有数据，若被缓存就成了「无数据空壳」，下次冷开打开会白屏——所以跳过内嵌的这一跳**不打缓存头**（打头与不内嵌这两件事互斥，`test/handoff-boot-dedup.test.js` 的 AC-1 专门一条钉它）。
+- **开关**：`DSH_POCKET_BOOT_HANDOFF=0` 可整体关掉（照 `DSH_POCKET_PRECOMPRESS` 的样板：默认开，**只有显式 `0` 关**，空值仍开）。
+- **怎么验**：`test/handoff-boot-dedup.test.js` 11 条，全走**真链路**（`createServer` + `LanMobileBridge` + 真 socket，不手工造 response 对象）：先真取 `/api/boot`，再用同一 UA 真取文档断言不再内嵌；换 UA / 超窗 / 交过之后，三种情况都恢复内嵌；跳过内嵌的那一跳不带 `x-pocket-cache: app`，恢复内嵌的那一跳带；开关三档（未设、空串、`1` 开，`0` 关）；`/api/boot` 未交付成功（如 UNAUTHORIZED 短路）不记台账。
+- **壳字节 0 B**：本卡不碰 `lib/pages.js` 与 `lib/constants.js`，`ASSET_BUDGET_BYTES = 391_500` 未抬线；改后实测 zh **391,383 B（余 117）** / en **391,290 B（余 210）**，与 HEAD 同值。
+
 ### 未做：C 组 cookie `Secure`（0.4.59 发布前已由 W3 补做）
 
 按「这一跳是否 TLS」判要碰登录态：判错一次就是手机掉登录，而验证它需要 LAN 直连、隧道、反代三档真机各走一遍。本版不修（`F:\defws\.agents\flow\changes\2026-10-24-pocket-send-loss-and-tunnel-p0\tasks.md` T4 标 `SKIP-BY-LEAD`），隧道态登录态维持现状。**2026-10-25 由卡 `2026-10-24-pocket-tunnel-resilience` 的 W3 补做（见上节）；三档真机走查仍未做**，本机只有单测与真实 HTTP 端到端用例。上面这段保留为当时的判断与理由。
