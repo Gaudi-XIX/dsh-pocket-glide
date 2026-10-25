@@ -159,6 +159,8 @@ test('tailTextOf only speaks for a cached row with actual text', () => {
   assert.equal(tailTextOf('a'), '', 'an empty tail paints no line')
   tailCache.set('b', { text: 'hello', time: 7 })
   assert.equal(tailTextOf('b'), 'hello')
+  const js = assets.zh.js
+  assert.doesNotMatch(js, /task-copy[^]*msg-tail[^]*tailTextOf/, 'the landing row paints no message text — prefetch only (m02164①)')
 })
 
 // ------------------------------------- the pull is judged on updatedAt

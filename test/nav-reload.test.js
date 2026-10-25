@@ -264,10 +264,10 @@ test('B a re-entry that painted from cache does not show the skeleton', () => {
   const open = sliceTo('async function openSession(id,title', 'function handleHistory')
   assert.match(
     open,
-    /const hadInstant=paintInstantSession\(\),instantPainted=hadInstant&&!!\$\('messages'\)\.querySelector\('\.message'\);/,
-    'instantPainted is the real question: did pixels land, not did a branch run',
+    /const entryToken=\+\+heldAt,painted=paintInstantSession\(\)&&!!\$\('messages'\)\.querySelector\('\.message'\);/,
+    'painted is the real question: did pixels land, not did a branch run',
   )
-  assert.match(open, /if\(!instantPainted\)\$\('messages'\)\.innerHTML=loadingShell\(\)/, 'the skeleton only replaces nothing')
+  assert.match(open, /if\(!painted\)\$\('messages'\)\.innerHTML=loadingShell\(\)/, 'the skeleton only replaces nothing')
 })
 
 // ---------------------------------------------------------------------------
@@ -292,7 +292,7 @@ test('F a fresh handover paint skips the history refetch, a stale one does not',
   const open = sliceTo('async function openSession(id,title', 'function handleHistory')
   assert.match(
     open,
-    /const instantFresh=instantPainted&&Date\.now\(\)-\(\(sessionCache\.get\(id\)\|\|\{\}\)\.at\|\|0\)<SESSION_CACHE_FRESH_MS;/,
+    /const instantFresh=painted&&Date\.now\(\)-\(\(sessionCache\.get\(id\)\|\|\{\}\)\.at\|\|0\)<SESSION_CACHE_FRESH_MS;/,
     'freshness is measured against the stamp the same entry wrote — an unstamped or missing cache is never fresh',
   )
   assert.match(

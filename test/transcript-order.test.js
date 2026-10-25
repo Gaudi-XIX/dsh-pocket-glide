@@ -225,7 +225,7 @@ test('a blank skeleton is retried instead of being left on screen', () => {
   assert.ok(js.includes('if(attempt>=3){showTranscriptRetry();return}'), 'three silent retries end in a tappable retry')
   assert.ok(js.includes('armSkeletonWatchdog(id)'), 'openSession must arm it')
   assert.ok(js.includes('clearSkeletonWatchdog()'), 'leaving the session must disarm it')
-  assert.ok(js.includes('if(!activeSession||(historyBusy&&!force))return'), 'the watchdog needs a forced retry path')
+  assert.ok(js.includes('if(historyBusySession===activeSession&&!force)return'), 'the watchdog needs a forced retry path')
 })
 
 test('the todo dock reserves its height so the turn status is not covered', () => {

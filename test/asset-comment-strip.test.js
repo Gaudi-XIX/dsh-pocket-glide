@@ -153,12 +153,18 @@ test('the strip leaves trailing comments and JS block comments alone', () => {
   const assets = mobilePageAssets({ locale: 'zh' })
   const survivors = assets.js.split('\n').filter((line) => !/^[ \t]*\/\//.test(line) && line.includes('//'))
   assert.ok(survivors.length > 0, 'trailing comments must survive')
-  // JS block comments: 2 of them, 626 B measured on 2026-10-24. They are small and
-  // a naive pattern is unsafe, so they ship as they are.
+  // JS block comments: whatever the raw block carries in a mid-line position is
+  // exactly what the asset carries — the strip is line-oriented, so a block that
+  // does not start its line survives byte for byte.
+  const rawBlockCount = [...raw.js.matchAll(/\/\*[\s\S]*?\*\//g)]
+    .filter((m) => {
+      const lineStart = raw.js.lastIndexOf('\n', m.index - 1) + 1
+      return !/^[ \t]*\/\//.test(raw.js.slice(lineStart, m.index + 2))
+    }).length
   const codePositionBlocks = [...assets.js.matchAll(/\/\*[\s\S]*?\*\//g)]
     .filter((m) => {
       const lineStart = assets.js.lastIndexOf('\n', m.index - 1) + 1
       return !/^[ \t]*\/\//.test(assets.js.slice(lineStart, m.index + 2))
     })
-  assert.equal(codePositionBlocks.length, 2, `the 2 genuine JS block comments must ship, got ${codePositionBlocks.length}`)
+  assert.equal(codePositionBlocks.length, rawBlockCount, `every mid-line JS block comment must ship (source carries ${rawBlockCount})`)
 })

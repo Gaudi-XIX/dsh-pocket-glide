@@ -118,7 +118,7 @@ function buildHistorySandbox({ rpcThrows = null, streamConnected = false } = {})
     'fail',
     'events',
     `
-    let activeSession='s1',historyBusy=false,streamRevision=0,streamConnected=${streamConnected}
+    let activeSession='s1',historyBusy=false,historyBusySession=null,streamRevision=0,streamConnected=${streamConnected}
     let agentRunning=false,pendingQuestion=null,idlePollMs=750
     let streamEvents=[],olderEvents=[],olderHasMore=false
     let importantErrorActive=false,openPrefetch=null,subagentView=null

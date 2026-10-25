@@ -12,6 +12,36 @@ import { EventEmitter } from 'node:events'
 import { Readable } from 'node:stream'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { gzipSync } from 'node:zlib'
+
+// A minimal ustar member. `tar -czf` cannot stand in for this on every host:
+// on Windows, `tar` on PATH is often GNU tar from Git for Windows, which reads
+// a `C:\…` path as a remote host spec and dies with "Cannot connect to C:
+// resolve failed" — the two tgz fixtures below then fail for a reason that has
+// nothing to do with what they assert. Writing the archive here keeps the
+// fixture hermetic and platform-independent.
+function tarEntry({ name, body = Buffer.alloc(0), mode = 0o644, type = '0' }) {
+  const header = Buffer.alloc(512)
+  header.write(name, 0, 100)
+  header.write(mode.toString(8).padStart(7, '0'), 100)
+  header.write('0000000', 108)
+  header.write('0000000', 116)
+  header.write(body.length.toString(8).padStart(11, '0'), 124)
+  header.write('00000000000', 136)
+  header.write(type, 156)
+  header.write('ustar\0', 257)
+  header.write('00', 263)
+  // The checksum field is read as spaces while it is computed.
+  header.write('        ', 148)
+  let sum = 0
+  for (const byte of header) sum += byte
+  header.write(sum.toString(8).padStart(6, '0') + '\0 ', 148)
+  return Buffer.concat([header, body, Buffer.alloc((512 - (body.length % 512)) % 512)])
+}
+
+function tarGz(entries) {
+  return gzipSync(Buffer.concat([...entries.map(tarEntry), Buffer.alloc(1024)]))
+}
 import { startCloudflareNamedTunnel, startCloudflareQuickTunnel, isFatalCloudflaredError, resolveCloudflared, ensureCloudflared, extractTryCloudflareUrl, buildCloudflaredEnv } from '../lib/tunnel.js'
 import { createSettingsStore, SETTINGS_FILE_NAME } from '../lib/settings-store.js'
 import { LanMobileBridge, tunnelAutoReviveEnabled } from '../lib/bridge.js'
@@ -318,13 +348,10 @@ test('ensureCloudflared extracts a darwin-style .tgz and caches the inner binary
 
     // Build a real .tgz with the binary nested one level down, mirroring the
     // official archive layout.
-    const build = makeTempDir('dsh-pocket-test-tgz-')
-    tempDirs.push(build)
-    fs.mkdirSync(path.join(build, 'cloudflared'))
-    fs.writeFileSync(path.join(build, 'cloudflared', 'cloudflared'), '#!/bin/sh\necho ok\n')
-    const tgz = path.join(build, 'asset.tgz')
-    execFileSync('tar', ['-czf', tgz, '-C', build, 'cloudflared'])
-    const payload = fs.readFileSync(tgz)
+    const payload = tarGz([
+      { name: 'cloudflared/', type: '5', mode: 0o755 },
+      { name: 'cloudflared/cloudflared', mode: 0o755, body: Buffer.from('#!/bin/sh\necho ok\n') },
+    ])
     const asset = { file: 'cloudflared-darwin-test.tgz', archive: true, sha256: sha256Hex(payload) }
 
     const finalPath = await ensureCloudflared(undefined, () => {}, {
@@ -352,12 +379,7 @@ test('ensureCloudflared fails when the archive contains no cloudflared binary', 
     const root = useTempCacheRoot()
     tempDirs.push(root)
 
-    const build = makeTempDir('dsh-pocket-test-tgz-')
-    tempDirs.push(build)
-    fs.writeFileSync(path.join(build, 'something-else.txt'), 'nope')
-    const tgz = path.join(build, 'asset.tgz')
-    execFileSync('tar', ['-czf', tgz, '-C', build, 'something-else.txt'])
-    const payload = fs.readFileSync(tgz)
+    const payload = tarGz([{ name: 'something-else.txt', body: Buffer.from('nope') }])
     const asset = { file: 'cloudflared-darwin-empty.tgz', archive: true, sha256: sha256Hex(payload) }
 
     await assert.rejects(

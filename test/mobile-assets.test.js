@@ -31,6 +31,7 @@ const split = renderMobilePage({
 test('the assets are the inline blocks minus the comments that explain the source', () => {
   const css = inline.match(/<style>([\s\S]*?)<\/style>/)[1]
   const scripts = [...inline.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+  const sourceScript = scripts[scripts.length - 1][1]
 
   // 原来钉什么（2026-10-24 之前）：assets.css / assets.js 与内联块逐字节相同。
   // 现在钉什么：assets 是「内联块经 stripAssetComments 之后」的结果——逐字节相等已不再是
@@ -39,8 +40,16 @@ test('the assets are the inline blocks minus the comments that explain the sourc
   //   ② 剥前剥后都仍然能编译（assert ok，见下）；
   //   ③ 剥掉的只有注释——`@keep` 白名单内的那一行仍在（send-pending-ledger.test.js 的
   //      指针注释靠它活着），且这段 js 仍以就绪标记收尾。
+  // ④ 源码里 ship-strip 包裹的注释段只属于源码，不进入出货的 assets（sliceShipped 先剥
+  //    再走 stripAssetComments）——所以等价性断言比的是 sliceShipped 之后的源。
+  const SHIP_START = '<!--ship-strip-->', SHIP_END = '<!--ship-strip-end-->', NEWLINE_CH = '\n'
+  const a = sourceScript.indexOf(SHIP_START), b = sourceScript.indexOf(SHIP_END)
+  assert.ok(a >= 0 && b > a, 'the shipped source carries the strip markers')
+  const shippedSource = a < 0 ? sourceScript
+    : sourceScript.slice(0, sourceScript.lastIndexOf(NEWLINE_CH, a) + 1)
+      + sourceScript.slice(sourceScript.indexOf(NEWLINE_CH, b) + 1)
   assert.equal(assets.css, stripAssetComments(css, 'css'))
-  assert.equal(assets.js, stripAssetComments(scripts[scripts.length - 1][1], 'js'))
+  assert.equal(assets.js, stripAssetComments(shippedSource, 'js'))
   assert.ok(assets.js.length < scripts[scripts.length - 1][1].length, 'the strip must actually remove shipped bytes')
   assert.ok(assets.css.length < css.length, 'the strip must actually remove shipped bytes')
   assert.ok(

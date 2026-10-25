@@ -287,7 +287,7 @@ function buildInstantPaintSandbox() {
     .map((name) => extractFunction(js, name))
     .join('\n')
   const make = new Function(`
-    let activeSession=null,olderHasMore=false,olderExhausted=false,streamProjections=null
+    let activeSession=null,entryHold=false,olderHasMore=false,olderExhausted=false,streamProjections=null
     let streamEvents=[],olderEvents=[]
     const sessionCache=new Map()
     const tailCache=new Map()
