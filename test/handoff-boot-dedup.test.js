@@ -212,6 +212,109 @@ test('AC-1 DSH_POCKET_BOOT_HANDOFF=0 puts every document back on the embedded sh
 })
 
 // ---------------------------------------------------------------------------
+// SF-5 补例 — CHANGELOG「怎么验」三条：换指纹、开关三档、未交付不记台账
+// ---------------------------------------------------------------------------
+
+test('AC-10 a different device fingerprint does not ride the same handoff note', async () => {
+  const t = await startBridge({ harness: 'fake', harnessOptions: { respond } })
+  try {
+    seedWorkspaces(t.bridge)
+    const uaA = 'PocketTest/1.0'
+    const uaB = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/124.0 Mobile Safari/537.36'
+    const cookieA = await t.pairMobile(uaA)
+    // The one bridge hands out one single-use pairing token, and issuing A's
+    // cookie cleared it — a second device must rotate to pair for real.
+    t.bridge.rotatePairingToken()
+    const pairB = await httpFetch(`${t.base}/pair?token=${t.bridge.pairingToken}`, {
+      headers: { 'user-agent': uaB }
+    })
+    assert.equal(pairB.status, 302, 'device B pairs through the real /pair route')
+    const cookieB = (pairB.headers.get('set-cookie') ?? '').split(';')[0]
+    assert.match(cookieB, /^dsh_mobile=/)
+
+    await httpFetch(t.base + '/api/boot', { headers: { cookie: cookieA, 'user-agent': uaA } })
+    // B's document embeds: B never bought a payload, so B must pay for its own.
+    const resB = await httpFetch(t.base + '/', { headers: { cookie: cookieB, 'user-agent': uaB } })
+    assert.notEqual(embeddedPayload(await resB.text()), null,
+      'a different fingerprint gets the embedded shape, not A\'s note')
+    assert.equal(resB.headers.get('x-pocket-cache'), 'app')
+    // A's next document still rides the note — B's visit did not consume it.
+    const resA = await httpFetch(t.base + '/', { headers: { cookie: cookieA, 'user-agent': uaA } })
+    assert.equal(embeddedPayload(await resA.text()), null, 'A\'s note is intact after B came by')
+    assert.equal(matches(t, /boot=embedded/).length, 1)
+    assert.equal(matches(t, /boot=handoff/).length, 1, 'and the log shows one handoff: A\'s')
+  } finally { await t.stop() }
+})
+
+test('AC-11 DSH_POCKET_BOOT_HANDOFF is on unless explicitly 0: unset, empty and 1 all hand off', async () => {
+  const previous = process.env.DSH_POCKET_BOOT_HANDOFF
+  // The switch is read at request time (bootHandoffEnabled() -> process.env),
+  // so one real bridge serves all three states — each state gets its own
+  // boot+document pair and must land on the handoff shape.
+  const states = [
+    ['unset', () => { delete process.env.DSH_POCKET_BOOT_HANDOFF }],
+    ['empty string', () => { process.env.DSH_POCKET_BOOT_HANDOFF = '' }],
+    ['1', () => { process.env.DSH_POCKET_BOOT_HANDOFF = '1' }]
+  ]
+  const t = await startBridge({ harness: 'fake', harnessOptions: { respond } })
+  try {
+    seedWorkspaces(t.bridge)
+    const cookie = await t.pairMobile()
+    for (let i = 0; i < states.length; i++) {
+      const [label, apply] = states[i]
+      apply()
+      await httpFetch(t.base + '/api/boot', { headers: { cookie } })
+      const res = await httpFetch(t.base + '/', { headers: { cookie } })
+      const html = await res.text()
+      assert.equal(embeddedPayload(html), null,
+        `DSH_POCKET_BOOT_HANDOFF ${label} (state ${i}) means the handoff shape`)
+      assert.equal(res.headers.get('x-pocket-cache'), null,
+        `state ${i}: a handoff document is never marked for the app-shell cache`)
+      assert.equal(matches(t, /boot=handoff/).length, i + 1,
+        `state ${i}: the note was recorded and consumed exactly once`)
+    }
+  } finally {
+    await t.stop()
+    if (previous === undefined) delete process.env.DSH_POCKET_BOOT_HANDOFF
+    else process.env.DSH_POCKET_BOOT_HANDOFF = previous
+  }
+})
+
+test('AC-12 a /api/boot that never delivers records no note (401 short-circuit, 503 build)', async () => {
+  const stashSize = (bridge) => (bridge.handoffBootStash instanceof Map ? bridge.handoffBootStash.size : 0)
+  // 1) Unauthorized: the gate short-circuits before the note could be filed.
+  const t = await startBridge({ harness: 'fake', harnessOptions: { respond } })
+  try {
+    seedWorkspaces(t.bridge)
+    const cookie = await t.pairMobile()
+    const denied = await httpFetch(t.base + '/api/boot')
+    assert.equal(denied.status, 401, 'no cookie, no payload')
+    assert.equal(stashSize(t.bridge), 0, 'an unauthorized boot records nothing')
+    // Positive control: the same observation sees a delivered boot record one.
+    await httpFetch(t.base + '/api/boot', { headers: { cookie } })
+    assert.equal(stashSize(t.bridge), 1, 'the ledger only ever counts delivered boots')
+  } finally { await t.stop() }
+
+  // 2) Authorized but the payload build fails (session list not ok -> 503):
+  //    the note sits after the successful-delivery branch, so a failed build
+  //    must leave the ledger empty too.
+  const failing = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname) => (
+        pathname === '/api/session/list' ? { ok: false, error: { message: 'boom' } } : undefined
+      )
+    }
+  })
+  try {
+    const cookie = await failing.pairMobile()
+    const res = await httpFetch(failing.base + '/api/boot', { headers: { cookie } })
+    assert.equal(res.status, 503, 'the build failure reaches the phone as 503')
+    assert.equal(stashSize(failing.bridge), 0, 'a failed boot records nothing')
+  } finally { await failing.stop() }
+})
+
+// ---------------------------------------------------------------------------
 // T2/T3 — AC-5 死参、AC-6 可观察性
 // ---------------------------------------------------------------------------
 
