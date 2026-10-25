@@ -11,6 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { startBridge, httpFetch } from './helpers.js'
 import { BOT_PAGE_JS, renderBotPage } from '../lib/bot-page.js'
+import { renderMobilePage } from '../lib/pages.js'
 
 test('the Bot page is its own document: structure, hashed links, never cached', async () => {
   const t = await startBridge({ harness: 'fake' })
@@ -94,8 +95,8 @@ test('the Bot document follows the paired phone locale', () => {
   const en = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2', locale: 'en' })
   assert.match(zh, /<html lang="zh-CN">/)
   assert.match(en, /<html lang="en">/)
-  assert.match(zh, /id="bpSend"[^>]*>发送</, 'the zh document carries the send label')
-  assert.match(en, /id="bpSend"[^>]*>Send</, 'and the en one its own')
+  assert.match(zh, /id="bpSend"[^>]*aria-label="发送"/, 'the zh document carries the send label')
+  assert.match(en, /id="bpSend"[^>]*aria-label="Send"/, 'and the en one its own')
 })
 
 // ---------------------------------------------------------------------------
@@ -1144,4 +1145,61 @@ test('answering a card ends the warm copy, so the next read is a real one', asyn
     assert.equal(botCalls(), reWarmed + 2,
       'the view after an answer is read again — a warm copy would hand the settled card back')
   } finally { await t.stop() }
+})
+
+
+test('the Bot page uses PIN-code style transition card with DS Pocket heading when switching to Pocket', () => {
+  const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  assert.match(html, /id="bpSwitchOverlay" class="switch-overlay" hidden/, 'the switch overlay is in markup')
+  assert.match(html, /<div class="card"><div class="logo">/, 'reuses the PIN code page card and logo layout')
+  assert.match(html, /<h1>DS Pocket<\/h1>/, 'carries the DS Pocket heading')
+  assert.match(html, /class="boot-steps show"/, 'carries the PIN boot steps container')
+  assert.match(html, /正在连接服务器/, 'includes step 1')
+  assert.match(html, /正在同步工作区/, 'includes step 2')
+  assert.match(html, /正在同步会话列表/, 'includes step 3')
+  assert.match(html, /正在准备页面/, 'includes step 4')
+})
+
+test('the Pocket page uses PIN-code style transition card with DSBOT heading when switching to Bot', () => {
+  const html = renderMobilePage({ locale: 'zh', boot: null })
+  assert.match(html, /id="switchOverlay" class="switch-overlay" hidden/, 'the Pocket switch overlay is in markup')
+  assert.match(html, /<div class="card"><div class="logo">/, 'reuses the PIN code page card and logo layout')
+  assert.match(html, /<h1>DSBOT<\/h1>/, 'carries the DSBOT heading')
+  assert.match(html, /class="boot-steps show"/, 'carries the PIN boot steps container')
+  assert.match(html, /正在连接服务器/, 'includes step 1')
+  assert.match(html, /正在准备页面/, 'includes step 4')
+})
+
+test('the Bot page viewport and typography prevent mobile WebView zoom-out scaling regression', () => {
+  const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  assert.match(html, /<meta name="viewport" content="[^"]*interactive-widget=resizes-content[^"]*">/, 'viewport resizes content')
+  assert.match(html, /-webkit-text-size-adjust:\s*100%!important/, 'locks webkit text-size-adjust to prevent WebView shrinking')
+  assert.match(html, /text-size-adjust:\s*100%!important/, 'locks text-size-adjust')
+  assert.match(html, /font:\s*15px\/1\.5/, 'base font size is 15px aligned with Pocket')
+  assert.match(html, /\.bp-row\{[^}]*min-height:\s*64px/, 'card row height aligned with Pocket 64px')
+  assert.match(html, /\.bp-copy b\{[^}]*font-size:\s*15\.5px/, 'card title aligned with Pocket 15.5px')
+})
+
+test('the Bot composer send button reuses Pocket circular layout and centers the arrow SVG without text nodes', () => {
+  const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  assert.match(html, /<button id="bpSend" class="primary" aria-label="发送" disabled><svg width="17" height="17"/, 'reuses Pocket primary class with centered SVG')
+  assert.doesNotMatch(html, /<button id="bpSend"[^>]*>[^<]*发送/, 'no inline text node inside button')
+  assert.match(html, /\.bp-composer button\{[^}]*width:\s*44px;\s*min-width:\s*44px;\s*height:\s*44px;\s*border:\s*0;\s*border-radius:\s*50%/, 'pure 44x44 circular button')
+})
+
+test('the floating action buttons on Pocket and Bot pages share identical circular geometry, border-radius and shadow', () => {
+  const botHtml = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  const pocketHtml = renderMobilePage({ locale: 'zh', boot: null })
+
+  // Both have identical 52x52 circular styling
+  assert.match(botHtml, /\.bp-fab\{[^}]*width:\s*52px;\s*height:\s*52px;\s*border:\s*1px solid var\(--line\);\s*border-radius:\s*50%;\s*background:\s*var\(--card\);\s*color:\s*var\(--brand\);\s*box-shadow:\s*0 4px 16px rgba\(0,0,0,\.12\)/)
+  assert.match(pocketHtml, /\.bot-fab\{[^}]*width:\s*52px;\s*height:\s*52px;\s*border:\s*1px solid var\(--line\);\s*border-radius:\s*50%;\s*background:\s*var\(--card\);\s*color:\s*var\(--brand\);\s*box-shadow:\s*0 4px 16px rgba\(0,0,0,\.12\)/)
+
+  // Both have identical active state scaling
+  assert.match(botHtml, /\.bp-fab:active\{[^}]*background:\s*var\(--hover\);\s*transform:\s*scale\(\.92\)/)
+  assert.match(pocketHtml, /\.bot-fab:active\{[^}]*background:\s*var\(--hover\);\s*transform:\s*scale\(\.92\)/)
+
+  // Both anchors are marked draggable="false"
+  assert.match(botHtml, /id="bpHome"[^>]*draggable="false"/)
+  assert.match(pocketHtml, /id="botFab"[^>]*draggable="false"/)
 })

@@ -34,8 +34,9 @@ const ORGANS =
 
 // Build a bootSteps host with `rows` rows, each carrying one .boot-step-count span.
 function makeWorld({ reduced = false } = {}) {
-  const rows = Array.from({ length: 5 }, () => {
-    const el = { textContent: '' }
+  const seeds = ['0 个工作区', '0 个会话', '0 条消息', '0', '0']
+  const rows = Array.from({ length: 5 }, (_, i) => {
+    const el = { textContent: seeds[i] }
     return { el, querySelector: (sel) => (sel === '.boot-step-count' ? el : null) }
   })
   const host = { children: rows }
@@ -46,17 +47,25 @@ function makeWorld({ reduced = false } = {}) {
     queue.push(cb)
     return queue.length
   }
+  // The scan ticks on setTimeout; keep those ticks in the same pump so a test can
+  // walk the reel frame by frame instead of waiting on real time.
+  const timers = []
+  const setTimeoutShim = (cb) => {
+    timers.push(cb)
+    return timers.length
+  }
   // A clock we control: each drain step advances by 90ms so the 450ms ladder is
   // walked in a handful of frames instead of real time.
   let now = 0
   const DateShim = { now: () => now }
-  const run = new Function('document', 'matchMedia', 'requestAnimationFrame', 'Date', `${ORGANS};return {countUp,paintCount,releaseCount,setCount,stepCountEl,gateLadder,countTailMessages}`)
-  const api = run(document, matchMedia, requestAnimationFrame, DateShim)
+  const run = new Function('document', 'matchMedia', 'requestAnimationFrame', 'setTimeout', 'Date', `${ORGANS};return {countUp,paintCount,releaseCount,setCount,stepCountEl,gateLadder,startRowScan,stopRowScan,countTailMessages}`)
+  const api = run(document, matchMedia, requestAnimationFrame, setTimeoutShim, DateShim)
   const pump = (frames = 40) => {
-    for (let i = 0; i < frames && queue.length; i += 1) {
+    for (let i = 0; i < frames && (queue.length || timers.length); i += 1) {
       now += 90
-      const batch = queue
+      const batch = [...queue, ...timers]
       queue = []
+      timers.length = 0
       for (const cb of batch) cb()
     }
   }
@@ -126,8 +135,12 @@ test('no odometer: the shipped block carries no countCrawl anywhere', () => {
   // 并且数字明显是错的"). It counted frames, not records, and three of them started
   // in the same tick, so all three rows showed the same number. Re-adding it would
   // put the same lie back on the ladder.
+  // 2026-10-25 修订：行打开时若真值未到，行右侧按该步**已确定的真实下界**（probe，
+  // 由 countUp 记录在行元素上）爬数字，真值到达后收口——这是真读数下界，不是按时间
+  // 自增的假里程表（用户 2026-10-23 m00001③：「到每一步开始的时候，右边就开始跳
+  // 数字」）。禁的仍是 countCrawl 那种无下界的时间驱动计数；CRAWL_TICK_MS 只是
+  // 爬升的节拍间隔，不是计数来源。
   assert.equal(source.includes('countCrawl'), false, 'countCrawl must not exist in lib/pages.js')
-  assert.equal(source.includes('CRAWL_MS'), false, 'the crawl clock constant must be gone too')
 })
 
 test('a count measured before its row is reached is parked, not painted', () => {
@@ -135,7 +148,7 @@ test('a count measured before its row is reached is parked, not painted', () => 
   api.gateLadder()
   api.countUp(api.stepCountEl(1), 9, (v) => `${v} 个会话`)
   pump(40)
-  assert.equal(text(1), '', 'the row stays blank until the ladder reaches it')
+  assert.equal(text(1), '0 个会话', 'the row still shows the seed the template ships — parked, never painted')
 })
 
 test('opening the gate hands the first row its number at once (that row is already lit)', () => {
@@ -155,26 +168,52 @@ test('releaseCount hands the parked number over, and the ladder order is kept', 
   api.countUp(api.stepCountEl(1), 30, (v) => `${v} 个会话`)
   api.countUp(api.stepCountEl(2), 10, (v) => `${v} 条消息`)
   pump(40)
-  assert.deepEqual([text(1), text(2)], ['', ''], 'nothing is shown before its row')
+  assert.deepEqual([text(1), text(2)], ['0 个会话', '0 条消息'], 'before its row the count stays at the template seed')
   assert.equal(text(0), '2 个工作区', 'the row the ladder is on shows its own number')
   api.releaseCount(1)
   pump(40)
   assert.equal(text(1), '30 个会话')
-  assert.equal(text(2), '', 'three numbers can never be identical because they land one at a time')
+  assert.equal(text(2), '0 条消息', 'a row that has not been reached yet keeps its seed')
 })
 
-test('releaseCount on a row whose answer has not come back just opens it', () => {
+test('a row that opens before its answer is known starts a rolling count at once', () => {
+  // 2026-10-25 用户口径（m00277）：「一开始就显示多少个什么绘画，那个数字就快速从 0
+  // 飙到 9，不停地轮换，然后等到开始轮转以后，最终停到那个数字」——行一打开，右边
+  // 立刻是滚动的数字，而不是先写个 0 干等，也不是最后一次性跳出真值。
   const { api, pump, text } = makeWorld()
   api.gateLadder()
-  api.releaseCount(3)
-  pump(5)
-  assert.equal(text(3), '', 'an opened row with no reading stays blank — blank is honest')
-  // A reading that arrives after its row was already opened paints immediately.
-  api.countUp(api.stepCountEl(3), 4, (v) => `${v} 条消息`)
+  // 真值还没到手；单位由行模板自带（每个计数行出场就写着「0 个会话」= 自己那一行的量词）。
+  api.releaseCount(2)
+  assert.match(text(2), /^\d+ 条消息$/, 'the row shows a rolling number, not the bare seed')
+  const seen = new Set([text(2)])
+  for (let i = 0; i < 12; i += 1) {
+    pump(1)
+    seen.add(text(2))
+  }
+  assert.ok(seen.size >= 3, `the counter keeps moving while the answer is in flight, saw ${[...seen].join(' | ')}`)
+  // 真值回来那一刻收口，停在真值上。
+  api.countUp(api.stepCountEl(2), 37, (v) => `${v} 条消息`)
   pump(40)
-  assert.equal(text(3), '4 条消息')
+  assert.equal(text(2), '37 条消息', 'the real reading wins the moment it lands')
+  pump(20)
+  assert.equal(text(2), '37 条消息', 'and stays there — the reel does not resume')
 })
 
+test('the rolling count sweeps 0..9 and wraps instead of climbing forever', () => {
+  // 用户 m00277 原话是「从 0 飙到 9，不停地轮换」：一圈到 9 就回到 0，不是一味递增。
+  // 这样它在真值回来之前既看得出“在动”，又不会被读成一个真实读数。
+  const { api, pump, text } = makeWorld()
+  api.gateLadder()
+  api.countUp(api.stepCountEl(3), 0, (v) => `${v} 条消息`) // 先记下 formatter；真值 0 仍是真读数
+  api.releaseCount(3)
+  const nums = []
+  for (let i = 0; i < 14; i += 1) {
+    pump(1)
+    nums.push(Number.parseInt(text(3), 10))
+  }
+  assert.ok(nums.includes(0), `the reel wraps back to 0, saw ${nums.join(',')}`)
+  assert.ok(Math.max(...nums) <= 9, `the reel never passes 9, saw ${nums.join(',')}`)
+})
 test('the gate is off by default, so the app-shell path is unchanged', () => {
   const { api, pump, text } = makeWorld()
   api.countUp(api.stepCountEl(0), 3, zhFmt)
@@ -226,12 +265,53 @@ test('the conversation row counts messages, not preloaded packs', () => {
   }
 })
 
-test('the ladder rows start blank, so no number is shown before it is measured', () => {
-  // The rows are built at runtime by labels.map(...), so "blank at first" lives in
-  // that template string, not in the static document. The count span is emitted
-  // empty and the count is written only once an answer arrives.
+test('the ladder rows start at 0, ready to crawl from the moment a row opens', () => {
+  // 2026-10-25 用户改口径（m00001③ + 复核反馈）：「到每一步开始的时候，右边就开始
+  // 跳数字」——行打开时立刻开始爬，答案后到再收口。行模板出厂预填 0（data-probe="0"），
+  // 爬升器从 0 起步；真值由 countUp→paintCount 写入。
   const html = renderMobileReconnectPage('zh', 'lan', {})
-  const rowTemplate = html.match(/'<div class="boot-step'\+\(i===0\?' is-active':''\)\+'"><span class="boot-step-label">'[\s\S]*?<\/span><span class="boot-step-count"[^+]*><\/span>/)
-  assert.ok(rowTemplate, 'the runtime row template is present')
-  assert.match(rowTemplate[0], /class="boot-step-count"[^>]*><\/span>/, 'the count span is emitted empty — nothing pre-filled')
+  const script = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
+  assert.match(
+    script,
+    /data-probe="0">0'\+\(units\[i\]\?units\[i\]\(\):''\)\+'<\/span>/,
+    'the count span ships "0 + 这一行的量词" so the sweep reads "0 个工作区" from the first frame',
+  )
+  assert.match(script, /const units=\[ROW_UNIT\.workspace,ROW_UNIT\.sessionList,ROW_UNIT\.session/, 'each count row is handed its own unit')
+})
+
+// 2026-10-25 真机回归：ROW_UNIT 的量词工厂里写了页面变量 `zh`，而工厂是在
+// **Node 侧**（生成页面时）求值的——`zh` 只活在生成的页面脚本里。于是点「连接」
+// 的瞬间就抛 ReferenceError: zh is not defined（栈在 Array.workspace），阶梯一行都
+// 出不来。上面那些用 stub DOM 拼器官的测试全绿，因为它们自己注入了变量；能抓住这
+// 一类的只有「把页面真正出厂的脚本跑一遍」。这条守卫就把两页的脚本真跑一次。
+test('the shipped page scripts run as-is: no reference to a variable that only exists later', () => {
+  const pages = [
+    ['reconnect', renderMobileReconnectPage('zh', 'lan', {})],
+    ['reconnect-en', renderMobileReconnectPage('en', 'lan', {})],
+    ['pairing', renderPairingPinPage('zh', null, {})],
+    ['pairing-en', renderPairingPinPage('en', null, {})],
+  ]
+  for (const [name, html] of pages) {
+    const script = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
+    // 页面脚本是整体执行的（历史上的「停在 splash」就是脚本没跑起来）。这里只求
+    // 求值到底：DOM 靠一个宽嘴 stub 顶着，任何 ReferenceError 都会在这里炸出来。
+    const stub = new Proxy(function () {}, {
+      get: (t, key) => {
+        if (key === Symbol.toPrimitive || key === 'toString') return () => ''
+        if (key === 'then') return undefined
+        return stub
+      },
+      set: () => true,
+      apply: () => stub,
+      construct: () => stub,
+    })
+    const document = stub
+    assert.doesNotThrow(
+      () => new Function('document', 'window', 'navigator', 'location', 'fetch', 'requestAnimationFrame', 'matchMedia', 'setTimeout', script)(document, stub, stub, stub, stub, () => 0, () => ({ matches: true }), () => 0),
+      `${name}: the page script must evaluate without a ReferenceError`,
+    )
+    // 量词工厂必须靠运行时的 ZH 判断，不能直接引用 `zh`。
+    assert.equal(/:\(\)=>zh\?/.test(script), false, `${name}: the unit factories must not close over the page variable zh`)
+    assert.match(script, /ROW_UNIT\.workspace/, `${name}: rows still carry their unit`)
+  }
 })

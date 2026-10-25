@@ -79,9 +79,28 @@ const LB4_TRIGGER =
 // 量具
 // ---------------------------------------------------------------------------
 // Brace-match extractor（transcript-order house pattern）。
+//
+// ⚠️ 重复名守卫（fail-loud）：`source.indexOf` 只会命中**第一个** `function ${name}(`，
+// 所以如果有人在真函数前面插一个同名 stub，本测试会静默测到假函数、仍然 GREEN——
+// 这是本文件唯一的静默风险（独立复核 172b9776）。选定方案＝让 extractor 在发现
+// 多个同名定义时直接抛错（而不是事后断言只出现一次）：理由是抛错发生在抽取点，
+// 39 个被抽函数名共享这一处守卫，无需维护第二份名字清单；且报错信息带全部命中位置，
+// 逐个断言做不到。真 asset（mobilePageAssets({locale:'zh'})）402 个函数零重名
+// （172b9776 实测），故此守卫对现有五条 LB 全部零影响。
 function extractFunction(source, name) {
-  const start = source.indexOf(`function ${name}(`)
-  assert.notEqual(start, -1, `${name} must exist in the rendered asset`)
+  const token = `function ${name}(`
+  const hits = []
+  let at = source.indexOf(token)
+  while (at !== -1) {
+    hits.push(at)
+    at = source.indexOf(token, at + 1)
+  }
+  assert.notEqual(hits.length, 0, `${name} must exist in the rendered asset`)
+  assert.equal(
+    hits.length, 1,
+    `${name} is defined ${hits.length} times in the asset (at ${hits.join(', ')}): the extractor would silently measure the FIRST one — a stub planted before the real function would keep this suite green while testing the wrong body`,
+  )
+  const start = hits[0]
   let depth = 0
   for (let i = source.indexOf('{', start); i < source.length; i += 1) {
     const char = source[i]
@@ -246,6 +265,26 @@ const turnRow = (i) => {
   }
 }
 const turnRows = (count) => Array.from({ length: count }, (_, i) => turnRow(i))
+
+// ---------------------------------------------------------------------------
+// 守卫：extractor 的重复名 fail-loud（「变异已固化」的最省事做法——守卫用例用一段
+// 内联假 asset 证明，不需要真去改 lib/pages.js；extractor 只依赖 source+name 两个
+// 参数，没有任何外部全局，内联串与真 asset 走的是同一条代码路径：同一个
+// indexOf 扫描 + 同一个 assert.equal）。
+// ---------------------------------------------------------------------------
+test('LB-GUARD: extractFunction throws when a function name is defined twice', () => {
+  // 极小假 asset：一个同名 stub 插在真函数前面——正是复核 172b9776 指出的注入形态。
+  const fakeAsset = 'function renderWorkspaces(){ return "STUB"; }\n' +
+    'function renderWorkspaces(){ return "<button class=\\"task-row\\">real</button>"; }'
+  assert.throws(
+    () => extractFunction(fakeAsset, 'renderWorkspaces'),
+    /defined 2 times/,
+    'a same-name stub planted before the real function must fail loud, not silently measure the stub',
+  )
+  // 反证：唯一真函数仍然可抽（守卫只拦重名，不误伤正常路径）。
+  const ok = 'function foo(){return 1} other(){2}'
+  assert.equal(extractFunction(ok.replace(' other(){2}', ''), 'foo'), 'function foo(){return 1}')
+})
 
 // ---------------------------------------------------------------------------
 // LB-1 … LB-4：主页列表

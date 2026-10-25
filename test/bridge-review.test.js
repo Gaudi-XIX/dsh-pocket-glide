@@ -448,16 +448,16 @@ test('L: the bridge-wide 500 returns a generic body, never the raw error', async
 
 test('B1: the allowlist does not grow, and every entry is still a named route', async () => {
   const { RPC_ALLOWLIST, HARNESS_ENDPOINTS } = await import('../lib/constants.js')
-  // Six more entries than the Host routes would need are the bridge's own
-  // reads and the one answer it forwards (session.history, session.tails,
-  // workspace.list, bot.earlier, bot.team, bot.approval); the set is closed,
+  // Seven more entries than the Host routes would need are the bridge's own
+  // reads and the answers it forwards (session.history, session.tails,
+  // workspace.list, bot.earlier, bot.team, bot.approval, bot.update); the set is closed,
   // not open-ended.
-  assert.equal(RPC_ALLOWLIST.size, Object.keys(HARNESS_ENDPOINTS).length + 6, 'no silent method added')
+  assert.equal(RPC_ALLOWLIST.size, Object.keys(HARNESS_ENDPOINTS).length + 7, 'no silent method added')
   assert.ok(!RPC_ALLOWLIST.has('session.delete'), 'destructive methods stay off the phone')
   assert.ok(!RPC_ALLOWLIST.has('system.exec'), 'no host-level escape hatch')
   for (const method of RPC_ALLOWLIST) {
     assert.ok(
-      HARNESS_ENDPOINTS[method] || method === 'session.history' || method === 'session.tails' || method === 'workspace.list' || method === 'bot.earlier' || method === 'bot.team' || method === 'bot.approval' || method.startsWith('interaction.'),
+      HARNESS_ENDPOINTS[method] || method === 'session.history' || method === 'session.tails' || method === 'workspace.list' || method === 'bot.earlier' || method === 'bot.team' || method === 'bot.approval' || method === 'bot.update' || method.startsWith('interaction.'),
       `${method} has a translation`
     )
   }
