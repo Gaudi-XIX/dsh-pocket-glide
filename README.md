@@ -4,7 +4,7 @@
 
 DeepSeek Harness 的轻量移动端伴侣插件。
 
-本仓在 `package.json` 里的包名是 `@defws/dsh-pocket`，但它**没有发布到 npm**；它与 GitHub 上的 `shaobeichen/dsh-pocket` 是互不相干的两个项目，而 npm 上的裸名 `dsh-pocket` 又是别人发布的第三个包——别装错。
+本仓的包名是 `dsh-pocket-glide`，GitHub 仓库是 [Gaudi-XIX/dsh-pocket-glide](https://github.com/Gaudi-XIX/dsh-pocket-glide)；它与 GitHub 上的 `shaobeichen/dsh-pocket` 是互不相干的两个项目，而 npm 上的裸名 `dsh-pocket` 又是别人发布的第三个包（v2.12.0，GPL-2.0）——别装错。
 
 它的核心定位非常明确：**不在手机端复刻桌面端的全套系统配置与复杂文件树，只保留移动交互的核心闭环——发送提示词、查看流式回复、审批工具权限与远程运维。**
 

@@ -6,6 +6,14 @@
 
 ## 未发布 — 目标 0.4.59
 
+### 身份：全链改名 `dsh-pocket-glide`（2026-10-26）
+
+- **为什么改**：旧包名 `@defws/dsh-pocket` 只在本地 profile 里自娱自乐，对外从没落过地；而 npm 裸名 `dsh-pocket` 是别人的包（v2.12.0，GPL-2.0，GitHub ★2395），GitHub 上还另有一个同名不同源的 `shaobeichen/dsh-pocket`。三个「pocket」混在一处，聊天、日志、装错包全撞。第三个词定为 `glide`：手机端这条线的实质卖点是触控顺滑 + 首屏字节最省，不是「手机」也不是「直连」。
+- **改到哪**：`package.json` 名（去 scope）、`cordis.patch.yml` 的条目名、`tools/install-to-profile.mjs` 的 `PACKAGE_NAME`/`LINK_PATH`、运行态键（`dsh-pocket-*` → `dsh-pocket-glide-*`：localStorage 的开机载荷/已读台账/最后消息戳、`/sw.js` 的 `dsh-pocket-boot` 与 `dsh-pocket-no-sw`）、client 半区日志前缀与样式 id、全部相关测试断言。
+- **刻意不动**：client 半区 `postMessage` 的 `source` 字面量（内嵌配对页与宿主插件是同一批代码，一起改无收益却动到跨 window 契约）、CSS 类名（纯视觉标识，改了要连带改十几条选择器断言）、旧数据目录探测路径（`%LOCALAPPDATA%\dsh-pocket`、`~/.dsh-pocket` 是**历史数据的位置**，不是插件身份——改名后仍要把老用户的 pin 与 cloudflared 缓存迁过来）。
+- **仓库历史归零**：原 `Gaudi-XIX/dsh-pocket` → `dsh-pocket-glide`（10-22 改名）+ 本轮以当前工作树为唯一根提交，402+7 笔旧历史、9 个标签、2 个 stash 一并退出远端；旧历史打包在 `F:\defws\_archive\pre-rename-20261026\` 的 bundle 里。
+- **npm 侧**：`dsh-pocket-glide` 在 registry 上无主（404），登录账号 `gaudixix` 具备发文权；**未执行 `npm publish`**（公开发布属红线，等指令）。
+
 本版修三件事：**手机发出去的消息会静默丢掉**（A 组）、隧道侧的五条缺陷（B 组，其中三条 P0），
 以及手机首屏静态资产的传输体积（D 组）。C 组（cookie `Secure` 改成按「这一跳是否 TLS」判）本版原定不做，
 发布前由 W3 补做（见节内《W3》小节，真机走查仍欠）。
