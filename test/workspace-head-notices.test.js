@@ -61,7 +61,7 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
   const make = new Function(
     'workspaces', 'sessionSummaries', 'expandedWsIds', 'revealedLists', 'activeSession', 'container', 'localStorage', 'writes', 'storageReads', `
     const L=${JSON.stringify(L)}
-    const UNREAD_OPEN_KEY='dsh-pocket-opened-at'
+    const UNREAD_OPEN_KEY='dsh-pocket-glide-opened-at'
     const UNREAD_RECENCY_MS=${Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])}
     let openedAtLedgerReady=true
     const LAST_MESSAGE_KEY=${JSON.stringify(js.match(/LAST_MESSAGE_KEY='([^']+)'/)[1])}
@@ -432,8 +432,8 @@ test('the ledger only moves forward, and one session cannot evict another', () =
   assert.equal(rt.lastMessageAtOf({ sessionId: 'a' }), rt.lastMessageAtOf({ sessionId: 'a' }), 'and the stamp still reads')
   rt.noteSessionMessageAt('a', ago(1))
   assert.equal(rt.clockWrites(), first + 1, 'a newer clock is written once')
-  const [key, payload] = rt.writes.filter(([k]) => k === 'dsh-pocket-last-msg-at').pop()
-  assert.equal(key, 'dsh-pocket-last-msg-at', 'under the phone’s own key, not the unread ledger’s')
+  const [key, payload] = rt.writes.filter(([k]) => k === 'dsh-pocket-glide-last-msg-at').pop()
+  assert.equal(key, 'dsh-pocket-glide-last-msg-at', 'under the phone’s own key, not the unread ledger’s')
   assert.ok(JSON.parse(payload).a > 0, 'and it carries the clock it just accepted')
   rt.noteSessionMessageAt('', ago(1))
   rt.noteSessionMessageAt(null, ago(1))

@@ -482,10 +482,10 @@ test('degraded paths log through the table and mount no UI', () => {
   assert.deepEqual(Array.from(brokenApi.inject), [], 'without react the client injects nothing')
   assert.equal(typeof brokenApi.apply({}), 'function', 'apply still hands back a no-op disposer')
   assert.equal(withoutReact.logs.error.length, 1, 'the react failure is reported once')
-  assert.ok(withoutReact.logs.error[0].startsWith('[dsh-pocket] '), 'the log keeps its ASCII prefix')
+  assert.ok(withoutReact.logs.error[0].startsWith('[dsh-pocket-glide] '), 'the log keeps its ASCII prefix')
   assert.equal(
     withoutReact.logs.error[0],
-    '[dsh-pocket] ' + I18N.zh.reactUnavailable,
+    '[dsh-pocket-glide] ' + I18N.zh.reactUnavailable,
     'the diagnostic text is the table value for the resolved locale, not a literal at the call site'
   )
 
@@ -493,6 +493,6 @@ test('degraded paths log through the table and mount no UI', () => {
   const api = noSlots.def.factory(reactStub)
   assert.equal(typeof api.apply({}), 'function', 'a missing slots service still returns a disposer')
   assert.equal(noSlots.logs.warn.length, 1, 'the slots failure is warned once')
-  assert.ok(noSlots.logs.warn[0].startsWith('[dsh-pocket] '))
-  assert.equal(noSlots.logs.warn[0], '[dsh-pocket] ' + I18N.en.slotsUnavailable, 'the warning is the table value')
+  assert.ok(noSlots.logs.warn[0].startsWith('[dsh-pocket-glide] '))
+  assert.equal(noSlots.logs.warn[0], '[dsh-pocket-glide] ' + I18N.en.slotsUnavailable, 'the warning is the table value')
 })

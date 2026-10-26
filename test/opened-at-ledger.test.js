@@ -1,5 +1,5 @@
 // The read-ledger sync (0.4.33): each phone mirrors its
-// `dsh-pocket-opened-at` map up to `POST /api/opened-at`, the bridge keeps one
+// `dsh-pocket-glide-opened-at` map up to `POST /api/opened-at`, the bridge keeps one
 // ledger per device fingerprint, and the cold-open census counts
 // 「推进完了但消息还没有读」 over the REQUESTING device's copy. This file pins the
 // whole chain — store round-trip, per-device isolation, the upload route, and

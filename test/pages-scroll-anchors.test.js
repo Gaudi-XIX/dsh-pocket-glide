@@ -382,7 +382,7 @@ const unreadSandbox = (storage = {}) => {
     .map((name) => extractFunction(js, name))
     .join('\n')
   return new Function('localStorage', 'fetchImpl', `
-    const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200;
+    const UNREAD_OPEN_KEY='dsh-pocket-glide-opened-at',UNREAD_OPEN_MAX=200;
     const UNREAD_RECENCY_MS=${Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])};
     let openedAtSyncTimer=null,openedAtSyncFailAt=0
     let openedAtLedgerReady=true
@@ -396,9 +396,9 @@ const unreadSandbox = (storage = {}) => {
 }
 
 test('readOpenedMap accepts only positive finite timestamps and survives garbage', () => {
-  assert.deepEqual(unreadSandbox({ 'dsh-pocket-opened-at': '{"a":1000,"b":-5,"c":"x","d":1.5}' }).readOpenedMap(), { a: 1000 })
-  assert.deepEqual(unreadSandbox({ 'dsh-pocket-opened-at': 'not json' }).readOpenedMap(), {})
-  assert.deepEqual(unreadSandbox({ 'dsh-pocket-opened-at': '[1,2]' }).readOpenedMap(), {}, 'arrays are not a ledger')
+  assert.deepEqual(unreadSandbox({ 'dsh-pocket-glide-opened-at': '{"a":1000,"b":-5,"c":"x","d":1.5}' }).readOpenedMap(), { a: 1000 })
+  assert.deepEqual(unreadSandbox({ 'dsh-pocket-glide-opened-at': 'not json' }).readOpenedMap(), {})
+  assert.deepEqual(unreadSandbox({ 'dsh-pocket-glide-opened-at': '[1,2]' }).readOpenedMap(), {}, 'arrays are not a ledger')
   assert.deepEqual(unreadSandbox({}).readOpenedMap(), {})
 })
 
@@ -406,22 +406,22 @@ test('noteSessionOpened writes and prunes; the ledger is capped at 200 newest en
   const storage = {}
   const sandbox = unreadSandbox(storage)
   sandbox.noteSessionOpened('s1')
-  const first = JSON.parse(storage['dsh-pocket-opened-at'])
+  const first = JSON.parse(storage['dsh-pocket-glide-opened-at'])
   assert.ok(first.s1 > 0)
   const before = Date.now()
   sandbox.noteSessionOpened('s1')
-  assert.ok(JSON.parse(storage['dsh-pocket-opened-at']).s1 >= before, 're-open refreshes the stamp')
+  assert.ok(JSON.parse(storage['dsh-pocket-glide-opened-at']).s1 >= before, 're-open refreshes the stamp')
   sandbox.noteSessionOpened('')
   sandbox.noteSessionOpened(null)
   sandbox.noteSessionOpened(42)
-  assert.equal(Object.keys(JSON.parse(storage['dsh-pocket-opened-at'])).length, 1, 'junk ids are refused')
+  assert.equal(Object.keys(JSON.parse(storage['dsh-pocket-glide-opened-at'])).length, 1, 'junk ids are refused')
 
   const flood = {}
   for (let i = 0; i < 260; i++) flood['old:' + i] = i + 1 // oldest entries first
-  const floodStorage = { 'dsh-pocket-opened-at': JSON.stringify(flood) }
+  const floodStorage = { 'dsh-pocket-glide-opened-at': JSON.stringify(flood) }
   const s2 = unreadSandbox(floodStorage)
   s2.noteSessionOpened('fresh')
-  const kept = JSON.parse(floodStorage['dsh-pocket-opened-at'])
+  const kept = JSON.parse(floodStorage['dsh-pocket-glide-opened-at'])
   assert.equal(Object.keys(kept).length, 200, 'cap holds')
   assert.ok(kept.fresh > 0, 'the just-opened session survives its own prune')
   assert.equal(kept['old:60'], undefined, 'the oldest entries go first (fresh + flood values 62..260 fill the cap)')
@@ -481,7 +481,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     const BLANK_ROW_VISIBLE_MS=${24 * 60 * 60 * 1000}
     const LIST_ROWS_MAX=${25}
     const WS_FLAGS_MAX=${3}
-    const UNREAD_OPEN_KEY='dsh-pocket-opened-at',UNREAD_OPEN_MAX=200
+    const UNREAD_OPEN_KEY='dsh-pocket-glide-opened-at',UNREAD_OPEN_MAX=200
     const UNREAD_RECENCY_MS=${Number(js.match(/UNREAD_RECENCY_MS=(\d+)/)[1])}
     // 12h 窗与未读点无关：此档钉 ledger 语义，窗口豁免防 fixture 新旧把行藏进「更多」。窗口钉在 ROWS-RECENT。
     const RECENT_WINDOW_MS=Infinity
@@ -519,7 +519,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     activeSession,
     host,
     {
-      getItem: (key) => (key in storage ? storage[key] : key === 'dsh-pocket-last-msg-at' ? JSON.stringify(lastMsg) : null),
+      getItem: (key) => (key in storage ? storage[key] : key === 'dsh-pocket-glide-last-msg-at' ? JSON.stringify(lastMsg) : null),
       setItem: (key, value) => { storage[key] = String(value) },
     },
   )
@@ -527,7 +527,7 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
 }
 
 test('renderWorkspaces paints is-unread on exactly the rows the ledger marks', () => {
-  const storage = { 'dsh-pocket-opened-at': JSON.stringify({ read: 5000, unread: 5000 }) }
+  const storage = { 'dsh-pocket-glide-opened-at': JSON.stringify({ read: 5000, unread: 5000 }) }
   const sandbox = workspaceSandbox({ storage, activeSession: null })
   const markup = sandbox.markup()
   assert.match(markup, /class="task-row is-done is-unread"[^>]*data-id="unread"/, 'activity after last open → dot')
@@ -546,14 +546,14 @@ test('mergeOpenedMapFromBridge restores lost history without downgrading newer l
   // page an empty localStorage and every row lights up as unread. The bridge
   // kept this device's ledger by fingerprint; the merge puts it back. max()
   // per key: an OLDER bridge stamp must never clobber a newer local one.
-  const storage = { 'dsh-pocket-opened-at': JSON.stringify({ s1: 5000 }) }
+  const storage = { 'dsh-pocket-glide-opened-at': JSON.stringify({ s1: 5000 }) }
   const sandbox = unreadSandbox(storage)
   const merged = sandbox.mergeOpenedMapFromBridge({ s1: 4000, s2: 3000, junk: 'not-a-number', gone: 0 })
   assert.equal(merged.s1, 5000, 'local newer stamp survives the bridge copy')
   assert.equal(merged.s2, 3000, 'history the browser lost comes back from the bridge')
   assert.equal(merged.junk, undefined, 'non-numeric bridge values are dropped, not trusted')
   assert.equal(merged.gone, undefined, 'non-positive bridge values are dropped')
-  assert.deepEqual(JSON.parse(storage['dsh-pocket-opened-at']), { s1: 5000, s2: 3000 }, 'the merged map lands back in storage')
+  assert.deepEqual(JSON.parse(storage['dsh-pocket-glide-opened-at']), { s1: 5000, s2: 3000 }, 'the merged map lands back in storage')
   assert.deepEqual(sandbox.mergeOpenedMapFromBridge('garbage'), sandbox.readOpenedMap(), 'a foreign body is a no-op, not a wipe')
 })
 

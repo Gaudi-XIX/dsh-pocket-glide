@@ -242,7 +242,7 @@ test('notifySend with clawbot: checks contextToken and sends notification', asyn
 })
 
 test('settings store: preserves and sanitizes clawbot configuration', () => {
-  const dir = makeTempDir('dsh-pocket-clawbot-')
+  const dir = makeTempDir('dsh-pocket-glide-clawbot-')
   try {
     const store = createSettingsStore(dir)
     store.save({
@@ -302,7 +302,7 @@ test('settings store: preserves and sanitizes clawbot configuration', () => {
 })
 
 test('desktop endpoints: /desktop/notify/clawbot/qr and /status work end-to-end', async () => {
-  const dir = makeTempDir('dsh-pocket-bridge-clawbot-')
+  const dir = makeTempDir('dsh-pocket-glide-bridge-clawbot-')
   const notifyFetchImpl = async (url) => {
     const u = String(url)
     if (u.includes('get_bot_qrcode')) {
@@ -389,7 +389,7 @@ test('desktop endpoints: /desktop/notify/clawbot/qr and /status work end-to-end'
 // 本机 11:00 受控实验实测（就绪回执 + 9 条推送全成功，第 11 条起 ret=-2 prepare failed），
 // 所以正文尾巴上的「第 N/10 条」就是用户唯一的可见刻度：看到 10 就知道该回一句了。
 test('clawbot quota: 数字不上屏、最后一条捎话、计数落盘、别的通道一个字都不加', async () => {
-  const dir = makeTempDir('dsh-pocket-quota-note-')
+  const dir = makeTempDir('dsh-pocket-glide-quota-note-')
   const t = await startBridge({
     bridgeOptions: {
       settingsStore: createSettingsStore(dir),
@@ -422,7 +422,7 @@ test('clawbot quota: 数字不上屏、最后一条捎话、计数落盘、别�
 })
 
 test('clawbot quota: 计数真的进了发给微信的那段文字，入站一条就归零', async () => {
-  const dir = makeTempDir('dsh-pocket-quota-wire-')
+  const dir = makeTempDir('dsh-pocket-glide-quota-wire-')
   const store = createSettingsStore(dir)
   store.save({
     notify: {
@@ -524,7 +524,7 @@ test('clawbot quota: 计数真的进了发给微信的那段文字，入站一�
 // 新绑定的 userId ⇒ 谁先说一句谁接管远程入口。这条锁断言默认拒绝的方向：
 // 非绑定者的入站整条丢弃（不续额度、不改绑定、不发回执、不拉隧道）。
 test('clawbot inbound gate: 非绑定者的入站整条丢弃，绑定与额度都不动', async () => {
-  const dir = makeTempDir('dsh-pocket-inbound-gate-')
+  const dir = makeTempDir('dsh-pocket-glide-inbound-gate-')
   const store = createSettingsStore(dir)
   store.save({
     notify: {
@@ -619,7 +619,7 @@ test('clawbot inbound gate: 非绑定者的入站整条丢弃，绑定与额度�
 // 直呼 ensureTunnelForInbound（不经入站 watcher）：入站会先续期归零，只有直呼才能摆出
 // 「交接恰好是第 10 条」的位形；tunnel 打桩理由见上一档测试。
 test('clawbot quota: 门地址回话占同一条额度——计数、捎话、拒收挂起、丢失回滚', async () => {
-  const dir = makeTempDir('dsh-pocket-quota-door-')
+  const dir = makeTempDir('dsh-pocket-glide-quota-door-')
   const store = createSettingsStore(dir)
   store.save({
     notify: {

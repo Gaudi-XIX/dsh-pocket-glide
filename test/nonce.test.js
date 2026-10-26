@@ -97,7 +97,7 @@ test('interactive reconnect page renders the guided restore flow', () => {
   assert.match(html, /rpc\('workspace\.list'\)/, 'stage 1 syncs the workspace')
   assert.match(html, /rpc\('session\.list',\{limit:SESSION_LIST_ROWS\}\)/, 'stage 2 syncs 30 sessions')
   assert.match(html, /fetch\('\/api\/boot'/, 'stage 3 fetches the boot payload')
-  assert.match(html, /sessionStorage\.setItem\('dsh-pocket-boot'/, 'boot payload is stashed for handoff')
+  assert.match(html, /sessionStorage\.setItem\('dsh-pocket-glide-boot'/, 'boot payload is stashed for handoff')
   assert.match(html, /location\.replace\('\/'\)/, 'the flow hands off to the app document')
   assert.match(html, /SHELL_ASSETS=\{"cssUrl":"\/app\.css\?h=deadbeef","jsUrl":"\/app\.js\?l=zh&h=deadbeef"\}/, 'asset URLs are embedded for prefetching')
   assert.match(html, /SESSION_LIST_ROWS=30/, 'session prefetch limit is baked in')

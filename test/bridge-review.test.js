@@ -324,7 +324,7 @@ test('F: revokeMobileSessions invalidates the QR memo', () => {
 
 test('G: readCachedImage reads disk once and serves the Buffer thereafter', async () => {
   const bridge = bareBridge()
-  const path = join(tmpdir(), `dsh-pocket-icon-${randomBytes(6).toString('hex')}.png`)
+  const path = join(tmpdir(), `dsh-pocket-glide-icon-${randomBytes(6).toString('hex')}.png`)
   const body = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a])
   writeFileSync(path, body)
   try {
@@ -698,7 +698,7 @@ test('B1: a disconnect is a park, and the parked token is the only one that revi
 })
 
 test('B1: brand assets are gated, the service worker is not', async () => {
-  const path = join(tmpdir(), `dsh-pocket-brand-${randomBytes(4).toString('hex')}.png`)
+  const path = join(tmpdir(), `dsh-pocket-glide-brand-${randomBytes(4).toString('hex')}.png`)
   writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
   const t = await startBridge({
     bridgeOptions: { brandLogoPaths: { light: path, dark: path }, appIconPath: path },

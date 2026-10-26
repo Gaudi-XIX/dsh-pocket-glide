@@ -1,5 +1,5 @@
 # One package: Pocket DSH. Install it into a dsh profile
-# (`dsh plugin --profile <name> add link:F:/defws/dsh-pocket`) — the patch
+# (`dsh plugin --profile <name> add link:F:/defws/dsh-pocket-glide`) — the patch
 # layer below inserts the single plugin row that mounts the host half: the
 # independent lightweight bridge, the pairing gate, the device registry,
 # the tunnel manager and the phone routes.
@@ -20,4 +20,4 @@
 
 - insert:
     - id: pocket
-      name: '@defws/dsh-pocket'
+      name: 'dsh-pocket-glide'

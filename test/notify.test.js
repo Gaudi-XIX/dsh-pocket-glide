@@ -28,7 +28,7 @@ function makeTempDir(prefix) {
 // ---------------------------------------------------------------------------
 
 test('settings store: save → load round-trips and stays idempotent', () => {
-  const dir = makeTempDir('dsh-pocket-settings-')
+  const dir = makeTempDir('dsh-pocket-glide-settings-')
   try {
     const store = createSettingsStore(dir)
     assert.deepEqual(store.load(), defaultSettingsDocument(), 'a fresh store reads the defaults')
@@ -50,7 +50,7 @@ test('settings store: save → load round-trips and stays idempotent', () => {
 })
 
 test('settings store: a corrupt file reads as the defaults, never throws', () => {
-  const dir = makeTempDir('dsh-pocket-settings-')
+  const dir = makeTempDir('dsh-pocket-glide-settings-')
   try {
     const store = createSettingsStore(dir)
     fs.writeFileSync(settingsStorePath(dir), '{not json at all', 'utf8')
@@ -64,7 +64,7 @@ test('settings store: a corrupt file reads as the defaults, never throws', () =>
 })
 
 test('settings store: the file lands 0600 (POSIX) and secrets stay inside it', () => {
-  const dir = makeTempDir('dsh-pocket-settings-')
+  const dir = makeTempDir('dsh-pocket-glide-settings-')
   try {
     const store = createSettingsStore(dir)
     store.save({ notify: { channel: 'serverchan', key: REAL_KEY, enabled: true } })
@@ -376,7 +376,7 @@ test('notify trigger: the watcher is armed only while enabled, and stop() disarm
 
 test('desktop notify endpoints: masked readback, guarded writes, delivered flag', async () => {
   const sent = []
-  const dir = makeTempDir('dsh-pocket-settings-')
+  const dir = makeTempDir('dsh-pocket-glide-settings-')
   const t = await startBridge({
     bridgeOptions: { ...notifyBridgeOptions(sent, []), settingsStore: createSettingsStore(dir) },
   })
@@ -462,7 +462,7 @@ test('desktop notify endpoints: masked readback, guarded writes, delivered flag'
 })
 
 test('the key leaks to no surface: status, boot, phone page, desktop page', async () => {
-  const dir = makeTempDir('dsh-pocket-settings-')
+  const dir = makeTempDir('dsh-pocket-glide-settings-')
   const t = await startBridge({
     harness: 'fake',
     bridgeOptions: { settingsStore: createSettingsStore(dir) },

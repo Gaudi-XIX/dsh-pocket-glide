@@ -1,8 +1,8 @@
 /**
- * Register @defws/dsh-pocket in a DSH profile (default: `desktop`).
+ * Register dsh-pocket-glide in a DSH profile (default: `desktop`).
  *
  * What it edits — exactly two places in `<DSH_HOME>/profiles/<profile>/package.json`:
- *   1. `dependencies["@defws/dsh-pocket"] = "link:F:/defws/dsh-pocket"`
+ *   1. `dependencies["dsh-pocket-glide"] = "link:F:/defws/dsh-pocket-glide"`
  *   2. `dsh.profile.bundles` — append the same package name if absent
  * It backs the file up first, and it never touches anything else in the profile.
  *
@@ -41,9 +41,9 @@ import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-const PACKAGE_NAME = '@defws/dsh-pocket'
+const PACKAGE_NAME = 'dsh-pocket-glide'
 /** Must match `package.json name`; the link target is this repo's source tree. */
-const LINK_PATH = 'link:F:/defws/dsh-pocket'
+const LINK_PATH = 'link:F:/defws/dsh-pocket-glide'
 /** Files that make a directory a loadable copy of this plugin. */
 const REQUIRED_SOURCE_FILES = ['package.json', 'lib/index.js', 'client/client.js', 'cordis.patch.yml']
 

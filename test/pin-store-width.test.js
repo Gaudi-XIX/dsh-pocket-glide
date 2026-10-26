@@ -4,7 +4,7 @@
 // of that move is a paired phone finding its own saved password rejected, or an
 // auto-expiry smuggled in behind the strength work (design §12 禁令 3).
 // All of it runs against a temp file: the real
-// %LOCALAPPDATA%\dsh-pocket\mobile-pairing-pin.json is never touched.
+// %LOCALAPPDATA%\dsh-pocket-glide\mobile-pairing-pin.json is never touched.
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { closeSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -17,7 +17,7 @@ import {
 } from '../lib/pin-store.js'
 import { PAIRING_PIN_DIGITS, PAIRING_PIN_MAX_DIGITS, PAIRING_PIN_MIN_DIGITS } from '../lib/constants.js'
 
-const dir = mkdtempSync(join(tmpdir(), 'dsh-pocket-pinstore-'))
+const dir = mkdtempSync(join(tmpdir(), 'dsh-pocket-glide-pinstore-'))
 const file = join(dir, 'mobile-pairing-pin.json')
 
 // 这只目录是模块级的（下面每一档都用它），所以回收只能挂在文件级钩子上。

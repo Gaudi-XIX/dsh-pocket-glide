@@ -840,7 +840,7 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   上方）：+3 214 B（zh/en 同幅，实测：抹掉本线的注释块＋三处改动后 zh 279 556 → 282 770）。
 //   三笔花销：① 台账本体 LAST_MESSAGE_KEY/readLastMessageMap/pruneLastMessageMap/
 //   noteSessionMessageAt/lastMessageAtOf/sortAtOf/lastMessageTimeOf 七个函数（与
-//   dsh-pocket-opened-at 已读台账同型，try/catch 包 localStorage）；② paintMessages 里一行记账
+//   dsh-pocket-glide-opened-at 已读台账同型，try/catch 包 localStorage）；② paintMessages 里一行记账
 //   （typeof 守卫，是该文件的既有写法）；③ 排序键由 updatedAt 换成 sortAtOf —— 少了它就会出现
 //   「第一行显示的时间比第二行旧」。注释块占其中约 1.5 KB，按本文件既有规矩保留（不给下一位读者
 //   留一个没有理由的常量）。本机实测 HEAD 261a0d2 干净页 zh 271 625，本工作树混合态

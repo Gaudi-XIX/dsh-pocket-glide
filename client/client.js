@@ -1,4 +1,4 @@
-/* @defws/dsh-pocket client —— 侧栏常驻「pocket」按钮 + dataelement 原版配对页。
+/* dsh-pocket-glide client —— 侧栏常驻「pocket」按钮 + dataelement 原版配对页。
  * 注册纪律：必须用 window.__ModuleLoader__.load({id, factory}) 按【包名】注册，
  * 不能写 ESM export（宿主客户端半区不走 ESM 解析，SyntaxError 会触发安全模式）。
  *
@@ -6,7 +6,7 @@
  * webServer 上，转发给桥的 dataelement renderDesktopPairingPage（配色/暗色模式/
  * 二维码/WiFi·互联网切换/连接密码全部原样）。iframe 与宿主同源（dsh-app://app），
  * 因此没有跨站 cookie 与 CSRF 问题；本文件不重写任何一行配对 UI。 */
-console.log('[dsh-pocket] client fingerprint: app-origin-pairing-iframe-v5')
+console.log('[dsh-pocket-glide] client fingerprint: app-origin-pairing-iframe-v5')
 window.__ModuleLoader__.load({
   id: '@defws/dsh-pocket',
   factory: function (require) {
@@ -83,14 +83,14 @@ window.__ModuleLoader__.load({
     var React = null
     try { React = require('react') } catch (eReact) { React = null }
     if (!React || typeof React.createElement !== 'function') {
-      console.error('[dsh-pocket] ' + t('reactUnavailable'))
+      console.error('[dsh-pocket-glide] ' + t('reactUnavailable'))
       module.exports.inject = []
       module.exports.apply = function () { return function () {} }
       return module.exports
     }
     var h = React.createElement
 
-    var STYLE_ID = 'dsh-pocket-client-css'
+    var STYLE_ID = 'dsh-pocket-glide-client-css'
     /* 配对页所在路径：由插件 node 半区注册，转发到桥（dataelement 页面）。 */
     var PAIRING_PATH = '/desktop'
 
@@ -131,7 +131,7 @@ window.__ModuleLoader__.load({
       if (document.getElementById(STYLE_ID)) return
       var tag = document.createElement('style')
       tag.id = STYLE_ID
-      tag.dataset.plugin = '@defws/dsh-pocket'
+      tag.dataset.plugin = 'dsh-pocket-glide'
       tag.textContent = CSS
       document.head.appendChild(tag)
     }
@@ -165,7 +165,7 @@ window.__ModuleLoader__.load({
 
     function onMessage(event) {
       var data = event && event.data
-      if (!data || data.source !== 'dsh-pocket') return
+      if (!data || data.source !== 'dsh-pocket-glide') return
       // 配对页与宿主同源；仍然只认自家来源。
       if (event.origin && event.origin !== window.location.origin) return
       if (data.type === 'done' && modal.open) closeModal()
@@ -296,7 +296,7 @@ window.__ModuleLoader__.load({
       syncLocale()
       var slots = ctx && ctx.slots
       if (!slots || typeof slots.inject !== 'function') {
-        console.warn('[dsh-pocket] ' + t('slotsUnavailable'))
+        console.warn('[dsh-pocket-glide] ' + t('slotsUnavailable'))
         return function () {}
       }
       ensureStyle()
@@ -330,7 +330,7 @@ window.__ModuleLoader__.load({
           })
         }
       } catch (eWatch) { unwatch = null }
-      console.log('[dsh-pocket] client ready: sidebar.footer.action "' + t('label') + '" -> ' + PAIRING_PATH)
+      console.log('[dsh-pocket-glide] client ready: sidebar.footer.action "' + t('label') + '" -> ' + PAIRING_PATH)
       return function () {
         try { if (typeof unwatch === 'function') unwatch() } catch (e3) {}
         try { if (disposer) disposer() } catch (e) {}

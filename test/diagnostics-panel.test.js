@@ -17,7 +17,7 @@ import { renderDesktopPairingPage } from '../lib/pages.js'
 import { startBridge, httpFetch } from './helpers.js'
 
 function tempStore() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pocket-diag-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pocket-glide-diag-'))
   return { dir, store: createSettingsStore(dir) }
 }
 

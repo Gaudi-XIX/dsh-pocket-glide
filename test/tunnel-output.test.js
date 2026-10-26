@@ -43,7 +43,7 @@ const HOST_OWNED = new Set([
 function machineDataRoots() {
   const roots = [
     process.env.LOCALAPPDATA
-      ? path.join(process.env.LOCALAPPDATA, 'dsh-pocket')
+      ? path.join(process.env.LOCALAPPDATA, 'dsh-pocket-glide')
       : undefined,
     process.env.DSH_HOME
       ? path.join(process.env.DSH_HOME, 'pocket')
@@ -90,7 +90,7 @@ function fakeCloudflared() {
 
 /** A file on disk, so a caller-supplied path resolves without a PATH probe. */
 function fakeBinary() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pocket-s5-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pocket-glide-s5-'))
   // 目录句柄在这里就丢了（返回的是里面的文件），所以只能记下来由文件级钩子收。
   // 以前没有钩子，四档各建一个、每跑一轮全量就在 %TEMP% 留四个。
   tempDirs.push(dir)

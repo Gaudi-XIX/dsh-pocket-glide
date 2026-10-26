@@ -149,7 +149,7 @@ test('D the connection-mode keys are disabled while a phone is connected', () =>
 })
 
 test('E a live phone does not stop the desktop from saving the tunnel hostname', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pocket-desklock-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pocket-glide-desklock-'))
   const t = await startBridge({ bridgeOptions: { settingsStore: createSettingsStore(dir) } })
   try {
     await t.pairMobile('PocketDesklock/1.0')
