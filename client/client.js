@@ -8,7 +8,7 @@
  * 因此没有跨站 cookie 与 CSRF 问题；本文件不重写任何一行配对 UI。 */
 console.log('[dsh-pocket-glide] client fingerprint: app-origin-pairing-iframe-v5')
 window.__ModuleLoader__.load({
-  id: '@defws/dsh-pocket',
+  id: 'dsh-pocket-glide',
   factory: function (require) {
     var module = { exports: {} }
 
