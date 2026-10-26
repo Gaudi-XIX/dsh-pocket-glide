@@ -89,7 +89,12 @@ test('③ install-to-profile 只可能装现役包，且不合格拒写', () => 
   assert.equal(declared, pkg.name, '脚本里的包名必须等于 package.json name（一致性钉，不是现值钉）')
   const link = /const LINK_PATH = '([^']+)'/.exec(src)?.[1]
   assert.match(link ?? '', /^link:/, 'link 声明必须仍是 link: 形态（junction 桥接是本仓的装机方式）')
-  assert.match(link ?? '', /\/dsh-pocket-glide$/, 'link 目标必须是本仓目录名；只钉到目录名，不钉盘符（换机器不恒红）')
+  // 钉「指向自己」而不是某个写死的名字：2026-10-26 改名到 dsh-pocket-glide 时这里曾被写成
+  // /\/dsh-pocket-glide$/，但磁盘上的目录名仍是 dsh-pocket，于是断言与实时自检（脚本 L74
+  // 拿自身位置比对 LINK_PATH）互相打架、装机直接拒写。动态比对目录名既保住本意（不许指向
+  // 别的树——历史地雷是脚本指着 dsh-phone-native），又不再随改名恒红；盘符仍不钉。
+  const linkDir = basename((link ?? '').replace(/\\/g, '/'))
+  assert.equal(linkDir, basename(root), 'link 目标必须指向本仓目录，且只比目录名不比盘符（换机器不恒红）')
   assert.match(src, /REQUIRED_SOURCE_FILES/, '源树 preflight（缺件即拒写）是这颗地雷的正解，删它=复雷')
   assert.match(src, /--no-backup is not supported/, '备份是回滚路径，不许提供「不备份」的出口')
   assert.match(src, /const withInstall = argv\.includes\('--install'\)/, "pnpm install 必须保持显式 opt-in：登记了却没装成就是半改态")
