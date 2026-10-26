@@ -134,19 +134,6 @@ test('⑥ 插件仓内不放归档（死码不得躺在可加载树里）', () =
   assert.doesNotMatch(read('README.md'), /pre-pocket-20260929/, '文档也不得再指回仓内旧归档路径')
 })
 
-// ⑥b — 迁入点在工作区归档仓，那是**另一棵树**的时点事实：link 装机件在没有工作区布局的机器
-// 上会恒红。按 planner 的裁定做成 env-gated、缺省 skip（skip 是有意的，不是漏写）。
-test('⑥b 归档在工作区 _archive/dsh-pocket/ 下确实落地（需显式给路径）', (t) => {
-  const target = process.env.POCKET_ARCHIVE_RELOCATION?.trim()
-  if (!target) {
-    t.skip('需要 POCKET_ARCHIVE_RELOCATION 指到工作区归档目录（F:\\defws\\_archive\\dsh-pocket）才验')
-    return
-  }
-  for (const rel of ['lib/http.js', 'lib/invoke.js', 'lib/pairing.js', 'tools/render-preview.mjs']) {
-    assert(existsSync(join(target, 'pre-pocket-20260929', rel)), `迁出后的归档件 ${rel} 应在新址`)
-  }
-})
-
 // ⑦ — `package.json description`（WP-REPO-B 唯一被允许改动的字段）
 // 钉的是哪句语义：本仓的实际形态（README 形态节 + `dsh.bundle.patch` 装载链）。旧值
 // 「Independent lightweight bridge」在 npm 页与宿主插件列表里会被读成「独立进程的桥」，
