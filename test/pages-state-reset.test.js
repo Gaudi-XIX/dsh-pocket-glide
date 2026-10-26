@@ -1,0 +1,600 @@
+// WP-PAGES-B 状态机回归断言（change 2026-10-02-fix-pocket-audit-remediation）。
+//
+// The page script lives inside one template literal, so it cannot be imported.
+// These tests follow the house pattern (test/stream-watermark.test.js): pull the
+// REAL function text out of the rendered asset and run it against synthetic state,
+// so a regression goes red on a runner rather than on a phone.
+//
+// Covered here: B-1 (a broken stream drops tokenStream), B-2 (an answer submit
+// always releases questionBusy), B-3 (re-arming the snapshot settles the promise it
+// replaces), B-4 (provisionalSession is declared before the boot IIFE reads it),
+// B-5 (send() re-checks which session it is talking to), B-6 ($('cancel') cannot
+// reject unhandled), B-7 (handoffPainted resets on the re-entry path), B-8 (the
+// per-session close inventory, the two fill locks and the warm-cache bound) and the
+// desktop pairing-page poll guard. B-9 lives in test/pages-input-hardening.test.js.
+//
+// Two anchors are deliberately slice-scoped, because a whole-file `includes`
+// false-greens or false-reds here:
+//   * B-5 — `const owner=activeSession` already occurs once inside loadHistory();
+//   * the pairing-page poll — `document.hidden` occurs eight times across the file,
+//     but the poll guard must be read only between renderDesktopPairingPage and
+//     renderPairingPinPage.
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { mobilePageAssets } from '../lib/pages.js'
+
+const { js } = mobilePageAssets({ locale: 'zh' })
+
+// renderDesktopPairingPage is a desktop page: it is NOT part of the mobile asset
+// bundle, so its poll guard has to be read off the module source instead.
+const source = readFileSync(fileURLToPath(new URL('../lib/pages.js', import.meta.url)), 'utf8')
+
+function extractFunction(text, name) {
+  const start = text.indexOf(`function ${name}(`)
+  assert.notEqual(start, -1, `${name} must exist in the rendered asset`)
+  let depth = 0
+  for (let i = start; i < text.length; i++) {
+    const char = text[i]
+    if (char === '{') depth++
+    else if (char === '}') {
+      depth--
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  throw new Error(`unbalanced braces after ${name}`)
+}
+
+function between(text, startAnchor, endAnchor) {
+  const start = text.indexOf(startAnchor)
+  const end = text.indexOf(endAnchor, start)
+  assert.notEqual(start, -1, `anchor ${startAnchor} must exist`)
+  assert.notEqual(end, -1, `anchor ${endAnchor} must exist after it`)
+  return text.slice(start, end)
+}
+
+// Page code is spliced into a Function body, so a stray backtick or template hole
+// would close the harness string early and fail somewhere unrelated to the change.
+function assertSpliceable(text, label) {
+  assert.ok(!text.includes('`'), `${label} must not carry a backtick`)
+  assert.ok(!text.includes('${'), `${label} must not carry a template hole`)
+}
+
+// ---------------------------------------------------------------------------- B-1
+
+test('B-1 a broken stream drops the token text it was painting into', () => {
+  const handler = js.match(/source\.onerror=\(\)=>\{([^}]*)\}/)
+  assert.ok(handler, 'the stream failure handler must render as one statement')
+  assert.ok(handler[1].includes('streamConnected=false'), 'the page must stop believing the stream is up')
+  assert.ok(handler[1].includes('markStreamSnapshot(false)'), 'and hand the first frame back to the fetch path')
+  assert.ok(handler[1].includes('tokenStream=null'), 'and drop the half-written answer before polling takes over')
+  assert.ok(
+    (js.match(/tokenStream=null/g) || []).length >= 3,
+    'every path that drops a stream must also drop its token text',
+  )
+})
+
+// ---------------------------------------------------------------------------- B-2
+
+test('B-2 the answer lock is released on every path, not just the error branch', () => {
+  for (const name of ['submitQuestionAnswers', 'cancelQuestionRequest']) {
+    const body = 'async ' + extractFunction(js, name)
+    assert.ok(
+      body.includes('finally{questionBusy=false;renderQuestionComposer()}'),
+      `${name} must release the lock in a finally so a delivered answer cannot strand the composer`,
+    )
+    assert.ok(
+      !body.includes('catch(e){questionBusy=false'),
+      `${name} must not release the lock only when it fails`,
+    )
+  }
+})
+
+function buildQuestionSandbox() {
+  const body = ['syncPendingQuestion', 'submitQuestionAnswers']
+    .map((name) => (name === 'submitQuestionAnswers' ? 'async ' : '') + extractFunction(js, name))
+    .join('\n')
+  assertSpliceable(body, 'the question submit pair')
+  const make = new Function(`
+    let pendingQuestion={rpcId:'r1',sessionId:'s1',questions:[{id:'q1',question:'Q',multiSelect:false}]}
+    let questionBusy=false,questionIndex=0,questionDrafts={},lastHistoryKey='chat:s1'
+    let answer=null
+    const rpcCalls=[]
+    const errors=[]
+    function questionDraft(){return {selected:['A'],custom:''}}
+    function renderQuestionComposer(){}
+    function showError(id,error){errors.push({id,error})}
+    async function rpc(method,payload){rpcCalls.push({method,payload});await new Promise((resolve,reject)=>{answer={resolve,reject}})}
+    async function loadHistory(){}
+    ${body}
+    return {
+      start:submitQuestionAnswers,
+      redeliver:()=>syncPendingQuestion({rpcId:'r1',sessionId:'s1',questions:[{id:'q1',question:'Q',multiSelect:false}]}),
+      accept:()=>answer.resolve(),
+      reject:(error)=>answer.reject(error),
+      busy:()=>questionBusy,
+      rpcCalls,
+      errors,
+    }
+  `)
+  return make()
+}
+
+test('B-2 a delivered answer hands the composer back', async () => {
+  const sandbox = buildQuestionSandbox()
+  const flight = sandbox.start()
+  assert.equal(sandbox.busy(), true, 'the lock is held while the answer is in flight')
+  sandbox.accept()
+  await flight
+  assert.equal(sandbox.busy(), false, 'and released once the Host accepted it')
+  assert.equal(sandbox.rpcCalls.length, 1)
+  assert.equal(sandbox.rpcCalls[0].method, 'interaction.answer')
+  assert.deepEqual(sandbox.errors, [])
+})
+
+test('B-2 a re-delivered question does not strand the lock', async () => {
+  const sandbox = buildQuestionSandbox()
+  const flight = sandbox.start()
+  // The Host repeating the same rpcId must not reset questionBusy — that is exactly
+  // the case the release has to survive, or the composer is busy for the rest of the visit.
+  sandbox.redeliver()
+  assert.equal(sandbox.busy(), true, 'the same question arriving again leaves the lock held')
+  sandbox.accept()
+  await flight
+  assert.equal(sandbox.busy(), false, 'the answer still releases it')
+})
+
+test('B-2 a rejected answer releases the composer lock too', async () => {
+  const sandbox = buildQuestionSandbox()
+  const flight = sandbox.start()
+  sandbox.reject(new Error('offline'))
+  await flight
+  assert.equal(sandbox.busy(), false)
+  assert.equal(sandbox.errors.length, 1)
+  assert.equal(sandbox.errors[0].id, 'questionError')
+})
+
+// ---------------------------------------------------------------------------- B-3
+
+test('B-3 armStreamSnapshot releases the promise it replaces', () => {
+  const body = extractFunction(js, 'armStreamSnapshot')
+  // indexOf on a deleted line returns -1, and -1 < anything, so the ordering check
+  // below would pass on exactly the regression it guards. Pin the presence first.
+  const settledAt = body.indexOf('settleStreamSnapshot(false)')
+  assert.notEqual(settledAt, -1, 'armStreamSnapshot must settle the promise it is about to replace')
+  assert.ok(
+    settledAt < body.indexOf('streamSnapshotReady=new Promise'),
+    'the previous arm must be settled before the resolver is overwritten',
+  )
+  assert.equal(
+    extractFunction(js, 'settleStreamSnapshot'),
+    'function settleStreamSnapshot(ok){markStreamSnapshot(ok)}',
+    'and settling means calling whatever resolver is currently armed',
+  )
+})
+
+test('B-3 a second arm does not strand the first await on the fallback timer', async () => {
+  const body = ['settleStreamSnapshot', 'armStreamSnapshot'].map((name) => extractFunction(js, name)).join('\n')
+  assertSpliceable(body, 'the snapshot pair')
+  const make = new Function(`
+    let streamSnapshotReady=null,markStreamSnapshot=()=>{}
+    ${body}
+    return { arm:armStreamSnapshot, ready:()=>streamSnapshotReady }
+  `)
+  const sandbox = make()
+  sandbox.arm()
+  const first = sandbox.ready()
+  sandbox.arm()
+  const second = sandbox.ready()
+  assert.notEqual(first, second, 'the second arm replaces the promise')
+  // The 900ms watchdog is not part of this sandbox, so a stranded promise never
+  // settles at all. Bound the wait: a lost guard must go red, not hang the runner.
+  let deadline
+  const outcome = await Promise.race([
+    first.then((value) => ({ value })),
+    new Promise((resolve) => {
+      deadline = setTimeout(() => resolve({ stranded: true }), 500)
+    }),
+  ])
+  clearTimeout(deadline)
+  assert.ok(!outcome.stranded, 'the replaced promise must settle instead of hanging forever')
+  assert.equal(outcome.value, false, 'the replaced promise must settle as false, not wait for the 900ms fallback')
+})
+
+// ---------------------------------------------------------------------------- B-4
+
+
+// ---------------------------------------------------------------------------- B-5
+
+test('B-5 send() re-checks the session it started for', () => {
+  const body = between(js, 'async function send(', 'function formatBytes(')
+  // 2026-10-16: the owner capture moved BELOW the ensureSession await. Capturing
+  // it first meant a draft send (activeSession still null at capture time) pinned
+  // owner=null and both guards below could never match — the send-into-a-new-chat
+  // path would read as "the reader left". The capture has to sit after the await,
+  // next to the markRowRunning that now needs the real id.
+  //
+  // 2026-10-19: "after the await" became "from the await" — the id is the one the
+  // create returned, never a re-read of the shared variable. Re-reading it was its
+  // own defect: a back-tap landing inside the buffered draft RPCs in ensureSession
+  // ran showSessionList(), which nulls activeSession, and the send then went out
+  // with sessionId:null (host gateway/input-invalid) while the created session
+  // stayed on disk as a completely empty conversation. The sibling pin lives in
+  // test/pages-status-light.test.js.
+  const awaitedAt = body.indexOf('await ensureSession()')
+  const capturedAt = body.indexOf('const owner=activeSession||await ensureSession()')
+  assert.notEqual(awaitedAt, -1, 'send() still mints the draft session itself')
+  assert.notEqual(
+    capturedAt,
+    -1,
+    'owner is taken from the create, or a first-message send pins a null owner',
+  )
+  assert.equal(
+    (body.match(/const owner=activeSession;/g) || []).length,
+    0,
+    'no bare re-read of activeSession after the await — that is what sent sessionId:null',
+  )
+  // Both guards still have to be there, but they no longer sit side by side: the
+  // success branch checks `activeSession!==owner`, and the reply branch checks
+  // `activeSession===owner` before it touches the bubble, the composer or the
+  // running lock. Pin the pair by role, not by raw text — a refactor that drops
+  // either one leaves a send touching a session the reader already left.
+  const leftGuards = (body.match(/activeSession!==owner/g) || []).length
+  const ownerGuards = (body.match(/activeSession===owner/g) || []).length
+  assert.equal(leftGuards, 1, 'the success branch must re-check the session')
+  assert.equal(ownerGuards, 1, 'and the reply branch must confirm it is still the same one')
+  // A whole-file lookup would be false-green: loadHistory() opens with the same line.
+  assert.equal(
+    (js.match(/const owner=activeSession/g) || []).length,
+    4,
+    'the trick here is that this line is not unique in the file, hence the slice above — loadHistory, queueAction and goalAction own the other three captures',
+  )
+})
+
+function buildSendSandbox() {
+  const body = 'async ' + extractFunction(js, 'send')
+  assertSpliceable(body, 'send')
+  const make = new Function('box', `
+    let activeSession='s1',agentRunning=false,busyEnter='queue',lastHistoryKey='chat:s1'
+    let optimisticPrompts=[],sessionBlank=true
+    let pendingSend=new Map()
+    // 2026-10-16 (first-message latency): send() now raises the optimistic turn,
+    // empties the composer and closes the double-tap window BEFORE it awaits the
+    // session create. The sandbox runs the real body, so it has to carry that
+    // state too — otherwise sendBusy is an undeclared read and the first run() in
+    // every test throws instead of exercising the guards.
+    let sendBusy=false
+    // 2026-10-15: send() flushes whatever the draft settings panel buffered, right
+    // after the session is guaranteed to exist. B-5 pins the flight guards, not the
+    // flush — the buffer stays empty and the flush is a no-op stub here.
+    let draftPending=null
+    async function ensureSession(){return activeSession}
+    async function applyDraftPending(){}
+    const composerDrafts=[]
+    let flight=null,sentCleared=0
+    const rpcCalls=[]
+    const errors=[]
+    const painted=[]
+    function $(id){return box}
+    function readyDrafts(){return []}
+    function validateImagesReady(){}
+    function slashExecuteName(){return ''}
+    function attachmentParts(){return []}
+    function submittedAttachmentParts(){return []}
+    function draftSummary(){return ''}
+    function latestEventSeq(){return 5}
+    function currentTranscript(){return []}
+    function durableUserPromptText(message){return String(message.text||'')}
+    function armAwaitingTurn(){}
+    function clearAwaitingTurn(){}
+    // 2026-10-13: send() now stamps an optimistic running mark on the list row
+    // for the session it sends into. The row projection is its own sandbox
+    // (test/optimistic-running.test.js) — here the send machine only needs to
+    // know the call exists, so the stub keeps this file about composer state.
+    function markRowRunning(){}
+    function stopPendingSend(){}
+    function syncSettingsControls(){}
+    function syncPromptUi(){}
+    function paintMessages(list){painted.push(list.length)}
+    function messagesWithOptimistic(list){return list}
+    function clearSentDrafts(){sentCleared+=1}
+    function showError(id,error){errors.push({id,error})}
+    function showToast(message){errors.push({id:'toast',error:{message}})}
+    function encodedPromptBytes(){return 1}
+    function rpcBodyCeilingFor(){return 1024}
+    async function loadHistory(){}
+    async function refreshActiveSessionSummary(){}
+    async function rpc(method,payload){rpcCalls.push({method,payload});await new Promise((resolve,reject)=>{flight={resolve,reject}})}
+    const L={draftUploading:'uploading',draftFailed:'failed',attachNotAccepted:'no {command}',attachTooLarge:'too large',queueSteerFailed:'send failed',streamDownFailed:'send failed'}
+    // 2026-10-07-fix-pocket-r3-audit-batch: send()'s catch now maps too-large
+    // failures through the page's single helper — splice the real one in so the
+    // sandbox keeps running the page's own words (L.attachTooLarge/failed are not
+    // pinned by B-5, the rejection path stays behaviour-identical).
+    ${extractFunction(js, 'attachFailureCopy')}
+    const SEND_KEY='${/const SEND_KEY='([^']+)'/.exec(js)[1]}'
+    ${extractFunction(js, 'stashSend')}
+    ${extractFunction(js, 'stashTake')}
+    ${body}
+    return {
+      run:send,
+      switchTo:(id)=>{activeSession=id},
+      accept:()=>flight.resolve(),
+      reject:(error)=>flight.reject(error),
+      value:()=>box.value,
+      prompts:()=>optimisticPrompts.length,
+      cleared:()=>sentCleared,
+      rpcCalls,
+      errors,
+    }
+  `)
+  return make({ value: 'hello', style: {}, scrollHeight: 40 })
+}
+
+test('B-5 a reply that lands after a session switch does not touch the new session', async () => {
+  const sandbox = buildSendSandbox()
+  const flight = sandbox.run()
+  assert.equal(sandbox.value(), '', 'the composer empties the moment the send starts')
+  sandbox.switchTo('s2')
+  sandbox.accept()
+  await flight
+  assert.equal(
+    sandbox.cleared(),
+    0,
+    'a reply for the session that was left must not clear the drafts of the one on screen',
+  )
+})
+
+test('B-5 a failed send restores the text only into the session it belonged to', async () => {
+  const stayed = buildSendSandbox()
+  const landed = stayed.run()
+  stayed.reject(new Error('offline'))
+  await landed
+  assert.equal(stayed.value(), 'hello', 'the text comes back while that session is still on screen')
+  assert.equal(stayed.errors.length, 1)
+  assert.equal(
+    stayed.errors.filter((entry) => entry.id === 'toast').length,
+    0,
+    'the page that still owns the session gets the inline error only — a second toast would be double reporting',
+  )
+
+  const moved = buildSendSandbox()
+  const abandoned = moved.run()
+  moved.switchTo('s2')
+  moved.reject(new Error('offline'))
+  await abandoned
+  assert.equal(moved.value(), '', 'and stays out of the composer once the page moved on')
+  assert.equal(moved.prompts(), 0, 'the optimistic bubble is withdrawn either way')
+  const toasts = moved.errors.filter((entry) => entry.id === 'toast')
+  assert.equal(toasts.length, 1, 'a send abandoned after the reader left must still say so')
+  assert.equal(toasts[0].error.message, 'send failed', 'and say it with the existing copy key')
+})
+
+// ---------------------------------------------------------------------------- B-6
+
+test('B-6 the cancel button cannot reject unhandled', () => {
+  const handler = between(js, "$('cancel').onclick=async()=>{", "$('questionComposer').onclick=")
+  assert.ok(handler.includes('if(!activeSession||stopPending)return;'), 'a stale tap has nothing to stop, and a pending stop cannot double-fire')
+  assert.ok(handler.includes('clearAwaitingTurn()'), 'the stop button takes the turn indicator down immediately')
+  assert.ok(handler.includes("await rpc('session.cancel',{sessionId:activeSession})"), 'and still asks the Host')
+  assert.match(
+    handler,
+    /try\{[\s\S]*?\}catch\(e\)\{stopPending=false;syncPromptUi\(\);syncTurnStatus\(\);showError\('chatError',e\)\}finally\{lastHistoryKey='';await loadHistory\(false\)\}/,
+    'the RPC has to settle into a catch (reverting the optimistic spinner) and a finally, or a failure leaves an unhandled rejection and a stuck button',
+  )
+})
+
+// ---------------------------------------------------------------------------- B-7
+
+test('B-7 a re-entry into the session already on screen stays a no-op', () => {
+  const body = extractFunction(js, 'openSession')
+  assertSpliceable(body, 'openSession')
+  assert.ok(
+    body.includes('if(activeSession===id&&streamConnected&&!fromHistory)return;'),
+    'the same-session early exit survives — the handoff flag it used to clear retired with the handoff (0.4.36)',
+  )
+})
+
+// ---------------------------------------------------------------------------- B-8
+
+test('B-8 closing a session empties the per-session state the next visit would inherit', () => {
+  const body = extractFunction(js, 'closeSessionStream')
+  assertSpliceable(body, 'closeSessionStream')
+  const make = new Function(`
+    let sessionStream=null,streamRenderFrame=null,pendingSyncTimer=null,projectionsSyncTimer=null
+    let tokenStream=null,streamConnected=false,streamEvents=[],olderEvents=[]
+    let olderHasMore=false,olderBusy=false,olderExhausted=false
+    let streamProjections=null,streamNeedsFullPaint=false,streamRevision=0
+    let activeSession='s1',streamDownGraceTimer=null
+    const turnOpenState=new Map(),streamWatermarks=new Map()
+    function clearSkeletonWatchdog(){}
+    function clearStreamStaleWatch(){}
+    ${body}
+    return {
+      close:closeSessionStream,
+      seed(){
+        tokenStream={text:'half written'}
+        streamConnected=true
+        streamEvents=[{key:'a'}]
+        olderEvents=[{key:'b'}]
+        olderHasMore=true
+        olderBusy=true
+        olderExhausted=true
+        streamProjections={items:[]}
+        streamNeedsFullPaint=true
+        streamRevision=9
+        turnOpenState.set('turn:1',true)
+        streamWatermarks.set('s1',42)
+      },
+      state:()=>({ tokenStream,streamConnected,streamEvents,olderEvents,olderHasMore,olderBusy,olderExhausted,
+        streamProjections,streamNeedsFullPaint,streamRevision,turnOpenState,streamWatermarks }),
+    }
+  `)
+  const sandbox = make()
+  sandbox.seed()
+  assert.equal(sandbox.state().streamEvents.length, 1, 'the seed must actually be in place')
+  sandbox.close()
+  const state = sandbox.state()
+  assert.equal(state.tokenStream, null, 'the half-written answer goes')
+  assert.equal(state.streamConnected, false)
+  assert.deepEqual(state.streamEvents, [], 'the live window goes')
+  assert.deepEqual(state.olderEvents, [], 'and the paged window with it')
+  assert.equal(state.olderHasMore, false)
+  assert.equal(state.olderBusy, false)
+  assert.equal(state.olderExhausted, false)
+  assert.equal(state.streamProjections, null)
+  assert.equal(state.streamNeedsFullPaint, false)
+  assert.equal(state.streamRevision, 0)
+  assert.equal(state.turnOpenState.size, 0, 'the open/closed turn map is per session')
+  assert.equal(state.streamWatermarks.has('s1'), false, 'and so is the watermark of the session being left')
+})
+
+test('B-8 a same-session rebuild keeps the drawn windows so the re-paint cannot collapse to one row', () => {
+  const body = extractFunction(js, 'closeSessionStream')
+  assert.match(
+    body,
+    /function closeSessionStream\(keepBuffer\)/,
+    'the rebuild path has to be able to ask for its buffers back',
+  )
+  const make = new Function(`
+    let sessionStream=null,streamRenderFrame=null,pendingSyncTimer=null,projectionsSyncTimer=null
+    let tokenStream=null,streamConnected=false,streamEvents=[],olderEvents=[]
+    let olderHasMore=false,olderBusy=false,olderExhausted=false
+    let streamProjections=null,sessionSelection=null,streamNeedsFullPaint=false,streamRevision=0
+    let activeSession='s1'
+    const turnOpenState=new Map(),streamWatermarks=new Map()
+    function clearSkeletonWatchdog(){}
+    function clearStreamStaleWatch(){}
+    ${body}
+    return {
+      close:closeSessionStream,
+      seed(){
+        tokenStream={text:'half written'}
+        streamConnected=true
+        streamEvents=[{key:'a'}]
+        olderEvents=[{key:'b'}]
+        olderHasMore=true
+        olderBusy=true
+        olderExhausted=true
+        streamProjections={items:[]}
+        sessionSelection={provider:'p',model:'m'}
+        streamNeedsFullPaint=true
+        streamRevision=9
+        turnOpenState.set('turn:1',true)
+        streamWatermarks.set('s1',42)
+      },
+      state:()=>({ tokenStream,streamConnected,streamEvents,olderEvents,olderHasMore,olderBusy,olderExhausted,
+        streamProjections,sessionSelection,streamNeedsFullPaint,streamRevision,turnOpenState,streamWatermarks }),
+    }
+  `)
+  const sandbox = make()
+  sandbox.seed()
+  sandbox.close(true)
+  const state = sandbox.state()
+  assert.deepEqual(state.streamEvents, [{ key: 'a' }], 'the live window survives a reconnect rebuild')
+  assert.deepEqual(state.olderEvents, [{ key: 'b' }], 'and so does the paged window')
+  assert.equal(state.olderHasMore, true, 'so the re-paint still knows there is history behind it')
+  assert.equal(state.olderBusy, true)
+  assert.equal(state.olderExhausted, true)
+  assert.deepEqual(state.streamProjections, { items: [] })
+  assert.deepEqual(state.sessionSelection, { provider: 'p', model: 'm' }, 'the session model pick is not a connection thing')
+  assert.equal(state.tokenStream, null, 'the half-written answer still goes — a reconnect re-sends it')
+  assert.equal(state.streamConnected, false)
+  assert.equal(state.streamNeedsFullPaint, false)
+  assert.equal(state.streamRevision, 0)
+  assert.equal(state.turnOpenState.size, 0)
+  assert.equal(state.streamWatermarks.has('s1'), false)
+
+  const watchdog = between(js, 'function armStreamStaleWatch(sessionId)', 'function showTranscriptRetry()')
+  assert.ok(watchdog.includes('closeSessionStream(true);schedulePoll();armStreamRetry(sessionId)'), 'the stale watchdog rebuilds in place')
+  const reopen = extractFunction(js, 'reopenSessionStream')
+  assert.ok(reopen.includes('closeSessionStream(true);openSessionStream(activeSession)'), 'so does the reopen path')
+  const open = extractFunction(js, 'openSession')
+  assert.ok(
+    open.includes('evictSessionCache()}if(activeSession&&activeSession!==id)resetEarlierParts();closeSessionStream(activeSession===id)'),
+    'a re-entry for the session already open must not wipe what is on screen; a real switch still does',
+  )
+})
+
+test('B-8 the two fill locks release themselves instead of being cleared from outside', () => {
+  const closing = extractFunction(js, 'closeSessionStream')
+  assert.ok(
+    !closing.includes('fillBusy=false') && !closing.includes('olderRunBusy=false'),
+    'closeSessionStream must NOT clear a lock an in-flight fill still owns — that would let two fills overlap',
+  )
+  const filling = extractFunction(js, 'ensureTranscriptFilled')
+  assert.ok(filling.includes('fillBusy=true'), 'the fill takes its own lock')
+  assert.ok(filling.includes('finally{fillBusy=false}}'), 'and releases it in a finally, so a throw cannot pin it')
+  const paging = extractFunction(js, 'loadOlder')
+  assert.ok(paging.includes('olderRunBusy=true'), 'the paging path takes its own lock, inside the try')
+  assert.ok(
+    paging.includes('olderRunBusy=false;void ensureTranscriptFilled()'),
+    'and releases it before refreshing the row',
+  )
+})
+
+test('B-8 the warm session cache stays bounded and drops the least recently used entry', () => {
+  const body = extractFunction(js, 'evictSessionCache')
+  assertSpliceable(body, 'evictSessionCache')
+  const make = new Function(`
+    const SESSION_CACHE_MAX=4
+    const sessionCache=new Map()
+    ${body}
+    return { cache:sessionCache, evict:evictSessionCache }
+  `)
+  const sandbox = make()
+  for (const id of ['a', 'b', 'c', 'd', 'e']) sandbox.cache.set(id, { streamEvents: [] })
+  assert.equal(sandbox.cache.size, 5)
+  sandbox.evict()
+  assert.equal(sandbox.cache.size, 4, 'the cache may not grow past SESSION_CACHE_MAX')
+  assert.deepEqual([...sandbox.cache.keys()], ['b', 'c', 'd', 'e'], 'and it drops the oldest entry, not the newest')
+})
+
+test('B-8 the cache is touched on a warm open and trimmed when the list comes back', () => {
+  assert.ok(
+    js.includes('sessionCache.delete(activeSession);sessionCache.set(activeSession,cached)'),
+    're-opening a cached session must make it the most recent, or the bound evicts what is on screen',
+  )
+  assert.ok(js.includes('evictSessionCache()'), 'and the list view is where the bound is applied')
+})
+
+// ------------------------------------------------------------------------ PB-poll
+
+test('S-1 opening the settings panel no longer resets the catalog (stale-while-revalidate)', () => {
+  const open = extractFunction(js, 'openSessionSettings')
+  const refresh = extractFunction(js, 'refreshSessionSettings')
+  assertSpliceable(open, 'openSessionSettings')
+  assert.ok(!open.includes('modelCatalog=null'), 'the tap must not wipe the catalog: the panel paints the cached one and the refresh lands behind it (0.4.36 walk-through: two tunnel round trips before anything appeared)')
+  assert.ok(open.includes('void refreshSessionSettings(sessionId)'), 'the refresh rides behind the paint, never in front of it')
+  assert.ok(refresh.includes('if(activeSession!==sessionId||modelCatalog)return'), 'a failed refresh keeps the stale catalog on screen; only the cache-less first open takes the error path')
+})
+test('S-2 entering a session or a draft must not wipe the settings catalog either', () => {
+  // The catalog is host-global — session/modelCatalog takes no session argument —
+  // so wiping it on every chat entry put each visit's first settings open back
+  // behind the loading shell while the host answered (~1.4s per call measured,
+  // pocket.log 2026-10-13 01:22). The 0.4.36 fix only ever helped repeat toggles
+  // inside one visit; the entry paths are where the every-time lag lived.
+  for (const name of ['openSession', 'startDraftChat']) {
+    const fn = extractFunction(js, name)
+    assertSpliceable(fn, name)
+    assert.ok(!fn.includes('modelCatalog=null'), `${name} must leave the catalog standing: the panel paints it cached and refreshSessionSettings revalidates behind the open`)
+  }
+})
+test('PB the pairing page poll cannot stack and skips a hidden tab', () => {
+  const start = source.indexOf('function renderDesktopPairingPage(')
+  const end = source.indexOf('export function renderPairingPinPage(', start)
+  assert.ok(start >= 0 && end > start, 'the pairing page must still render between these two anchors')
+  const region = source.slice(start, end)
+  // Whole-file counts are useless here: `document.hidden` occurs eight times across
+  // pages.js, so only the region above can tell the poll guard apart from the rest.
+  assert.ok(region.includes('let pollBusy=false;'), 'the poll needs a re-entrancy latch')
+  assert.match(
+    region,
+    /async function poll\(\)\{if\(pollBusy\)return;if\(document\.hidden\)return;pollBusy=true;try\{/,
+    'the latch closes and the hidden-tab skip both guard the same call',
+  )
+  assert.ok(
+    region.includes('setInterval(()=>{if(document.hidden)return;'),
+    'the one-second countdown must not run against a backgrounded page',
+  )
+})

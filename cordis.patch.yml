@@ -1,0 +1,23 @@
+# One package: Pocket DSH. Install it into a dsh profile
+# (`dsh plugin --profile <name> add link:F:/defws/dsh-pocket-glide`) — the patch
+# layer below inserts the single plugin row that mounts the host half: the
+# independent lightweight bridge, the pairing gate, the device registry,
+# the tunnel manager and the phone routes.
+#
+# The package has TWO halves, both declared by its own package.json:
+#   - node half: lib/index.js (apply(ctx)) — the bridge, pairing, devices,
+#     tunnel and the phone routes; it also proxies the desktop pairing surface
+#     onto the application origin so the GUI can frame it same-origin.
+#   - browser half: client/client.js, mounted through `dsh.client.inject`
+#     (@deepseek-ai/dsh-client-ui-slots + @deepseek-ai/dsh-client-ui-sidebar).
+#     It registers exactly one thing: the sidebar footer's "pocket"
+#     action, which opens that /desktop surface in an in-app modal iframe.
+# What this package deliberately has NO need for is a built front end: every
+# phone page is a plain HTML string produced by the host and served over the
+# bridge's own routes, so there is no React bundle and no tsdown build step.
+# (This comment used to claim "no browser half / no client inject" — stale since
+# the sidebar entry shipped. The load-bearing claim was the no-build one.)
+
+- insert:
+    - id: pocket
+      name: 'dsh-pocket-glide'

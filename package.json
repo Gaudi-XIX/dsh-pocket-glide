@@ -1,0 +1,48 @@
+{
+  "name": "dsh-pocket-glide",
+  "version": "0.4.58",
+  "description": "Pocket DSH — the phone connection plugin (pocket bridge) for DSH. The bridge runs inside the host process, not as a separate server and not as a desktop mirror: pair by QR/PIN, read sessions and history, send messages, stream replies. LAN listener plus an optional Cloudflare quick tunnel.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "test:real-webserver": "node test-real-webserver.mjs"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.0-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ],
+      "platform": "web"
+    }
+  },
+  "dependencies": {
+    "pngjs": "^5.0.0"
+  },
+  "files": [
+    "lib/**/*.js",
+    "client/**/*.js",
+    "test",
+    "tools",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "license": "MIT"
+}
