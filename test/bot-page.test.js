@@ -271,6 +271,8 @@ test('the roster answer is cut down to what the page draws', async () => {
             approvals: [
               { id: 'a-1', botId: 'chief', tool: 'bash', reason: 'needs a shell', detail: { text: 'ls', code: 'E1' }, at: 1, answerable: true }
             ],
+            bots: { chief: { tool: 'bash', since: 1 } },
+            rooms: { 'r-1': [{ botId: 'chief', since: 1 }] },
             turns: [{ botId: 'chief' }]
           },
           secrets: [{ name: 'DSH_SECRET_TOKEN', bots: ['chief'] }],
@@ -300,6 +302,10 @@ test('the roster answer is cut down to what the page draws', async () => {
     assert.deepEqual(team.value.questions, { count: 1 }, 'only the count of open questions travels')
     assert.equal(team.value.work.approvals[0].answerable, true, 'and the approvals stay answerable')
     assert.equal(team.value.work.approvals[0].detail.text, 'ls')
+    // The live work map travels as what the rows draw: what the Bot is doing
+    // now, and whether the group has anyone talking — nothing else.
+    assert.deepEqual(team.value.bots[0].working, { tool: 'bash' }, 'the running tool rides with the member')
+    assert.equal(team.value.rooms[0].running, true, 'a group with a running turn says so')
   } finally { await t.stop() }
 })
 
@@ -356,8 +362,8 @@ test('a Host that stops answering keeps the last workspace hidden', async () => 
 // 覆盖四条分支 —— 审批卡两态、点击回话、发消息、读消息流。
 // ---------------------------------------------------------------------------
 
-/** 页面脚本要的全部节点（lib/bot-page.js 的 `$('…')` 一共十一个，多一个回 Pocket 的浮窗）。 */
-const PAGE_IDS = ['bpBack', 'bpHome', 'bpReload', 'bpChatTitle', 'bpHint', 'bpList', 'bpMsgs', 'bpComposer', 'bpPrompt', 'bpSend', 'bpToast']
+/** 页面脚本要的全部节点（lib/bot-page.js 的 `$('…')` 全集：bar 五件 + 列表骨架六槽 + 会话四件 + 浮窗与提示）。 */
+const PAGE_IDS = ['bpBack', 'bpHome', 'bpReload', 'bpTitle', 'bpHint', 'bpList', 'bpSkel', 'bpPending', 'bpRoomsCount', 'bpRoomsList', 'bpMembersCount', 'bpMembersList', 'bpMsgs', 'bpComposer', 'bpPrompt', 'bpSend', 'bpToast']
 
 /**
  * A browser stand-in holding just what `/bot`'s script touches: ten elements
@@ -425,10 +431,14 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
     title: 'DS Bot',
     hidden: false,
     body,
+    // The script reads the locale off <html lang> for its clock copy; the real
+    // document pairs with a zh phone, so the stand-in says zh too.
+    documentElement: { lang: 'zh-CN' },
     getElementById: (id) => node(id),
     addEventListener: (type, fn) => documentListeners.set(type, fn),
   }
   const navigations = []
+  const historyReplaced = []
   // The page says its last word on the way out with a beacon, because a plain
   // fetch dies with the document that made it. The beacon is recorded apart
   // from the fetch log: a test must be able to tell which of the two carried it.
@@ -447,9 +457,19 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
     // One entry behind this page, as after tapping the landing's corner button.
     // A test that wants no entry behind it sets `window.history = null` before
     // the first click, or `window.history.length = 1`.
-    history: { length: 2, back: () => navigations.push('back') },
+    history: {
+      length: 2,
+      back: () => navigations.push('back'),
+      // The back key clears its hash with a replace so no entry lands between
+      // this page and the landing; the stub applies it like a browser would.
+      replaceState: (_state, _unused, url) => {
+        historyReplaced.push([url])
+        const mark = typeof url === 'string' ? url.indexOf('#') : -1
+        location.hash = mark >= 0 ? url.slice(mark) : ''
+      },
+    },
   }
-  const location = { hash: '', href: '', origin: 'http://127.0.0.1:9896' }
+  const location = { hash: '', href: '', origin: 'http://127.0.0.1:9896', pathname: '/bot', search: '' }
   // Timers are collected instead of fired, so a test can choose the moment: the
   // page arms one timeout per rpc (its own give-up) and one per toast.
   const timers = []
@@ -493,6 +513,7 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
     document,
     location,
     navigations,
+    historyReplaced,
     window,
     classes,
     store,
@@ -522,7 +543,7 @@ test('an approval draws its two buttons only when the Host says the phone may an
       : {}),
   })
   await page.settle()
-  const html = page.node('bpList').innerHTML
+  const html = page.node('bpPending').innerHTML
   assert.match(html, /data-approve="allow" data-id="a-1"/, '允许 carries the card id')
   assert.match(html, /data-approve="reject" data-id="a-1"/, '拒绝 carries the same id')
   assert.match(html, /Chief · bash/, 'the card names who asked and for what')
@@ -543,8 +564,8 @@ test('a card the desktop must answer gets no buttons', async () => {
       : {}),
   })
   await page.settle()
-  assert.match(page.node('bpList').innerHTML, /这条要在电脑上回答/)
-  assert.ok(!page.node('bpList').innerHTML.includes('data-approve='), 'the phone draws no button it cannot answer')
+  assert.match(page.node('bpPending').innerHTML, /这条要在电脑上回答/)
+  assert.ok(!page.node('bpPending').innerHTML.includes('data-approve='), 'the phone draws no button it cannot answer')
 })
 
 test('an answer the Host already closed hands the button back and says why', async () => {
@@ -570,9 +591,11 @@ test('a message typed here goes out as that session, in the shape the landing us
   page.location.hash = '#s=s-chief&k=bot&t=' + encodeURIComponent('Chief')
   page.fireWindow('hashchange')
   await page.settle()
-  assert.equal(page.node('bpChatTitle').textContent, 'Chief')
+  assert.equal(page.node('bpTitle').textContent, 'Chief')
   assert.equal(page.node('bpComposer').hidden, false, '进入对话就把输入条放出来')
   assert.equal(page.node('bpList').hidden, true, '并把列表让位')
+  assert.equal(page.node('bpBack').hidden, false, '会话里才有返回')
+  assert.equal(page.node('bpSend').disabled, false, '发送键随会话启用——真机的键在壳里就是灰的，启用只能发生在打开时')
 
   page.node('bpPrompt').value = '在吗'
   page.click('bpSend', {})
@@ -583,6 +606,9 @@ test('a message typed here goes out as that session, in the shape the landing us
   assert.deepEqual(sent.payload.content, [{ type: 'text', text: '在吗' }])
   assert.equal(typeof sent.payload.clientTimeZone, 'string')
   assert.equal(page.node('bpPrompt').value, '', '发出去之后输入框才清空')
+  // The optimistic row: the words were on screen before the round trip answered,
+  // and they stay until the Host shows the message itself.
+  assert.match(page.node('bpMsgs').innerHTML, /class="bp-msg user is-pending">在吗</, 'the send paints at once, marked pending')
 })
 
 test('the transcript keeps what was said and drops the machinery', async () => {
@@ -608,7 +634,130 @@ test('the transcript keeps what was said and drops the machinery', async () => {
   assert.ok(!msgs.includes('先想一想'), '思考也不进')
 })
 
-test('the back key steps out of a chat, then out of the page to the landing', async () => {
+// ---------------------------------------------------------------------------
+// 设计底座（用户 2026-10-27）：列表渲染只进槽位、返回只在会话里、时间与状态
+// 和 landing 同一套哲学 —— 有数据就显示，没有就不占位。
+// ---------------------------------------------------------------------------
+
+test('the roster paints into the slots it was handed, never over the page itself', async () => {
+  const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? teamWith() : {}) })
+  await page.settle()
+  assert.equal(page.node('bpList').innerHTML, '', 'the scroll box itself is never rewritten — #bpMsgs lives inside it')
+  assert.match(page.node('bpRoomsList').innerHTML, /data-open="room" data-id="r-flow"/, 'the group row lands in its slot')
+  assert.match(page.node('bpMembersList').innerHTML, /data-sid="s-chief"/, 'the member row lands in its slot')
+  assert.equal(page.node('bpRoomsCount').textContent, '1')
+  assert.equal(page.node('bpMembersCount').textContent, '1')
+  assert.equal(page.node('bpMsgs').hidden, true, 'the chat half survived the paint: the old bug destroyed it')
+})
+
+test('a working bot and a talking group say so on their rows', async () => {
+  const team = teamWith()
+  team.bots[0].working = { tool: 'bash' }
+  team.rooms[0].running = true
+  const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? team : {}) })
+  await page.settle()
+  const members = page.node('bpMembersList').innerHTML
+  assert.match(members, /正在 bash/, 'the member row names what the Bot is running')
+  assert.match(members, /is-busy/, 'the avatar carries the busy mark')
+  const rooms = page.node('bpRoomsList').innerHTML
+  assert.match(rooms, /讨论中/, 'the group row says a turn is running there')
+  assert.match(rooms, /is-busy/, 'the group chip carries the busy mark')
+})
+
+test('a waiting bot gets the amber tag, an idle bot keeps its role alone', async () => {
+  const team = teamWith()
+  team.bots[0].waiting = true
+  const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? team : {}) })
+  await page.settle()
+  assert.match(page.node('bpMembersList').innerHTML, /等模型/, 'the greeting-on-hold state is named')
+})
+
+test('a message carries the same three-tier clock the landing stamps', async () => {
+  const now = new Date()
+  const at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 30).getTime()
+  const page = fakeBrowser({
+    answer: (method) => (method === 'bot.team' ? teamWith() : method === 'session.history'
+      ? { events: [saidByUser('在吗', 2, at), saidByBot('在', 3, at)], hasMore: false }
+      : {}),
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle()
+  const msgs = page.node('bpMsgs').innerHTML
+  assert.match(msgs, /class="bp-tail">10:30</, 'today prints the time of day, like the landing')
+  assert.ok((msgs.match(/class="bp-tail">/g) || []).length === 2, 'both sides of the chat carry the stamp')
+})
+
+test('a divider stamps when the earlier part began', async () => {
+  const now = new Date()
+  const at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 5).getTime()
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') return { events: [saidByBot('新的一段', 9)], hasMore: false }
+      if (method === 'bot.earlier') return { items: [{ kind: 'divider', time: at }, { kind: 'bot', text: '旧的一段' }], cursor: null }
+      return {}
+    },
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle()
+  const msgs = page.node('bpMsgs').innerHTML
+  assert.match(msgs, /09:05 · 更早的记录/, 'the divider prints the part boundary like the landing does')
+})
+
+test('a send that fails takes its optimistic row back and says why', async () => {
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') return { events: [saidByBot('在', 3)], hasMore: false }
+      if (method === 'session.prompt') return { ok: false, error: '队列满了', code: 'bot/busy' }
+      return {}
+    },
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle()
+  page.node('bpPrompt').value = '在吗'
+  page.click('bpSend', {})
+  await page.settle()
+  const msgs = page.node('bpMsgs').innerHTML
+  assert.ok(!msgs.includes('is-pending'), 'the failed optimistic row came off the screen')
+  assert.ok(!msgs.includes('在吗'), 'and it did not stay as a plain row either')
+  assert.match(page.node('bpToast').textContent, /没发出去/)
+})
+
+test('the Host showing the message takes over from the optimistic row', async () => {
+  let historyTurn = 0
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') {
+        historyTurn += 1
+        return historyTurn < 2
+          ? { events: [], hasMore: false }
+          : { events: [saidByUser('在吗', 9, Date.now())], hasMore: false }
+      }
+      return {}
+    },
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle()
+  page.node('bpPrompt').value = '在吗'
+  page.click('bpSend', {})
+  await page.settle()
+  const msgs = page.node('bpMsgs').innerHTML
+  assert.match(msgs, /在吗/, 'the words are on screen — optimistic first, then the Host row')
+  assert.ok(!msgs.includes('is-pending'), 'the Host row took over, so nothing stays pending')
+  assert.equal((msgs.match(/在吗/g) || []).length, 1, 'and the optimistic copy did not double with the real row')
+})
+
+test('the back key steps out of a chat, and the list itself carries no back', async () => {
   const page = fakeBrowser({
     answer: (method) => (method === 'bot.team' ? teamWith() : { events: [] }),
   })
@@ -617,21 +766,26 @@ test('the back key steps out of a chat, then out of the page to the landing', as
   page.fireWindow('hashchange')
   await page.settle()
   assert.equal(page.node('bpComposer').hidden, false, 'a chat is open')
+  assert.equal(page.node('bpBack').hidden, false, 'the back key belongs to the chat')
 
   page.click('bpBack')
-  assert.equal(page.location.hash, '', 'first press only steps back to the list')
-  assert.deepEqual(page.navigations, [], 'and does not leave the page yet')
+  assert.equal(page.location.hash, '', 'the one press steps back to the list')
+  assert.equal(page.historyReplaced.length, 1, 'the clear is a replace — no entry may land between this page and the landing')
+  assert.deepEqual(page.navigations, [], 'and does not leave the page')
+  page.fireWindow('hashchange')
+  await page.settle()
+  assert.equal(page.node('bpBack').hidden, true, 'the list has no back: from a chat back to the list, and that is all')
+  assert.equal(page.node('bpHome').hidden, false, 'the way out of this page is the corner button')
 
   page.click('bpBack')
-  assert.deepEqual(page.navigations, ['back'], 'second press leaves, the way it came in')
-  assert.equal(page.location.href, '', 'a history entry behind the page means no hard redirect')
+  assert.deepEqual(page.navigations, [], 'a back press on the list does nothing — the key is not even visible')
 })
 
 test('a page opened with nothing behind it still finds the way home', async () => {
   const page = fakeBrowser()
   await page.settle()
   page.window.history.length = 1
-  page.click('bpBack')
+  page.click('bpHome', { preventDefault() {} })
   assert.deepEqual(page.navigations, [], 'there is nothing to go back to')
   assert.equal(page.location.href, '/', 'so it names the landing itself')
 })
@@ -657,8 +811,13 @@ test('a page opened from another site goes to the landing, not back to that site
 // ---------------------------------------------------------------------------
 
 /** @param {string} text @param {number} [seq] the Host's own event number, used to page backwards */
-function saidByBot(text, seq) {
-  return { event: { type: 'assistant/message', seq, data: { message: { content: [{ type: 'text', text }] } } } }
+function saidByBot(text, seq, time) {
+  return { event: { type: 'assistant/message', seq, data: { message: { messageTime: time, content: [{ type: 'text', text }] } } } }
+}
+
+/** A user row with a Host timestamp, the field the transcript clock prints. */
+function saidByUser(text, seq, time) {
+  return { event: { type: 'user/message', seq, data: { message: { source: { kind: 'user' }, messageTime: time, content: [{ type: 'text', text }] } } } }
 }
 
 /** One page of earlier items: n Bot messages, oldest last (the Host pages newest-first). */
@@ -984,9 +1143,9 @@ test('the last roster is on screen before the team read returns, and carries no 
   })
   await page.settle(20)
 
-  assert.ok(page.node('bpList').innerHTML.includes('Chief'),
+  assert.ok(page.node('bpMembersList').innerHTML.includes('Chief'),
     'the roster the phone drew last time is painted at once, before any read returns')
-  assert.ok(!page.node('bpList').innerHTML.includes('data-approve'),
+  assert.ok(!page.node('bpPending').innerHTML.includes('data-approve'),
     'no 允许/拒绝 button comes back from a copy — a stale card must not be answerable')
 })
 
@@ -1154,10 +1313,10 @@ test('the Bot page uses PIN-code style transition card with DS Pocket heading wh
   assert.match(html, /<div class="card"><div class="logo">/, 'reuses the PIN code page card and logo layout')
   assert.match(html, /<h1>DS Pocket<\/h1>/, 'carries the DS Pocket heading')
   assert.match(html, /class="boot-steps show"/, 'carries the PIN boot steps container')
-  assert.match(html, /正在连接服务器/, 'includes step 1')
-  assert.match(html, /正在同步工作区/, 'includes step 2')
-  assert.match(html, /正在同步会话列表/, 'includes step 3')
-  assert.match(html, /正在准备页面/, 'includes step 4')
+  assert.match(html, /读取工作区/, 'step 1 reads what the landing reads first')
+  assert.match(html, /读取会话列表/, 'step 2 reads the session list')
+  assert.match(html, /读取会话消息/, 'step 3 reads the messages')
+  assert.match(html, /正在准备页面/, 'step 4 prepares the page')
 })
 
 test('the Pocket page uses PIN-code style transition card with DSBOT heading when switching to Bot', () => {
@@ -1166,8 +1325,10 @@ test('the Pocket page uses PIN-code style transition card with DSBOT heading whe
   assert.match(html, /<div class="card"><div class="logo">/, 'reuses the PIN code page card and logo layout')
   assert.match(html, /<h1>DSBOT<\/h1>/, 'carries the DSBOT heading')
   assert.match(html, /class="boot-steps show"/, 'carries the PIN boot steps container')
-  assert.match(html, /正在连接服务器/, 'includes step 1')
-  assert.match(html, /正在准备页面/, 'includes step 4')
+  assert.match(html, /读取 BOT 列表/, 'step 1 reads what the Bot page reads first')
+  assert.match(html, /读取 BOT 消息/, 'step 2 reads the bot conversations')
+  assert.match(html, /读取群聊/, 'step 3 reads the groups')
+  assert.match(html, /正在准备页面/, 'step 4 prepares the page')
 })
 
 test('the Bot page viewport and typography prevent mobile WebView zoom-out scaling regression', () => {

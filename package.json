@@ -1,7 +1,7 @@
 {
   "name": "dsh-pocket-glide",
   "version": "0.4.58",
-  "description": "Pocket DSH — the phone connection plugin (pocket bridge) for DSH. The bridge runs inside the host process, not as a separate server and not as a desktop mirror: pair by QR/PIN, read sessions and history, send messages, stream replies. LAN listener plus an optional Cloudflare quick tunnel.",
+  "description": "Pocket DSH — the light mobile companion plugin for DeepSeek Harness (DSH). Pair by QR, then tap a push notification to jump straight back in: instant open, optimistic sends, smooth streaming, permission approvals and queued prompts on the go — plus a full phone window onto your DS Bot team (member chats, group rooms, tool approvals). Runs in-process, dials out via a Cloudflare quick tunnel that heals itself after a restart.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
