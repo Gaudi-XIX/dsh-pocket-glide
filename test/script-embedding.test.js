@@ -74,8 +74,9 @@ test('the split document escapes it too', () => {
   })
 
   assert(html.includes('\\u003c/script'))
-  assert.equal((html.match(/<script/g) ?? []).length, 3, 'boot + asset + bootstrap, nothing more')
-  assert.equal((html.match(/<\/script>/g) ?? []).length, 3)
+  // 四段：boot + 外链 asset + 文档级提问卡 markup（head）+ bootstrap。
+  assert.equal((html.match(/<script/g) ?? []).length, 4, 'boot + asset + card markup + bootstrap, nothing more')
+  assert.equal((html.match(/<\/script>/g) ?? []).length, 4)
 })
 
 test('the pairing page escapes the locale payload the same way', () => {

@@ -22,10 +22,15 @@
 // 不进「跳过/提交」那一行（P-14），且它在 HEAD 上不存在（RED）。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mobilePageAssets } from '../lib/pages.js'
+import { mobilePageAssets, renderMobilePage } from '../lib/pages.js'
 import { preFixBaseline } from './helpers/pre-fix-baseline.mjs'
 
 const { css, js } = mobilePageAssets({ locale: 'zh' })
+// 2026-10-28：提问卡的 markup 从主脚本搬到了文档级脚本（一份源码喂两页，而主脚本的字节预算
+// 容不下它）。P-9/P-14 看的是「出货到页面上的渲染源文本」，不是它住在哪一段 <script> 里，
+// 所以从这里取文档里那一份 —— 取到的仍是 ship 时的字节（stripAssetComments 之后）。
+const markup = (renderMobilePage({ locale: 'zh' }).match(/<script>([\s\S]*?)<\/script>/) || ['', ''])[1]
+assert.notEqual(markup.indexOf('<div class="question-shell'), -1, 'the card markup ships in the document')
 
 // The page's OWN label table, so every copy asserted below is what the phone renders
 // (house pattern from error-visibility.test.js — a hand-copied table drifts).
@@ -226,9 +231,9 @@ test('P-9 the rendered bar puts 跳过 directly against the submit button', () =
   // No gap, no separator, both at the right end of the row, and the left-hand slot is
   // cancel/previous. On a 390px handset that is a two-button cluster whose labels are
   // three characters apart in meaning and one tap apart in position.
-  const start = js.indexOf('<div class="question-actions">')
+  const start = markup.indexOf('<div class="question-actions">')
   assert.notEqual(start, -1, 'the action bar must render from a single literal')
-  const bar = js.slice(start, start + 700)
+  const bar = markup.slice(start, start + 700)
   const skipAt = bar.indexOf('data-question-action="skip"')
   const contAt = bar.indexOf('data-question-action="continue"')
   assert.ok(skipAt >= 0 && contAt > skipAt, 'both buttons render, skip first')
@@ -310,12 +315,12 @@ test('P-13b a collapsed sheet still answers when the operator comes back to it',
 })
 
 test('P-14 the toggle sits in the header, so the skip/submit cluster is untouched', () => {
-  const shellAt = js.indexOf('<div class="question-shell')
-  const barAt = js.indexOf('<div class="question-actions">')
-  const toggleAt = js.indexOf('data-question-action="collapse"')
+  const shellAt = markup.indexOf('<div class="question-shell')
+  const barAt = markup.indexOf('<div class="question-actions">')
+  const toggleAt = markup.indexOf('data-question-action="collapse"')
   assert.ok(shellAt >= 0 && toggleAt > shellAt && toggleAt < barAt, 'the toggle renders above the action bar')
   // P-9 的全部意义就是「跳过挨着提交」在这一行的右端；往那一行再加控件等于把这条误点重新打开。
-  assert.equal(js.slice(barAt, barAt + 700).includes('collapse'), false, 'the action bar gains no control')
+  assert.equal(markup.slice(barAt, barAt + 700).includes('collapse'), false, 'the action bar gains no control')
   const collapseBranch = js.indexOf("if(action==='collapse')")
   assert.ok(collapseBranch >= 0 && collapseBranch < js.indexOf("if(action==='continue')"),
     'the collapse branch is decided before any settling branch')

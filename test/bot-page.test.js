@@ -266,7 +266,7 @@ test('the roster answer is cut down to what the page draws', async () => {
           mainBotIds: ['chief'],
           bots: [{ id: 'chief', name: 'Chief', role: 'chief', sessionId: 's-chief', parts: ['s-hidden'], waiting: false }],
           rooms: [{ id: 'r-1', name: 'Flow', preview: 'hi', members: [{ id: 'chief', name: 'Chief' }], parts: ['s-hidden'] }],
-          questions: { 's-hidden': { text: 'the question text stays off the wire' } },
+          questions: { chief: { id: 'q-1', question: 'pick one', options: [{ label: 'A' }, { label: 'B' }] } },
           work: {
             approvals: [
               { id: 'a-1', botId: 'chief', tool: 'bash', reason: 'needs a shell', detail: { text: 'ls', code: 'E1' }, at: 1, answerable: true }
@@ -299,7 +299,22 @@ test('the roster answer is cut down to what the page draws', async () => {
     assert.deepEqual(team.value.bots.map((bot) => bot.id), ['chief'], 'members still arrive')
     assert.deepEqual(team.value.rooms.map((room) => room.id), ['r-1'], 'groups still arrive')
     assert.equal(team.value.mainBotIds[0], 'chief')
-    assert.deepEqual(team.value.questions, { count: 1 }, 'only the count of open questions travels')
+    // The count stays, and each open question now travels with what the phone
+    // needs to ask it: whose question it is, which chat answers it, the card id
+    // the Host matches the answer against, and the question with its options.
+    // The rest of the Host's state still stays behind.
+    assert.deepEqual(team.value.questions, {
+      count: 1,
+      items: [{
+        botId: 'chief',
+        sessionId: 's-chief',
+        questionId: 'q-1',
+        question: 'pick one',
+        options: [{ label: 'A' }, { label: 'B' }],
+        multiSelect: false,
+        allowCustom: false
+      }]
+    }, 'the open question travels with the Bot, the chat and its options')
     assert.equal(team.value.work.approvals[0].answerable, true, 'and the approvals stay answerable')
     assert.equal(team.value.work.approvals[0].detail.text, 'ls')
     // The live work map travels as what the rows draw: what the Bot is doing
@@ -759,6 +774,27 @@ function teamWith(...approvals) {
   }
 }
 
+/**
+ * 一张待答提问，连问它的那个成员一起。形状就是桥送来的那一条（`botQuestions`）：
+ * 提问住在 ds-bot 自己的 state 里，所以谁问的、在哪个会话答、卡号是多少都随它来。
+ */
+function teamWithQuestion(over = {}) {
+  const team = teamWith()
+  team.questions = {
+    count: 1,
+    items: [Object.assign({
+      botId: 'chief',
+      sessionId: 's-chief',
+      questionId: 'q-1',
+      question: '要走哪条路？',
+      options: [{ label: '甲' }, { label: '乙' }],
+      multiSelect: false,
+      allowCustom: false,
+    }, over)],
+  }
+  return team
+}
+
 test('an approval draws its two buttons only when the Host says the phone may answer', async () => {
   const page = fakeBrowser({
     answer: (method) => (method === 'bot.team'
@@ -806,6 +842,167 @@ test('an answer the Host already closed hands the button back and says why', asy
   assert.equal(button.disabled, false, '没答上就把键还回去')
   assert.match(page.node('bpToast').textContent, /没答上：this card is gone/)
   assert.deepEqual(page.calls.find((call) => call.method === 'bot.approval').payload, { id: 'a-1', choice: 'reject' })
+})
+
+// ---- 提问卡（BOT 页）--------------------------------------------------------
+// 用户 2026-10-27：「BOT 的选择栏只能看到提示，也不知道是谁要选择，也不知道要选择
+// 什么，而且更加点不了。」下面四条按这句话的四段逐个钉住：谁在问、问什么、点得动、
+// 答得上（外加「关掉」不许退化成空答一张卡）。
+
+/** 点列表里那一行（`data-open` 分支需要行上带三个属性）。 */
+function clickQuestionRow(page) {
+  const row = {
+    getAttribute: (name) => ({
+      'data-open': 'bot',
+      'data-id': 'chief',
+      'data-sid': 's-chief',
+      'data-title': 'Chief',
+    })[name] ?? null,
+  }
+  page.click('bpList', { target: { closest: (selector) => (selector === '[data-open]' ? row : null) } })
+}
+
+/** 点卡上的某样东西：选项、提交、关闭。 */
+function clickCard(page, selector, attr, value) {
+  const target = { getAttribute: (name) => (name === attr ? value : null) }
+  page.click('bpQuestion', { target: { closest: (sel) => (sel === selector ? target : null) } })
+}
+
+/** 列表页 → 那个 Bot 的会话（`bpQuestion` 有内容的地方）。 */
+async function openQuestionChat(page) {
+  await page.settle(20)
+  clickQuestionRow(page)
+  await page.settle(5)
+  page.fireWindow('hashchange')
+  await page.settle(60)
+}
+
+test('an open question is a row that names the asker, the question and the chat that answers it', async () => {
+  const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? teamWithQuestion() : {}) })
+  await page.settle()
+  const html = page.node('bpPending').innerHTML
+  assert.match(html, /data-open="bot"/, '这一行点得动（走的是列表里已有那个打开分支）')
+  assert.match(html, /data-sid="s-chief"/, '它开的是能回答这个问题的那个会话')
+  assert.match(html, /Chief · 需要你的回答/, '先说清是谁要选择')
+  assert.match(html, /要走哪条路？/, '再说清要选择什么')
+  assert.ok(!/个问题等你回答/.test(html), '不再只剩一句数字')
+})
+
+test('opening that row lands on the card: the question, its options and a way to send', async () => {
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWithQuestion()
+      if (method === 'session.history') return { events: [saidByBot('在的', 9)] }
+      return {}
+    },
+  })
+  await openQuestionChat(page)
+  const card = page.node('bpQuestion')
+  assert.equal(page.node('bpList').hidden, true, '先进了会话')
+  assert.equal(card.hidden, false, '会话里摆出了这张卡')
+  assert.match(card.innerHTML, /要走哪条路？/, '题干在卡上')
+  assert.match(card.innerHTML, /data-option-index="0"/, '选项可点')
+  assert.match(card.innerHTML, /data-option-index="1"/, '不止一个选项')
+  assert.match(card.innerHTML, /data-question-action="continue"/, '有提交键')
+  assert.match(card.innerHTML, /data-question-action="cancel"/, '也有把它关掉的键')
+  assert.equal(card.innerHTML.includes('question-custom'), false,
+    '这一页没有自定义输入（落地页才有），所以卡上不画它')
+})
+
+test('tapping an option marks it, and sending hands the Host the option text itself', async () => {
+  // 宿主答掉一条就从自己的 state 里删掉它（ds-bot `answer-question` 先 delete 再
+  // 交给 Agent），所以下一次 bot.team 读回来时这条已经不在——替身照这个来。
+  let held = teamWithQuestion()
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return held
+      if (method === 'session.history') return { events: [] }
+      if (method === 'bot.answer') { held = teamWith(); return {} }
+      return {}
+    },
+  })
+  await openQuestionChat(page)
+  clickCard(page, '[data-option-index]', 'data-option-index', '1')
+  await page.settle()
+  assert.match(page.node('bpQuestion').innerHTML, /question-option selected[^>]*>\s*<span class="option-control">/,
+    '选中的那项有选中态')
+
+  clickCard(page, '[data-question-action]', 'data-question-action', 'continue')
+  await page.settle()
+  assert.deepEqual(
+    page.calls.find((call) => call.method === 'bot.answer').payload,
+    { sessionId: 's-chief', questionId: 'q-1', answer: { selected: ['乙'] } },
+    '交回宿主的是选项原文（ds-bot 用 label 比对），不是下标'
+  )
+  assert.equal(page.node('bpQuestion').hidden, true, '答完卡就收起来')
+  assert.equal(page.node('bpToast').textContent, '已提交')
+})
+
+test('sending with nothing chosen is refused here, not left to the Host', async () => {
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWithQuestion()
+      if (method === 'session.history') return { events: [] }
+      return {}
+    },
+  })
+  await openQuestionChat(page)
+  clickCard(page, '[data-question-action]', 'data-question-action', 'continue')
+  await page.settle()
+  assert.equal(page.calls.some((call) => call.method === 'bot.answer'), false,
+    '空答案在 ds-bot 那边只会被拒（Nothing to send），所以这里不发')
+  assert.equal(page.node('bpToast').textContent, '选一个再提交')
+  assert.equal(page.node('bpQuestion').hidden, false, '卡还在，等着真的选一个')
+})
+
+test('closing the card asks the Host to drop the question instead of sending an empty answer', async () => {
+  let held = teamWithQuestion()
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return held
+      if (method === 'session.history') return { events: [] }
+      if (method === 'bot.dismiss') { held = teamWith(); return {} }
+      return {}
+    },
+  })
+  await openQuestionChat(page)
+  clickCard(page, '[data-question-action]', 'data-question-action', 'cancel')
+  await page.settle()
+  assert.deepEqual(page.calls.find((call) => call.method === 'bot.dismiss').payload, { sessionId: 's-chief' },
+    '关掉＝让宿主把这条提问撤掉（dismiss-question）')
+  assert.equal(page.calls.some((call) => call.method === 'bot.answer'), false, '不是拿空答案去顶')
+  assert.equal(page.node('bpQuestion').hidden, true)
+  assert.equal(page.node('bpToast').textContent, '已跳过')
+})
+
+test('a multi-select card keeps every chosen option', async () => {
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWithQuestion({ multiSelect: true })
+      if (method === 'session.history') return { events: [] }
+      return {}
+    },
+  })
+  await openQuestionChat(page)
+  clickCard(page, '[data-option-index]', 'data-option-index', '0')
+  await page.settle()
+  clickCard(page, '[data-option-index]', 'data-option-index', '1')
+  await page.settle()
+  clickCard(page, '[data-question-action]', 'data-question-action', 'continue')
+  await page.settle()
+  assert.deepEqual(page.calls.find((call) => call.method === 'bot.answer').payload.answer, { selected: ['甲', '乙'] })
+})
+
+test('a question for another chat never shows up in this one', async () => {
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWithQuestion({ sessionId: 's-elsewhere' })
+      if (method === 'session.history') return { events: [] }
+      return {}
+    },
+  })
+  await openQuestionChat(page)
+  assert.equal(page.node('bpQuestion').hidden, true, '别人的提问不摆到这一页上')
 })
 
 test('a message typed here goes out as that session, in the shape the landing uses', async () => {
@@ -1469,6 +1666,16 @@ test('the copy kept for the next open carries the rows and no approval card', as
   assert.ok(!JSON.stringify(kept).includes('a-1'), 'and no card id survives in it')
 })
 
+test('the copy kept for the next open keeps the question count and never the card', async () => {
+  const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? teamWithQuestion() : {}) })
+  await page.settle()
+
+  const kept = JSON.parse(page.store.get('pocketBotTeam'))
+  assert.deepEqual(kept.questions, { count: 1 }, 'the count travels in the copy')
+  assert.ok(!JSON.stringify(kept).includes('要走哪条路？'),
+    'the question itself does not: a recalled card would invite an answer the Host has already closed')
+})
+
 test('the hairline stops once the team read lands', async () => {
   const page = fakeBrowser({ answer: () => ({}) })
   assert.ok(!page.classes.has('bp-ready'), 'a read is still in flight at the first paint')
@@ -1761,4 +1968,14 @@ test('the floating action buttons on Pocket and Bot pages share identical circul
   // Both anchors are marked draggable="false"
   assert.match(botHtml, /id="bpHome"[^>]*draggable="false"/)
   assert.match(pocketHtml, /id="botFab"[^>]*draggable="false"/)
+})
+
+// 2026-10-28 闸门二退回项：共用卡在 pages.js 里无条件渲染「跳过」，而本页的委托只接了
+// continue 与 cancel ⇒ 那枚按钮点了零反应，报告却写着「可跳过」。它漏在「P-9 只守 markup
+// 结构、守不到事件绑定」这个缺口上。这条钉住绑定本身：跳过必须走到撤卡那条路。
+test('the shared card’s skip control is wired, not a dead button', () => {
+  assert.match(BOT_PAGE_JS, /name === 'skip'\)\s*dismissQuestion\(\)/,
+    'skip must reach dismissQuestion: the card renders that control unconditionally')
+  assert.match(BOT_PAGE_JS, /name === 'cancel'\)\s*dismissQuestion\(\)/, 'the close key still closes')
+  assert.match(BOT_PAGE_JS, /name === 'continue'\)\s*submitQuestion\(\)/, 'submit still submits')
 })

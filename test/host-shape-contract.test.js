@@ -44,7 +44,8 @@ function extractFunction(source, name) {
   assert.fail(`unbalanced braces after ${name}`)
 }
 
-const botTeamView = vm.runInNewContext(`(${extractFunction(BRIDGE_SOURCE, 'botTeamView')})`, { isRecord })
+const botQuestions = vm.runInNewContext(`(${extractFunction(BRIDGE_SOURCE, 'botQuestions')})`, { isRecord })
+const botTeamView = vm.runInNewContext(`(${extractFunction(BRIDGE_SOURCE, 'botTeamView')})`, { isRecord, botQuestions })
 // Objects built inside that context carry another realm's prototypes, so deepStrictEqual
 // would fail on identity alone. The phone only ever sees JSON, so compare JSON.
 const plain = (value) => JSON.parse(JSON.stringify(value))
@@ -57,7 +58,18 @@ const stateAnswer = () => ({
   mainBotIds: ['b1'],
   bots: [{ id: 'b1', name: 'Ops', role: 'editor', model: 'deepseek/x', sessionId: 's1', parts: ['s0'] }],
   rooms: [{ id: 'r1', name: 'Review', preview: 'Ops：看这里', members: [{ id: 'b1', name: 'Ops' }] }],
-  questions: { s1: { callId: 'c1' } },
+  // questions is a Record keyed by agent id (channel.js passes state.questions through
+  // whole); the bridge hands the phone both the count and the cards, because a Bot card
+  // never reaches the Host's user-questions event the landing page answers.
+  questions: {
+    b1: {
+      id: 'q1',
+      callId: 'c1',
+      question: '要走哪条路？',
+      options: [{ label: '甲' }, { label: '乙', description: '备选' }],
+      multiSelect: false,
+    },
+  },
   work: {
     bots: { b1: { since: 1, tool: 'bash', target: 'bridge.js' } },
     rooms: { r1: [{ botId: 'b1', since: 2, tool: 'grep', speaking: true }] },
@@ -142,7 +154,23 @@ test('botTeamView turns a ds-bot shaped state answer into the phone view', () =>
     running: true,
     members: [{ id: 'b1', name: 'Ops' }],
   })
-  assert.deepEqual(plain(view.questions), { count: 1 })
+  // The card travels with the roster: the key is the agent id (botId), the session id is
+  // resolved from that roster (that is what the answer route wants), and the card's own
+  // fields are copied verbatim — label text included, because ds-bot matches answers by it.
+  assert.deepEqual(plain(view.questions), {
+    count: 1,
+    items: [
+      {
+        botId: 'b1',
+        sessionId: 's1',
+        questionId: 'q1',
+        question: '要走哪条路？',
+        options: [{ label: '甲' }, { label: '乙', description: '备选' }],
+        multiSelect: false,
+        allowCustom: false,
+      },
+    ],
+  })
   assert.deepEqual(plain(view.work.approvals[0]), {
     id: 'a1',
     sessionId: 's1',

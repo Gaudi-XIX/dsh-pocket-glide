@@ -21,7 +21,8 @@ test('mobile page with a nonce tags every inline script', () => {
   const html = renderMobilePage({ locale: 'zh', boot, initialChat: true, nonce })
   const tags = openingScriptTags(html)
 
-  assert.equal(tags.length, 2, 'boot payload + app script')
+  // 三段：boot payload、文档级提问卡 markup（head 里，主脚本渲染时要用）、主脚本。
+  assert.equal(tags.length, 3, 'boot payload + card markup + app script')
   for (const tag of tags) {
     assert.match(tag, new RegExp(` nonce="${nonce}"`), `${tag} carries the nonce`)
   }
@@ -40,7 +41,7 @@ test('split mobile page keeps extraction working and nonces the bootstrap', () =
   assert.match(html, new RegExp(`<script nonce="${nonce}">\\(function\\(\\)\\{`), 'the bootstrap is nonced')
   assert.match(html, new RegExp(`<script nonce="${nonce}">window\\.__POCKET_BOOT__=`), 'the boot payload is nonced')
   assert.doesNotMatch(html, /<style>/, 'the split still removes the inline style block')
-  assert.equal((html.match(/nonce/g) ?? []).length, 2, 'boot payload + bootstrap only')
+  assert.equal((html.match(/nonce/g) ?? []).length, 3, 'boot payload + card markup + bootstrap only')
 })
 
 test('mobile assets stay nonce-free', () => {

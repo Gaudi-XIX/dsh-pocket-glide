@@ -446,18 +446,35 @@ test('L: the bridge-wide 500 returns a generic body, never the raw error', async
 // WP-SEC-BRIDGE B1 — §5 已核对安全项，钉成断言而不是注释
 // ---------------------------------------------------------------------------
 
+// The bridge's own methods: the ones it answers itself instead of translating to a Host
+// endpoint. bot.answer / bot.dismiss land on ds-bot's /api/bot (answer-question /
+// dismiss-question), which is a different surface from the Harness endpoint table.
+const BRIDGE_OWN_METHODS = [
+  'session.history',
+  'session.tails',
+  'workspace.list',
+  'bot.earlier',
+  'bot.team',
+  'bot.approval',
+  'bot.update',
+  'bot.answer',
+  'bot.dismiss',
+]
+
 test('B1: the allowlist does not grow, and every entry is still a named route', async () => {
   const { RPC_ALLOWLIST, HARNESS_ENDPOINTS } = await import('../lib/constants.js')
-  // Seven more entries than the Host routes would need are the bridge's own
+  // Nine more entries than the Host routes would need are the bridge's own
   // reads and the answers it forwards (session.history, session.tails,
-  // workspace.list, bot.earlier, bot.team, bot.approval, bot.update); the set is closed,
-  // not open-ended.
-  assert.equal(RPC_ALLOWLIST.size, Object.keys(HARNESS_ENDPOINTS).length + 7, 'no silent method added')
+  // workspace.list, bot.earlier, bot.team, bot.approval, bot.update, and the
+  // Bot question pair bot.answer / bot.dismiss — those two go to /api/bot's
+  // answer-question / dismiss-question, not to a Host endpoint); the set is
+  // closed, not open-ended.
+  assert.equal(RPC_ALLOWLIST.size, Object.keys(HARNESS_ENDPOINTS).length + 9, 'no silent method added')
   assert.ok(!RPC_ALLOWLIST.has('session.delete'), 'destructive methods stay off the phone')
   assert.ok(!RPC_ALLOWLIST.has('system.exec'), 'no host-level escape hatch')
   for (const method of RPC_ALLOWLIST) {
     assert.ok(
-      HARNESS_ENDPOINTS[method] || method === 'session.history' || method === 'session.tails' || method === 'workspace.list' || method === 'bot.earlier' || method === 'bot.team' || method === 'bot.approval' || method === 'bot.update' || method.startsWith('interaction.'),
+      HARNESS_ENDPOINTS[method] || BRIDGE_OWN_METHODS.includes(method) || method.startsWith('interaction.'),
       `${method} has a translation`
     )
   }
