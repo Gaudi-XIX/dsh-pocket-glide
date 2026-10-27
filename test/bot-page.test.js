@@ -412,7 +412,7 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
   // floating buttons can trade places, and it drops `bp-ready`'s hairline once
   // a read lands. Both are assertions now, so the classes are recorded rather
   // than thrown away.
-  const classes = new Set(['bp-list'])
+  const classes = new Set(['bp-list', 'bp-loading', 'bp-busy'])
   const body = {
     classList: {
       add: (name) => classes.add(name),
@@ -519,6 +519,7 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
     store,
     settle: async (rounds = 10) => { for (let i = 0; i < rounds; i += 1) await new Promise((resolve) => setImmediate(resolve)) },
     fireWindow: (type) => windowListeners.get(type)(),
+    fireDocument: (type) => documentListeners.get(type)(),
     /** Fire every timeout the page has armed so far (the page's own give-up). */
     fireTimers: () => { for (const fn of timers.splice(0)) fn() },
     click: (id, event) => nodeListeners.get(id + ':click')(event),
@@ -1165,8 +1166,10 @@ test('the copy kept for the next open carries the rows and no approval card', as
 test('the hairline stops once the team read lands', async () => {
   const page = fakeBrowser({ answer: () => ({}) })
   assert.ok(!page.classes.has('bp-ready'), 'a read is still in flight at the first paint')
+  assert.ok(page.classes.has('bp-busy'), 'the busy mark drives the hairline animation')
   await page.settle()
   assert.ok(page.classes.has('bp-ready'), 'and the progress hairline goes away when it lands')
+  assert.ok(!page.classes.has('bp-busy'), 'the animation class itself is removed — ready only hides the skeleton')
 })
 
 test('the hairline stops when the read fails, not only when it succeeds', async () => {
@@ -1176,7 +1179,36 @@ test('the hairline stops when the read fails, not only when it succeeds', async 
   assert.ok(!page.classes.has('bp-ready'), 'the read is in flight')
   await page.settle()
   assert.ok(page.classes.has('bp-ready'), 'a failed read must not leave the hairline running for ever')
+  assert.ok(!page.classes.has('bp-busy'), 'a failed read drops the animation class too')
   assert.match(page.node('bpHint').textContent, /连不上 DS Bot/)
+})
+
+test('an unpaired clear empties the slots, never the scroll box that owns the skeleton', async () => {
+  let teamReads = 0
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method !== 'bot.team') return {}
+      teamReads += 1
+      if (teamReads === 1) return teamWith()
+      return { ok: false, error: '未配对', code: 'pocket/unpaired' }
+    },
+  })
+  await page.settle()
+  assert.match(page.node('bpMembersList').innerHTML, /Chief/, 'the roster is drawn first')
+  // The door then says the phone is unpaired (a fresh read, like the visibility
+  // poller would make): content must go, but the slots that renderTeam paints
+  // into must survive — emptying bpList itself pulled the skeleton nodes out of
+  // the document and every later renderTeam died on a null $().
+  page.fireDocument('visibilitychange')
+  await page.settle()
+  assert.equal(teamReads, 2, 'a visible page re-reads its roster')
+  assert.equal(page.node('bpRoomsList').innerHTML, '', 'room rows are cleared')
+  assert.equal(page.node('bpMembersList').innerHTML, '', 'member rows are cleared')
+  assert.equal(page.node('bpRoomsCount').textContent, '0', 'counts go to zero')
+  // Not "bpMsgs exists" — the stand-in's node() never returns null, so that
+  // assertion is always true (audit 2026-10-27 bundle E). What the clear must
+  // not touch is the chat half's own state.
+  assert.equal(page.node('bpMsgs').hidden, true, 'the chat half keeps its state through the clear')
 })
 
 test('a bridge that never answers gives up instead of loading for ever', async () => {

@@ -460,6 +460,19 @@ test('collectFilePaths ignores other events and malformed entries', () => {
   assert.equal(set.size, 0, 'tool arguments and pathless entries never widen the set')
 })
 
+test('collectFilePaths drops relative paths — a crafted markdown image must not buy a CWD-relative read', () => {
+  // The serving route resolves the string with stat/readFile verbatim: a
+  // relative path would read against the host's own working directory, so the
+  // allowlist only ever accepts absolute ones (pairing cookie + one prompt
+  // must not equal an arbitrary local file read).
+  const set = new Set()
+  collectFilePaths(set, { event: { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '![a](.env) ![b](../../etc/hosts) ![c](./secrets.png)' }] } } } })
+  collectFilePaths(set, { event: { type: 'deliverables/presented', data: { files: [{ path: 'relative\\report.png' }, { path: './bare.png' }] } } })
+  assert.equal(set.size, 0, 'relative paths never enter the allowlist')
+  collectFilePaths(set, { event: { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '![ok](C:\\abs\\real.png) ![unix](/abs/real.png)' }] } } } })
+  assert.deepEqual([...set].sort(), ['C:\\abs\\real.png', '/abs/real.png'].sort(), 'absolute paths on either platform still pass')
+})
+
 test('sessionFileType: the extension table', () => {
   assert.equal(sessionFileType('F:\\a\\pic.PNG'), 'image/png')
   assert.equal(sessionFileType('F:\\a\\photo.jpeg'), 'image/jpeg')
