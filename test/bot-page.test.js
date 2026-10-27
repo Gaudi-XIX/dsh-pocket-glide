@@ -11,7 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { startBridge, httpFetch } from './helpers.js'
 import { BOT_PAGE_JS, renderBotPage } from '../lib/bot-page.js'
-import { renderMobilePage } from '../lib/pages.js'
+import { renderMobilePage, renderMobileReconnectPage } from '../lib/pages.js'
 
 test('the Bot page is its own document: structure, hashed links, never cached', async () => {
   const t = await startBridge({ harness: 'fake' })
@@ -1597,7 +1597,8 @@ test('answering a card ends the warm copy, so the next read is a real one', asyn
 test('the Bot page uses PIN-code style transition card with DS Pocket heading when switching to Pocket', () => {
   const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
   assert.match(html, /id="bpSwitchOverlay" class="switch-overlay" hidden/, 'the switch overlay is in markup')
-  assert.match(html, /<div class="card"><div class="logo">/, 'reuses the PIN code page card and logo layout')
+  assert.match(html, /<div class="card"><div class="brand">/, 'reuses the connection page card and its wordmark row')
+  assert.match(html, /Curiouser and curiouser!/, 'the card wears the same wordmark line as the landing')
   assert.match(html, /<h1>DS Pocket<\/h1>/, 'carries the DS Pocket heading')
   assert.match(html, /class="boot-steps show"/, 'carries the PIN boot steps container')
   assert.match(html, /读取工作区/, 'step 1 reads what the landing reads first')
@@ -1609,13 +1610,44 @@ test('the Bot page uses PIN-code style transition card with DS Pocket heading wh
 test('the Pocket page uses PIN-code style transition card with DSBOT heading when switching to Bot', () => {
   const html = renderMobilePage({ locale: 'zh', boot: null })
   assert.match(html, /id="switchOverlay" class="switch-overlay" hidden/, 'the Pocket switch overlay is in markup')
-  assert.match(html, /<div class="card"><div class="logo">/, 'reuses the PIN code page card and logo layout')
+  assert.match(html, /<div class="card"><div class="brand">/, 'reuses the connection page card and its wordmark row')
+  assert.match(html, /Curiouser and curiouser!/, 'the card wears the same wordmark line as the landing')
   assert.match(html, /<h1>DSBOT<\/h1>/, 'carries the DSBOT heading')
   assert.match(html, /class="boot-steps show"/, 'carries the PIN boot steps container')
   assert.match(html, /读取 BOT 列表/, 'step 1 reads what the Bot page reads first')
   assert.match(html, /读取 BOT 消息/, 'step 2 reads the bot conversations')
   assert.match(html, /读取群聊/, 'step 3 reads the groups')
   assert.match(html, /正在准备页面/, 'step 4 prepares the page')
+})
+
+test('going to the Bot page keeps the landing in the history, so the way back lands on it', () => {
+  const html = renderMobilePage({
+    locale: 'zh',
+    boot: null,
+    assets: { cssUrl: '/app.css?h=1', jsUrl: '/app.js?h=2' },
+  })
+  assert.match(html, /var doNav=function\(\)\{location\.href="\/bot"\}/, 'the hop keeps the landing entry')
+  assert.doesNotMatch(html, /location\.replace\("\/bot"\)/, 'the landing entry is not replaced away')
+  assert.match(
+    html,
+    /window\.addEventListener\("pageshow",function\(\)\{var ov=document\.getElementById\("switchOverlay"\);if\(ov\)ov\.hidden=true\}\)/,
+    'the card is lifted when this document comes back from the bfcache',
+  )
+})
+
+test('the Bot page lifts its own card when the browser restores it', () => {
+  assert.match(BOT_PAGE_JS, /window\.addEventListener\('pageshow', function \(\) \{/, 'listens for the restore')
+  assert.match(BOT_PAGE_JS, /var overlay = document\.getElementById\('bpSwitchOverlay'\)/, 'targets the switch card')
+})
+
+test('the landing, the reconnect page and both transition cards wear the same wordmark row', () => {
+  const row = /<div class="brand">(?:<img[^>]*>)?<span>DSH Pocket<\/span><em>Curiouser and curiouser!<\/em><\/div>/
+  const landing = renderMobilePage({ locale: 'zh', boot: null })
+  const reconnect = renderMobileReconnectPage({ locale: 'zh', connectionMode: 'tunnel' })
+  const bot = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  for (const [name, html] of [['landing', landing], ['reconnect', reconnect], ['bot', bot]]) {
+    assert.match(html, row, `${name} wears the shared wordmark row`)
+  }
 })
 
 test('the Bot page viewport and typography prevent mobile WebView zoom-out scaling regression', () => {
