@@ -409,7 +409,12 @@ function shellShape(html = renderBotPage({ cssUrl: '/app.css?h=0', jsUrl: '/bot.
     }
     if (!VOID.has(name) && !attrs.trimEnd().endsWith('/')) stack.push({ name, id })
   }
-  return { ids, ancestors, flags, steps, counts }
+  // 每一行的「单位」与起步读数也照壳取（`data-unit` 与节点里的初值）：真 DOM 里
+  // `el.dataset.unit` 与 `el.textContent` 就是这么来的。替身缺这两样，卡片脚本写出来
+  // 的就不是真机上的那句话——「12」与「12 个会话」差的是同一个教训（P1-5）。
+  const slots = [...html.matchAll(/<span class="bsc" data-unit="([^"]*)"[^>]*>([^<]*)</g)]
+    .map(([, unit, start]) => ({ unit, start }))
+  return { ids, ancestors, flags, steps, counts, slots }
 }
 const SHELL = shellShape()
 const SHELL_IDS = SHELL.ids
@@ -491,9 +496,11 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
   // `classList.toggle` 支持 `(name, force)` 两参形态），测试据此断言走到了第几步。
   for (let index = 0; index < SHELL.steps; index += 1) {
     const classes = new Set(index === 0 ? ['boot-step', 'is-active'] : ['boot-step'])
-    const countNode = { textContent: '' }
-    switchCounts.push(countNode)
-    switchSteps.push({
+    const slot = SHELL.slots[index] || { unit: '', start: '' }
+    // 数字位与真 DOM 同形：有初值、有 `dataset.unit`（单位照壳读）、有 parentElement
+    // 指回这一行——卡片脚本靠这三样把「读了多少」写成人话并给这一行划线。
+    const countNode = { textContent: slot.start, dataset: { unit: slot.unit } }
+    const stepNode = {
       index,
       classes,
       // 数字位。页面脚本用 `querySelector('.bsc')` 拿它再写字；替身从前没有这个
@@ -508,7 +515,10 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
         },
         contains: (name) => classes.has(name),
       },
-    })
+    }
+    countNode.parentElement = stepNode
+    switchCounts.push(countNode)
+    switchSteps.push(stepNode)
   }
   // The page marks its two views on the body (`bp-list` / `bp-chat`) so the
   // floating buttons can trade places, and it drops `bp-ready`'s hairline once
@@ -676,11 +686,12 @@ test('the way out says how much of the landing is already warm, on the row that 
   // 用户 2026-10-27②：「中间页也应该有数据的显示（即加载了多少数据的显示）」。
   // 四步卡片快步走完只要 280ms，那时桥还什么都没说；现在它等 bridge 的答复（1200ms
   // 兜底），把「读了多少会话 / 是否就绪」写在自己的那两行上。
-  const page = fakeBrowser({ answer: (method) => (method === 'page.cue' ? { rows: 12, ready: true } : {}) })
+  const page = fakeBrowser({ answer: (method) => (method === 'page.cue' ? { rows: 12, workspaces: 3, ready: true } : {}) })
   await page.settle()
   assert.equal(SHELL.counts, SHELL.steps, 'every step carries one slot for its number')
   page.click('bpHome', { preventDefault() {} })
   await page.settle()
+  assert.equal(page.switchCounts[0].textContent, '3 个工作区', 'the first row says how many workspaces the landing holds')
   assert.equal(page.switchCounts[1].textContent, '12 个会话', 'the row that reads the list says how many rows it read')
   assert.equal(page.switchCounts[3].textContent, '已就绪', 'the last row says whether the landing is warm')
 })
@@ -1337,7 +1348,7 @@ test('the last word on the way out rides a keepalive request, because the answer
 // P1-5：真机的过渡卡是 70ms×4 的动画，走完再隔 60ms 才离开。替身从前没有
 // `querySelectorAll`，页面为此写了一条双判据，于是这条分支只有真机跑得到——
 // 动画里抛错让 `leave()` 永不执行（用户卡过渡页）时，测试面照样全绿。
-test('the way out shows every step of the card before it leaves', async () => {
+test('the way out shows every step, and strikes a row only once its reading is settled', async () => {
   const page = fakeBrowser({ answer: () => ({}) })
   const cueCount = () => page.calls.filter((call) => call.method === 'page.cue').length
   assert.equal(page.switchSteps.length, 4,
@@ -1350,17 +1361,21 @@ test('the way out shows every step of the card before it leaves', async () => {
   assert.deepEqual(page.navigations, [], 'and the page has not started leaving')
 
   page.fireIntervals(70)
-  assert.ok(page.switchSteps[0].classList.contains('is-done'), 'the step it walked past keeps is-done')
+  // 用户 2026-10-27：「每一行都是要完全完成以后才是划横线」——走过不等于读完，
+  // 读数没定稿的这一行不划线（旧实现是 i<idx 就划，于是出现「四行全划完、右边还空着」）。
+  assert.ok(!page.switchSteps[0].classList.contains('is-done'),
+    'a row that walked past is not struck while its reading is still open')
   assert.ok(page.switchSteps[1].classList.contains('is-active'), 'and the one it reached is is-active')
   assert.deepEqual(page.navigations, [], 'still animating, so still here')
 
   for (let step = 1; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
-  assert.ok(page.switchSteps.every((step) => step.classList.contains('is-done')), 'every step ends up walked')
   assert.deepEqual(page.navigations, [],
     'the leave waits for the last step and its pause — this is the moment the stand-in used to skip past')
 
   page.fireTimers(1200)
   await page.settle()
+  assert.ok(page.switchSteps.every((step) => step.classList.contains('is-done')),
+    'the give-up timer settles every open row, so the card never leaves with an unstruck line')
   page.fireTimers(60)
   await page.settle()
   assert.equal(cueCount(), 1, 'and only then does it say its one word')
@@ -1617,9 +1632,14 @@ test('the Pocket page uses PIN-code style transition card with BOT heading when 
   assert.match(html, /<h1>BOT<\/h1>/, 'carries the BOT heading')
   assert.match(html, /class="boot-steps show"/, 'carries the PIN boot steps container')
   assert.match(html, /读取 BOT 列表/, 'step 1 reads what the Bot page reads first')
-  assert.match(html, /读取 BOT 消息/, 'step 2 reads the bot conversations')
+  assert.match(html, /读取 BOT 会话/, 'step 2 reads the bot conversations')
   assert.match(html, /读取群聊/, 'step 3 reads the groups')
   assert.match(html, /正在准备页面/, 'step 4 prepares the page')
+  // 行一渲染就有读数、右侧不留空（用户 2026-10-27：三页的读数逻辑要一样）。
+  assert.match(html, /data-unit=" 个 BOT"[^>]*>0 个 BOT</, 'step 1 starts at zero Bots, never blank')
+  assert.match(html, /data-unit=" 个会话"[^>]*>0 个会话</, 'step 2 starts at zero chats')
+  assert.match(html, /data-unit=" 个群"[^>]*>0 个群</, 'step 3 starts at zero rooms')
+  assert.match(html, /data-unit=""[^>]*>准备中</, 'the prepare step starts with its own word')
 })
 
 test('going to the Bot page keeps the landing in the history, so the way back lands on it', () => {
@@ -1660,15 +1680,15 @@ test('the landing card counts the Bots the page already knows, before anything a
     boot: null,
     assets: { cssUrl: '/app.css?h=1', jsUrl: '/app.js?h=2' },
   })
-  assert.match(html, /k0\+=1/, 'counts the distinct Bot names this page already holds')
-  assert.match(html, /if\(k0&&c0\)c0\.textContent=k0\+" 个 BOT";/, 'writes that count into the first step before the cue')
+  assert.match(html, /var bots=0,chats=0;/, 'counts the distinct Bot names this page already holds')
+  assert.match(html, /if\(bots\)cardCount\(0,bots\);/, 'writes that count into the first step before the cue')
 })
 
 test('the BOT page counts the chats it already read, before the cue answers', () => {
   assert.match(BOT_PAGE_JS, /knownRows = Object\.keys\(state\.previews \|\| \{\}\)\.length/, 'counts the previews already in hand')
   assert.match(
     BOT_PAGE_JS,
-    /if \(knownRows > 0 && counts\[1\]\) counts\[1\]\.textContent = knownRows \+ ' 个会话'/,
+    /if \(knownRows > 0\) cardCount\(1, knownRows\)/,
     'writes them into the session step when there is anything to say',
   )
 })
