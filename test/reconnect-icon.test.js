@@ -87,7 +87,7 @@ test('K-1: with no icon in hand the page degrades to the text row, never to a ga
       const body = await res.text()
       assert.equal(res.status, 200, exit.name)
       assert.doesNotMatch(body, /src="\/brand-logo\//, `${exit.name} falls back to text, not to a gated image`)
-      assert.match(body, /DSH Pocket/, `${exit.name} still names the product without an image`)
+      assert.match(body, /<span>Pocket<\/span><em style="flex-basis:100%;text-align:center">Curiouser and curiouser!<\/em>/, `${exit.name} still wears the wordmark row without an image`)
     }
   } finally {
     await t.stop()

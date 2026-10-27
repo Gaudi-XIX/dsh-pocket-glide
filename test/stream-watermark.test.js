@@ -467,7 +467,7 @@ test('SEAM-3 the reconnect and disconnected pages emit no gated brand route', ()
     assert.ok(!html.includes(GATED_BRAND), 'no image may point at a gated route')
     assert.ok(!html.includes('/brand-logo'), 'not even as an unused fallback string')
     assert.ok(
-      html.includes('<div class="brand"><span>DSH Pocket</span><em>Curiouser and curiouser!</em></div>'),
+      html.includes('<div class="brand" style="flex-wrap:wrap"><span>Pocket</span><em style="flex-basis:100%;text-align:center">Curiouser and curiouser!</em></div>'),
       'a text brand row stands in, wearing the same wordmark line as every other page',
     )
   }

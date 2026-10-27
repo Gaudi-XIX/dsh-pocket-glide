@@ -351,6 +351,27 @@ test('AC-6 the fast /api/boot answer still logs, and the document log names all 
   } finally { await t.stop() }
 })
 
+test('AC-6b the service-worker revalidation asks for the shell, not the 1 MB boot payload', async () => {
+  // Live evidence, 2026-10-27: returning from the Bot page produced five
+  // `doc url=/?revalidate=1 bytes=1126773 boot=embedded` inside forty seconds —
+  // the worker's own revalidation was paying for a full boot payload every time
+  // (user 2026-10-27: 「从 BOT 切回 Pocket 仍然非常非常卡，并且直接卡死了」).
+  const t = await startBridge({ harness: 'fake', harnessOptions: { respond } })
+  try {
+    seedWorkspaces(t.bridge)
+    const cookie = await t.pairMobile()
+    const embedded = await (await httpFetch(t.base + '/', { headers: { cookie } })).text()
+    const shell = await (await httpFetch(t.base + '/?revalidate=1', { headers: { cookie } })).text()
+    assert.equal(matches(t, /boot=shell/).length, 1, 'the revalidation names its shape in the document log')
+    assert.equal(matches(t, /boot=embedded/).length, 1, 'the plain document still carries its boot payload')
+    assert.doesNotMatch(shell, /"tails":/, 'no payload rides the revalidated shell')
+    // The live document was ~1.1 MB against a ~12 KB shell; this fixture is small,
+    // so pin the relation rather than a ratio: the shell never outgrows the document.
+    assert.ok(shell.length < embedded.length,
+      `the shell carries less than the document (${shell.length} vs ${embedded.length} bytes)`)
+  } finally { await t.stop() }
+})
+
 // ---------------------------------------------------------------------------
 // T4/T5 — AC-7 结构不变量、AC-8 三指标、AC-9 预算
 // ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ test('the Bot page is its own document: structure, hashed links, never cached', 
     assert.match(html, /id="bpMsgs"/, 'the transcript is there')
     assert.match(html, /id="bpComposer"/, 'the composer is there')
     assert.match(html, /id="bpBack"/, 'the back button returns to the list')
-    assert.match(html, /<title>DS Bot<\/title>/)
+    assert.match(html, /<title>BOT<\/title>/)
 
     // 外链与主页同规矩：按内容 hash 取，改一次就换一个地址。
     const css = html.match(/<link rel="stylesheet" href="(\/app\.css\?h=[0-9a-f]+)">/)
@@ -1435,7 +1435,7 @@ test('the hairline stops when the read fails, not only when it succeeds', async 
   await page.settle()
   assert.ok(page.classes.has('bp-ready'), 'a failed read must not leave the hairline running for ever')
   assert.ok(!page.classes.has('bp-busy'), 'a failed read drops the animation class too')
-  assert.match(page.node('bpHint').textContent, /连不上 DS Bot/)
+  assert.match(page.node('bpHint').textContent, /连不上 BOT/)
 })
 
 test('an unpaired clear empties the slots, never the scroll box that owns the skeleton', async () => {
@@ -1594,12 +1594,13 @@ test('answering a card ends the warm copy, so the next read is a real one', asyn
 })
 
 
-test('the Bot page uses PIN-code style transition card with DS Pocket heading when switching to Pocket', () => {
+test('the Bot page uses PIN-code style transition card with Pocket heading when switching to Pocket', () => {
   const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
   assert.match(html, /id="bpSwitchOverlay" class="switch-overlay" hidden/, 'the switch overlay is in markup')
-  assert.match(html, /<div class="card"><div class="brand">/, 'reuses the connection page card and its wordmark row')
+  assert.match(html, /<div class="card"><div class="brand" style="flex-wrap:wrap">/, 'reuses the connection page card and its wordmark row')
   assert.match(html, /Curiouser and curiouser!/, 'the card wears the same wordmark line as the landing')
-  assert.match(html, /<h1>DS Pocket<\/h1>/, 'carries the DS Pocket heading')
+  assert.match(html, /<em style="flex-basis:100%;text-align:center">/, 'the line sits on its own row, not beside the name')
+  assert.match(html, /<h1>Pocket<\/h1>/, 'carries the Pocket heading')
   assert.match(html, /class="boot-steps show"/, 'carries the PIN boot steps container')
   assert.match(html, /读取工作区/, 'step 1 reads what the landing reads first')
   assert.match(html, /读取会话列表/, 'step 2 reads the session list')
@@ -1607,12 +1608,13 @@ test('the Bot page uses PIN-code style transition card with DS Pocket heading wh
   assert.match(html, /正在准备页面/, 'step 4 prepares the page')
 })
 
-test('the Pocket page uses PIN-code style transition card with DSBOT heading when switching to Bot', () => {
+test('the Pocket page uses PIN-code style transition card with BOT heading when switching to Bot', () => {
   const html = renderMobilePage({ locale: 'zh', boot: null })
   assert.match(html, /id="switchOverlay" class="switch-overlay" hidden/, 'the Pocket switch overlay is in markup')
-  assert.match(html, /<div class="card"><div class="brand">/, 'reuses the connection page card and its wordmark row')
+  assert.match(html, /<div class="card"><div class="brand" style="flex-wrap:wrap">/, 'reuses the connection page card and its wordmark row')
   assert.match(html, /Curiouser and curiouser!/, 'the card wears the same wordmark line as the landing')
-  assert.match(html, /<h1>DSBOT<\/h1>/, 'carries the DSBOT heading')
+  assert.match(html, /<em style="flex-basis:100%;text-align:center">/, 'the line sits on its own row, not beside the name')
+  assert.match(html, /<h1>BOT<\/h1>/, 'carries the BOT heading')
   assert.match(html, /class="boot-steps show"/, 'carries the PIN boot steps container')
   assert.match(html, /读取 BOT 列表/, 'step 1 reads what the Bot page reads first')
   assert.match(html, /读取 BOT 消息/, 'step 2 reads the bot conversations')
@@ -1641,13 +1643,34 @@ test('the Bot page lifts its own card when the browser restores it', () => {
 })
 
 test('the landing, the reconnect page and both transition cards wear the same wordmark row', () => {
-  const row = /<div class="brand">(?:<img[^>]*>)?<span>DSH Pocket<\/span><em>Curiouser and curiouser!<\/em><\/div>/
+  const row = /<div class="brand" style="flex-wrap:wrap">(?:<img[^>]*>)?<span>Pocket<\/span><em style="flex-basis:100%;text-align:center">Curiouser and curiouser!<\/em><\/div>/
   const landing = renderMobilePage({ locale: 'zh', boot: null })
   const reconnect = renderMobileReconnectPage({ locale: 'zh', connectionMode: 'tunnel' })
   const bot = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
   for (const [name, html] of [['landing', landing], ['reconnect', reconnect], ['bot', bot]]) {
     assert.match(html, row, `${name} wears the shared wordmark row`)
   }
+})
+
+test('the landing card counts the Bots the page already knows, before anything answers', () => {
+  // User 2026-10-27: 「能启动，右边不是有那个数量、数字吗？这里没有」— the card sat
+  // blank until a cue came back, and a cold bridge cue carries zeros.
+  const html = renderMobilePage({
+    locale: 'zh',
+    boot: null,
+    assets: { cssUrl: '/app.css?h=1', jsUrl: '/app.js?h=2' },
+  })
+  assert.match(html, /k0\+=1/, 'counts the distinct Bot names this page already holds')
+  assert.match(html, /if\(k0&&c0\)c0\.textContent=k0\+" 个 BOT";/, 'writes that count into the first step before the cue')
+})
+
+test('the BOT page counts the chats it already read, before the cue answers', () => {
+  assert.match(BOT_PAGE_JS, /knownRows = Object\.keys\(state\.previews \|\| \{\}\)\.length/, 'counts the previews already in hand')
+  assert.match(
+    BOT_PAGE_JS,
+    /if \(knownRows > 0 && counts\[1\]\) counts\[1\]\.textContent = knownRows \+ ' 个会话'/,
+    'writes them into the session step when there is anything to say',
+  )
 })
 
 test('the Bot page viewport and typography prevent mobile WebView zoom-out scaling regression', () => {
