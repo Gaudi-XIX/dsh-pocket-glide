@@ -30,8 +30,19 @@ test('command.execute / file.upload / permissionPresets.catalog pass the allowli
   const t = await startBridge({ harness: 'fake' })
   try {
     const cookie = await t.pairMobile()
-    for (const method of ['command.execute', 'file.upload', 'permissionPresets.catalog']) {
-      const res = await rpcCall(t, cookie, method, { sessionId: 's1' })
+    // A bare `{sessionId}` is enough for the catalog, but `command.execute`
+    // needs a line and `file.upload` needs data: since 2026-10-27 (audit B2
+    // P1-4) the bridge bounds their arguments before forwarding, so the probe
+    // has to look like a call the phone could actually make. What this test
+    // pins is the allowlist, not the bounds — the bounds have their own file,
+    // test/rpc-argument-bounds.test.js.
+    const payloads = {
+      'command.execute': { sessionId: 's1', line: '/goal ship it' },
+      'file.upload': { sessionId: 's1', data: 'AAAA' },
+      'permissionPresets.catalog': { sessionId: 's1' },
+    }
+    for (const [method, payload] of Object.entries(payloads)) {
+      const res = await rpcCall(t, cookie, method, payload)
       assert.notEqual(res.status, 403, `${method} must be allowlisted`)
       assert.equal(res.status, 200)
     }
