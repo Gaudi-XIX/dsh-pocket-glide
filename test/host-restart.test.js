@@ -165,7 +165,7 @@ test('idle sessions arm the restart script and answer with the fire delay', asyn
   } finally { await t.stop() }
 })
 
-test('a failed arming answers 502 and carries the reason', async () => {
+test('a failed arming answers 502 with a fixed sentence, and the reason stays in the desktop log', async () => {
   const t = await startBridge({
     harness: 'fake',
     harnessOptions: {
@@ -184,7 +184,14 @@ test('a failed arming answers 502 and carries the reason', async () => {
     })
     assert.equal(res.status, 502)
     const j = await res.json()
-    assert.match(j.error, /schtasks refused/)
+    // The phone is an untrusted endpoint, so the body carries a fixed sentence:
+    // the invoker's raw failure can quote powershell output or a spawn ENOENT
+    // path (lib/bridge.js:4925-4930). Asserting the absence is the point — a
+    // positive match alone would pass again the day the detail leaks back.
+    assert.match(j.error, /could not arm the restart/)
+    assert.doesNotMatch(j.error, /schtasks refused/, 'the raw invoker failure must not ride the response body')
+    assert.match(t.logs.map(({ message }) => message).join('\n'), /schtasks refused/,
+      'the detail belongs to the desktop log line, and only there')
   } finally { await t.stop() }
 })
 

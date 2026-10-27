@@ -362,8 +362,48 @@ test('a Host that stops answering keeps the last workspace hidden', async () => 
 // 覆盖四条分支 —— 审批卡两态、点击回话、发消息、读消息流。
 // ---------------------------------------------------------------------------
 
-/** 页面脚本要的全部节点（lib/bot-page.js 的 `$('…')` 全集：bar 五件 + 列表骨架六槽 + 会话四件 + 浮窗与提示）。 */
-const PAGE_IDS = ['bpBack', 'bpHome', 'bpReload', 'bpTitle', 'bpHint', 'bpList', 'bpSkel', 'bpPending', 'bpRoomsCount', 'bpRoomsList', 'bpMembersCount', 'bpMembersList', 'bpMsgs', 'bpComposer', 'bpPrompt', 'bpSend', 'bpToast']
+/**
+ * 壳的两条静态事实，都从发货 `/bot` 用的同一个 `renderBotPage` 产出里读：
+ * - `ids`：壳里全部 `id="…"`。修复②的成因是脚本写了一个壳里不存在的 id
+ *   （`bpChatTitle`），真机 TypeError 而替身「按需现造」照样绿 —— 所以 `$` 问
+ *   壳外的 id 当场 throw。
+ * - `ancestors`：每个 id 的祖先 id 链。修复③的成因是「`#bpMsgs` 嵌在 `#bpList`
+ *   里，列表 hidden 把消息半区连坐隐藏」，那件事只有父子关系表达得了，孤立的
+ *   hidden 布尔看不见（消费点在 node() 的 `visible`）。
+ */
+function shellShape(html = renderBotPage({ cssUrl: '/app.css?h=0', jsUrl: '/bot.js?h=0' })) {
+  const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => id))
+  const ancestors = new Map()
+  // 壳里写死的初值就是真机的初值：标记里带 `hidden`/`disabled` 的节点，页面脚本
+  // 必须自己把它们打开。修复④之所以逃过全部测试，正是替身把初值丢了——`bpSend`
+  // 壳里是灰的，替身造出来却是可点的。
+  const flags = new Map()
+  const stack = []
+  const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'])
+  for (const [, closing, rawName, attrs] of html.matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g)) {
+    const name = rawName.toLowerCase()
+    if (closing) {
+      const at = stack.findLastIndex((open) => open.name === name)
+      if (at >= 0) stack.length = at
+      continue
+    }
+    const id = /\bid="([^"]+)"/.exec(attrs)?.[1] ?? null
+    if (id) {
+      ancestors.set(id, stack.map((open) => open.id).filter(Boolean))
+      flags.set(id, {
+        hidden: /(^|\s)hidden(\s|\/|$)/.test(attrs),
+        disabled: /(^|\s)disabled(\s|\/|$)/.test(attrs),
+      })
+    }
+    if (!VOID.has(name) && !attrs.trimEnd().endsWith('/')) stack.push({ name, id })
+  }
+  return { ids, ancestors, flags }
+}
+const SHELL = shellShape()
+const SHELL_IDS = SHELL.ids
+
+/** 预热清单（不是白名单——权威是上面的 `SHELL_IDS`）：先把页面要碰的节点造出来。 */
+const PAGE_IDS = ['bpBack', 'bpHome', 'bpReload', 'bpTitle', 'bpHint', 'bpList', 'bpSkel', 'bpPending', 'bpRoomsCount', 'bpRoomsList', 'bpMembersCount', 'bpMembersList', 'bpMsgs', 'bpComposer', 'bpPrompt', 'bpSend', 'bpToast', 'bpSwitchOverlay']
 
 /**
  * A browser stand-in holding just what `/bot`'s script touches: ten elements
@@ -378,12 +418,18 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
   const documentListeners = new Map()
   const calls = []
   function node(id) {
+    // 壳里没有这个 id ⇒ 真机上是 `Cannot read properties of null`；替身不许再
+    // 按需现造，否则「脚本引用了壳里不存在的节点」永远测不出来（修复②）。
+    if (!SHELL_IDS.has(id)) throw new Error(`the page asked for #${id}, which the shell does not ship`)
     let made = nodes.get(id)
     if (!made) {
+      // 初值取壳里标记写死的那些（`bpMsgs`/`bpComposer`/`bpToast` 出生就 hidden，
+      // `bpSend` 出生就 disabled）——真机就是这样，页面脚本得自己打开它们。
+      const born = SHELL.flags.get(id) ?? { hidden: false, disabled: false }
       made = {
         id,
-        hidden: false,
-        disabled: false,
+        hidden: born.hidden,
+        disabled: born.disabled,
         textContent: '',
         innerHTML: '',
         value: '',
@@ -392,6 +438,12 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
         clientHeight: 0,
         style: {},
         addEventListener(type, fn) { nodeListeners.set(id + ':' + type, fn) },
+        // 视觉可见性：真机由 CSS 裁决（祖先 hidden 连坐就是修复③的原形），孤立
+        // 的 hidden 布尔表达不了。断言读 `visible`，页面脚本读的仍是 `hidden`。
+        get visible() {
+          if (made.hidden) return false
+          return (SHELL.ancestors.get(id) ?? []).every((ancestor) => !nodes.get(ancestor)?.hidden)
+        },
       }
       if (id === 'bpMsgs') {
         // A height to compensate with: forty pixels a row, the box one screen
@@ -522,9 +574,40 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
     fireDocument: (type) => documentListeners.get(type)(),
     /** Fire every timeout the page has armed so far (the page's own give-up). */
     fireTimers: () => { for (const fn of timers.splice(0)) fn() },
-    click: (id, event) => nodeListeners.get(id + ':click')(event),
+    click: (id, event) => {
+      // 真机不给 disabled 控件派发 click。修复④正是栽在这上面：壳里 `bpSend`
+      // 初始 `disabled`，代码里没有启用点，替身却能点动 ⇒ 发送类测试全绿而真机
+      // 永久灰。替身照真机拦，删掉启用行的那天测试就红。
+      if (node(id).disabled) throw new Error(`#${id} is disabled; a browser would not dispatch this click`)
+      return nodeListeners.get(id + ':click')(event)
+    },
   }
 }
+
+// 替身自己新加的两道门也要有锚——否则「加了守卫」这件事无法回归证明，门被
+// 悄悄删掉时测试面照旧全绿。
+test('the stand-in refuses an id the shell does not ship', () => {
+  const page = fakeBrowser()
+  assert.throws(() => page.node('bpChatTitle'), /does not ship/,
+    'a script asking for a node the shell never renders is exactly the TypeError of 修复②')
+})
+
+test('the stand-in refuses a click on a disabled control, as a browser would', () => {
+  const page = fakeBrowser()
+  page.node('bpSend').disabled = true
+  assert.throws(() => page.click('bpSend', {}), /is disabled/)
+})
+
+// `visible` 的价值全在祖先链上：解析器一旦退化成空 Map，它就退回成 `!hidden`，
+// 那两条 visible 断言会永远绿（假绿）。所以先钉住解析器本身。
+test('the shell shape reader really reads nesting', () => {
+  const shape = shellShape('<div id="outer"><div class="x"><div id="inner" hidden></div></div></div>')
+  assert.deepEqual(shape.ancestors.get('inner'), ['outer'], 'the id chain is what `visible` walks')
+  assert.ok(shape.ids.has('inner'), 'and the id set comes from the same pass')
+  assert.deepEqual(shape.ancestors.get('outer'), [], 'a top-level id has no ancestors — the reader invents none')
+  assert.deepEqual(shape.flags.get('inner'), { hidden: true, disabled: false },
+    'the born-hidden / born-disabled flags come off the same markup a browser would read (修复④)')
+})
 
 /** One approvalable tool request plus the member that asked for it. */
 function teamWith(...approvals) {
@@ -595,6 +678,8 @@ test('a message typed here goes out as that session, in the shape the landing us
   assert.equal(page.node('bpTitle').textContent, 'Chief')
   assert.equal(page.node('bpComposer').hidden, false, '进入对话就把输入条放出来')
   assert.equal(page.node('bpList').hidden, true, '并把列表让位')
+  assert.equal(page.node('bpMsgs').visible, true,
+    'the transcript stays visible while the list is hidden — put it back inside #bpList and this goes false (修复③)')
   assert.equal(page.node('bpBack').hidden, false, '会话里才有返回')
   assert.equal(page.node('bpSend').disabled, false, '发送键随会话启用——真机的键在壳里就是灰的，启用只能发生在打开时')
 
@@ -643,12 +728,13 @@ test('the transcript keeps what was said and drops the machinery', async () => {
 test('the roster paints into the slots it was handed, never over the page itself', async () => {
   const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? teamWith() : {}) })
   await page.settle()
-  assert.equal(page.node('bpList').innerHTML, '', 'the scroll box itself is never rewritten — #bpMsgs lives inside it')
+  assert.equal(page.node('bpList').innerHTML, '', 'the scroll box itself is never rewritten — the roster lands in the slots')
   assert.match(page.node('bpRoomsList').innerHTML, /data-open="room" data-id="r-flow"/, 'the group row lands in its slot')
   assert.match(page.node('bpMembersList').innerHTML, /data-sid="s-chief"/, 'the member row lands in its slot')
   assert.equal(page.node('bpRoomsCount').textContent, '1')
   assert.equal(page.node('bpMembersCount').textContent, '1')
   assert.equal(page.node('bpMsgs').hidden, true, 'the chat half survived the paint: the old bug destroyed it')
+  assert.equal(page.node('bpMsgs').visible, false, 'list view: the transcript is hidden, so it is not visible')
 })
 
 test('a working bot and a talking group say so on their rows', async () => {
