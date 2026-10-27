@@ -1037,14 +1037,18 @@ test('a page opened from another site goes to the landing, not back to that site
 // 下面三条钉住：打开就自动向前翻、够一屏就停（剩下的交给按钮）、群聊不走这条路。
 // ---------------------------------------------------------------------------
 
+// Both builders carry the Host's stamp the way a durable record really does: on
+// the event itself. `message.messageTime` lives only on the landing's
+// synthesized rows, so a fake that put it here let the clock-less Bot page pass
+// for months (2026-10-27: the page printed no stamp at all on a phone).
 /** @param {string} text @param {number} [seq] the Host's own event number, used to page backwards */
 function saidByBot(text, seq, time) {
-  return { event: { type: 'assistant/message', seq, data: { message: { messageTime: time, content: [{ type: 'text', text }] } } } }
+  return { event: { type: 'assistant/message', seq, time, data: { message: { content: [{ type: 'text', text }] } } } }
 }
 
 /** A user row with a Host timestamp, the field the transcript clock prints. */
 function saidByUser(text, seq, time) {
-  return { event: { type: 'user/message', seq, data: { message: { source: { kind: 'user' }, messageTime: time, content: [{ type: 'text', text }] } } } }
+  return { event: { type: 'user/message', seq, time, data: { message: { source: { kind: 'user' }, content: [{ type: 'text', text }] } } } }
 }
 
 /** One page of earlier items: n Bot messages, oldest last (the Host pages newest-first). */
