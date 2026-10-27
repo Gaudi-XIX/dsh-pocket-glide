@@ -378,6 +378,10 @@ function shellShape(html = renderBotPage({ cssUrl: '/app.css?h=0', jsUrl: '/bot.
   // 必须自己把它们打开。修复④之所以逃过全部测试，正是替身把初值丢了——`bpSend`
   // 壳里是灰的，替身造出来却是可点的。
   const flags = new Map()
+  // 过渡卡的步骤数。真机的 `querySelectorAll('.boot-step')` 取的就是壳里写着的这几
+  // 个节点；替身按壳现造，壳改了步骤数它会跟着变，而写死「4」会在那天骗人，正如
+  // 写死「节点按需现造」骗了整整一批测试（P1-5）。
+  let steps = 0
   const stack = []
   const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'])
   for (const [, closing, rawName, attrs] of html.matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g)) {
@@ -387,6 +391,10 @@ function shellShape(html = renderBotPage({ cssUrl: '/app.css?h=0', jsUrl: '/bot.
       if (at >= 0) stack.length = at
       continue
     }
+    // 过渡卡的步骤：class 里**整词**等于 `boot-step` 的节点，且必须挂在那张卡里面
+    // （`boot-step-label` 是步骤里的文字标签，`boot-steps` 是容器，两者都不是一步）。
+    const classAttr = /\bclass="([^"]*)"/.exec(attrs)?.[1] ?? ''
+    if (classAttr.split(/\s+/).includes('boot-step') && stack.some((open) => open.id === 'bpSwitchOverlay')) steps += 1
     const id = /\bid="([^"]+)"/.exec(attrs)?.[1] ?? null
     if (id) {
       ancestors.set(id, stack.map((open) => open.id).filter(Boolean))
@@ -397,7 +405,7 @@ function shellShape(html = renderBotPage({ cssUrl: '/app.css?h=0', jsUrl: '/bot.
     }
     if (!VOID.has(name) && !attrs.trimEnd().endsWith('/')) stack.push({ name, id })
   }
-  return { ids, ancestors, flags }
+  return { ids, ancestors, flags, steps }
 }
 const SHELL = shellShape()
 const SHELL_IDS = SHELL.ids
@@ -413,6 +421,9 @@ const PAGE_IDS = ['bpBack', 'bpHome', 'bpReload', 'bpTitle', 'bpHint', 'bpList',
  */
 function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
   const nodes = new Map()
+  // 过渡卡的四步（由下面那个 for 按 `SHELL.steps` 造出来）。页面动画会 toggle 它们
+  // 的 class，测试于是能断言「走到了哪一步」而不是只能看它有没有直接跳走。
+  const switchSteps = []
   const nodeListeners = new Map()
   const windowListeners = new Map()
   const documentListeners = new Map()
@@ -438,6 +449,15 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
         clientHeight: 0,
         style: {},
         addEventListener(type, fn) { nodeListeners.set(id + ':' + type, fn) },
+        // 过渡卡的步骤。真机上 `#bpSwitchOverlay` 里就挂着壳里那几个 `.boot-step`，
+        // 页面脚本对它们做 70ms/步的动画。替身从前没有这个方法，页面为此写了
+        // `typeof overlay.querySelectorAll === 'function'` 的双判据——那条判据在
+        // 生产里的唯一作用就是给替身让路，动画分支因此从未被任何测试执行过
+        // （P1-5：替身反向塑造生产代码）。补上之后它成了可测路径。
+        querySelectorAll(selector) {
+          if (id !== 'bpSwitchOverlay' || selector !== '.boot-step') return []
+          return switchSteps
+        },
         // 视觉可见性：真机由 CSS 裁决（祖先 hidden 连坐就是修复③的原形），孤立
         // 的 hidden 布尔表达不了。断言读 `visible`，页面脚本读的仍是 `hidden`。
         get visible() {
@@ -460,6 +480,23 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
     return made
   }
   for (const id of PAGE_IDS) node(id)
+  // 过渡卡的四步。`setStep` 对每个节点 toggle `is-done`／`is-active`（真 DOM 的
+  // `classList.toggle` 支持 `(name, force)` 两参形态），测试据此断言走到了第几步。
+  for (let index = 0; index < SHELL.steps; index += 1) {
+    const classes = new Set(index === 0 ? ['boot-step', 'is-active'] : ['boot-step'])
+    switchSteps.push({
+      index,
+      classes,
+      classList: {
+        toggle(name, force) {
+          const on = force === undefined ? !classes.has(name) : Boolean(force)
+          if (on) classes.add(name)
+          else classes.delete(name)
+        },
+        contains: (name) => classes.has(name),
+      },
+    })
+  }
   // The page marks its two views on the body (`bp-list` / `bp-chat`) so the
   // floating buttons can trade places, and it drops `bp-ready`'s hairline once
   // a read lands. Both are assertions now, so the classes are recorded rather
@@ -525,7 +562,9 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
   // Timers are collected instead of fired, so a test can choose the moment: the
   // page arms one timeout per rpc (its own give-up) and one per toast.
   const timers = []
-  const fakeSetTimeout = (fn) => { timers.push(fn); return timers.length }
+  // 页面给每个 rpc 上了一个放弃用的 timeout、给 toast 一个自隐的，过渡卡走完还要
+  // 隔 60ms 才真的离开。记下毫秒数，`fireTimers(ms)` 才能只推某一档。
+  const fakeSetTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length }
   const fetch = (url, options) => {
     const body = JSON.parse(options.body)
     calls.push({ method: body.method, payload: body.payload })
@@ -553,13 +592,19 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
         : { ok: true, value: result }),
     })
   }
-  const neverFire = () => 1
+  // 页面自己的两个轮询（5 秒读消息、15 秒读团队）仍然不自己 fire——它们不是这些
+  // 测试要说的事。但 interval 现在会被记下来，让测试能显式推一档：过渡卡的
+  // 70ms×4 动画只有这样才跑得到，否则那条分支在替身里永远是死代码（P1-5）。
+  const intervals = []
+  const fakeSetInterval = (fn, ms) => { intervals.push({ fn, ms, alive: true }); return intervals.length }
+  const fakeClearInterval = (id) => { const entry = intervals[id - 1]; if (entry) entry.alive = false }
   new Function(
     'document', 'window', 'location', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Intl', 'localStorage', 'navigator',
     BOT_PAGE_JS
-  )(document, window, location, fetch, neverFire, () => {}, fakeSetTimeout, () => {}, Intl, localStorage, navigator)
+  )(document, window, location, fetch, fakeSetInterval, fakeClearInterval, fakeSetTimeout, () => {}, Intl, localStorage, navigator)
   return {
     node,
+    switchSteps,
     calls,
     beacons,
     document,
@@ -572,8 +617,22 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
     settle: async (rounds = 10) => { for (let i = 0; i < rounds; i += 1) await new Promise((resolve) => setImmediate(resolve)) },
     fireWindow: (type) => windowListeners.get(type)(),
     fireDocument: (type) => documentListeners.get(type)(),
-    /** Fire every timeout the page has armed so far (the page's own give-up). */
-    fireTimers: () => { for (const fn of timers.splice(0)) fn() },
+    /**
+     * 烧掉已 arm 的 timeout（页面对 rpc 的放弃、toast 自隐、过渡卡走完后的 60ms）。
+     * 不传 `ms` 全烧；传了只烧这一档——顺手把 rpc 放弃也烧掉会把无关分支推进去。
+     */
+    fireTimers: (ms) => {
+      const due = typeof ms === 'number' ? timers.filter((entry) => entry.ms === ms) : timers.slice()
+      for (const entry of due) {
+        const at = timers.indexOf(entry)
+        if (at >= 0) timers.splice(at, 1)
+        entry.fn()
+      }
+    },
+    /** 推一档 interval（只推这个毫秒数的、且还没被 clearInterval 停掉的）。 */
+    fireIntervals: (ms) => {
+      for (const entry of intervals) if (entry.alive && entry.ms === ms) entry.fn()
+    },
     click: (id, event) => {
       // 真机不给 disabled 控件派发 click。修复④正是栽在这上面：壳里 `bpSend`
       // 初始 `disabled`，代码里没有启用点，替身却能点动 ⇒ 发送类测试全绿而真机
@@ -582,6 +641,15 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
       return nodeListeners.get(id + ':click')(event)
     },
   }
+}
+
+/**
+ * 把过渡卡推完。真机上点 BOT 页右上角那一下先起四步卡（70ms 一步），走完再隔
+ * 60ms 才真的离开页面——替身里 interval 不自己 fire，所以测试必须显式推。
+ */
+function finishSwitch(page) {
+  for (let step = 0; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
+  page.fireTimers(60)
 }
 
 // 替身自己新加的两道门也要有锚——否则「加了守卫」这件事无法回归证明，门被
@@ -607,6 +675,12 @@ test('the shell shape reader really reads nesting', () => {
   assert.deepEqual(shape.ancestors.get('outer'), [], 'a top-level id has no ancestors — the reader invents none')
   assert.deepEqual(shape.flags.get('inner'), { hidden: true, disabled: false },
     'the born-hidden / born-disabled flags come off the same markup a browser would read (修复④)')
+  assert.equal(shape.steps, 0, 'a fragment without boot steps counts none')
+  assert.equal(shellShape('<div id="bpSwitchOverlay"><div class="boot-step is-active"></div><div class="boot-step"></div></div>').steps, 2,
+    'the boot steps inside the switch card are counted off the same pass')
+  assert.equal(shellShape('<div id="o"><div class="boot-step"></div></div>').steps, 0,
+    'a boot step outside that card is not one of them')
+  assert.equal(SHELL.steps, 4, 'and the shipped shell really has four of them (P1-5)')
 })
 
 /** One approvalable tool request plus the member that asked for it. */
@@ -873,6 +947,7 @@ test('a page opened with nothing behind it still finds the way home', async () =
   await page.settle()
   page.window.history.length = 1
   page.click('bpHome', { preventDefault() {} })
+  finishSwitch(page)
   assert.deepEqual(page.navigations, [], 'there is nothing to go back to')
   assert.equal(page.location.href, '/', 'so it names the landing itself')
 })
@@ -884,6 +959,7 @@ test('a page opened from another site goes to the landing, not back to that site
   // page, but it is not this site's landing.
   page.document.referrer = 'https://evil.example/post'
   page.click('bpHome', { preventDefault() {} })
+  finishSwitch(page)
   await page.settle()
   assert.deepEqual(page.navigations, [], 'going back would hand the phone to the site that linked here')
   assert.equal(page.location.href, '/', 'so the Pocket button names the landing itself')
@@ -1175,6 +1251,7 @@ test('the list shows the way home, and taking it says so before leaving', async 
   assert.ok(!page.classes.has('bp-chat'))
 
   page.click('bpHome', { preventDefault() {} })
+  finishSwitch(page)
   await page.settle()
 
   const beacon = page.beacons.find((entry) => entry.url === '/api/rpc')
@@ -1187,6 +1264,7 @@ test('the last word on the way out travels as a beacon, because the page is alre
   await page.settle()
 
   page.click('bpHome', { preventDefault() {} })
+  finishSwitch(page)
   await page.settle()
 
   // The navigation happens in the same turn, which is exactly when a plain
@@ -1196,6 +1274,36 @@ test('the last word on the way out travels as a beacon, because the page is alre
   assert.equal(page.beacons[0].url, '/api/rpc', 'and it goes to the same door every other call uses')
   assert.equal(page.calls.filter((call) => call.method === 'page.cue').length, 0,
     'the cue is not sent twice: the beacon is the one the browser keeps')
+})
+
+// P1-5：真机的过渡卡是 70ms×4 的动画，走完再隔 60ms 才离开。替身从前没有
+// `querySelectorAll`，页面为此写了一条双判据，于是这条分支只有真机跑得到——
+// 动画里抛错让 `leave()` 永不执行（用户卡过渡页）时，测试面照样全绿。
+test('the way out shows every step of the card before it leaves', () => {
+  const page = fakeBrowser({ answer: () => ({}) })
+  assert.equal(page.switchSteps.length, 4,
+    'the shell ships four boot steps, and the stand-in counts them off the markup instead of trusting a number')
+  assert.deepEqual([...page.switchSteps[0].classes], ['boot-step', 'is-active'],
+    'the card starts on its first step, as the markup says')
+
+  page.click('bpHome', { preventDefault() {} })
+  assert.equal(page.node('bpSwitchOverlay').hidden, false, 'the card covers the screen while the page is on its way out')
+  assert.equal(page.beacons.length, 0, 'nothing is said to the bridge while the card still has steps to show')
+  assert.deepEqual(page.navigations, [], 'and the page has not started leaving')
+
+  page.fireIntervals(70)
+  assert.ok(page.switchSteps[0].classList.contains('is-done'), 'the step it walked past keeps is-done')
+  assert.ok(page.switchSteps[1].classList.contains('is-active'), 'and the one it reached is is-active')
+  assert.equal(page.beacons.length, 0, 'still nothing said')
+
+  for (let step = 1; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
+  assert.ok(page.switchSteps.every((step) => step.classList.contains('is-done')), 'every step ends up walked')
+  assert.equal(page.beacons.length, 0,
+    'the beacon waits for the last step and its pause — this is the moment the stand-in used to skip past')
+
+  page.fireTimers(60)
+  assert.equal(page.beacons.length, 1, 'and only then does it say its one word')
+  assert.deepEqual(page.navigations, ['back'], 'with the landing reached the way it came in')
 })
 
 test('a chat keeps the way back to the list, not to the landing', async () => {
