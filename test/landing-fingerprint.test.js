@@ -95,9 +95,10 @@ test('an absent catalogue fingerprints null and never matches anything', async (
 
 test('the page hands the fingerprint forward and keeps the projection on notModified', () => {
   const source = readFileSync(new URL('../lib/pages.js', import.meta.url), 'utf8')
-  // loadListData asks with the stamp it last saw and records the fresh one.
+  // loadListData asks with the stamp it last saw; the fresh one is recorded by
+  // applyBootData (one writer, not two — 2026-10-27 顺手把重复的调用删了）。
   assert.match(source, /const sessReq=listFingerprint\?\{fingerprint:listFingerprint\}:\{\};/)
-  assert.match(source, /if\(sessValue&&sessValue\.fingerprint\)listFingerprint=sessValue\.fingerprint;/)
+  assert.match(source, /if\(typeof sessInput\.fingerprint==='string'&&sessInput\.fingerprint\)setListFingerprint\(sessInput\.fingerprint\)/)
   // applyBootData: the session projection runs only when the rows really came.
   assert.match(source, /if\(!\(sessInput\.notModified===true\)\)\{subagentRowsByParent=splitSubagentRows\(sessInput\.items\);sessionSummaries=projectSessionRows\(sessInput\.items\);bootListPartial=sessInput\.partial===true;/)
   // A redraw of the subagent capsule follows on purpose: the boot rows are the only
@@ -105,6 +106,15 @@ test('the page hands the fingerprint forward and keeps the projection on notModi
   // nothing to show until this lands (m00002, 2026-10-18).
   assert.match(source, /bootListPartial=sessInput\.partial===true;if\(activeSession&&!subagentView\)renderSubagentBar\(\)\};/)
   assert.match(source, /,listFingerprint=''/, 'the stamp is page state, like the rest')
+  // 指纹必须跨文档活着（用户 2026-10-27：「从 BOT 返回到 Pocket 页面的时候要等很久」）：
+  // 切回 Pocket 是一次全新文档导航，内存里的 listFingerprint 归零 ⇒ 首拉不带指纹 ⇒
+  // 桥只能把整份列表重发一遍（本机实测 6835 行 / 33 MB）。所以它同时落在 sessionStorage，
+  // 启动时先认回来——这三条钉住写入、读取、以及启动处的恢复。
+  assert.match(source, /function setListFingerprint\(v\)\{/)
+  assert.match(source, /sessionStorage\.setItem\('dsh_pocket_list_fp',v\)/)
+  assert.match(source, /const fp=sessionStorage\.getItem\('dsh_pocket_list_fp'\)/)
+  assert.match(source, /if\(fp\)listFingerprint=fp/,
+    'the stamp is restored before the first read is issued')
   // The bridge function and the notModified answer exist in source.
   assert.match(bridgeSource, /function listFingerprint\(items\)\s*\{/)
   assert.match(bridgeSource, /notModified/)

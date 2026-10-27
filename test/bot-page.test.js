@@ -382,6 +382,9 @@ function shellShape(html = renderBotPage({ cssUrl: '/app.css?h=0', jsUrl: '/bot.
   // 个节点；替身按壳现造，壳改了步骤数它会跟着变，而写死「4」会在那天骗人，正如
   // 写死「节点按需现造」骗了整整一批测试（P1-5）。
   let steps = 0
+  // 每步里那个数字位（`class="bsc"`，页面脚本用 querySelector('.bsc') 拿到它再写
+  // 「12 个会话」）。数出来而不是写死：壳少一个位就是一行没有数字。
+  let counts = 0
   const stack = []
   const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'])
   for (const [, closing, rawName, attrs] of html.matchAll(/<(\/?)([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g)) {
@@ -395,6 +398,7 @@ function shellShape(html = renderBotPage({ cssUrl: '/app.css?h=0', jsUrl: '/bot.
     // （`boot-step-label` 是步骤里的文字标签，`boot-steps` 是容器，两者都不是一步）。
     const classAttr = /\bclass="([^"]*)"/.exec(attrs)?.[1] ?? ''
     if (classAttr.split(/\s+/).includes('boot-step') && stack.some((open) => open.id === 'bpSwitchOverlay')) steps += 1
+    if (classAttr.split(/\s+/).includes('bsc') && stack.some((open) => open.id === 'bpSwitchOverlay')) counts += 1
     const id = /\bid="([^"]+)"/.exec(attrs)?.[1] ?? null
     if (id) {
       ancestors.set(id, stack.map((open) => open.id).filter(Boolean))
@@ -405,7 +409,7 @@ function shellShape(html = renderBotPage({ cssUrl: '/app.css?h=0', jsUrl: '/bot.
     }
     if (!VOID.has(name) && !attrs.trimEnd().endsWith('/')) stack.push({ name, id })
   }
-  return { ids, ancestors, flags, steps }
+  return { ids, ancestors, flags, steps, counts }
 }
 const SHELL = shellShape()
 const SHELL_IDS = SHELL.ids
@@ -424,6 +428,9 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
   // 过渡卡的四步（由下面那个 for 按 `SHELL.steps` 造出来）。页面动画会 toggle 它们
   // 的 class，测试于是能断言「走到了哪一步」而不是只能看它有没有直接跳走。
   const switchSteps = []
+  // 每一步里的数字位（`.bsc`）。页面脚本在桥答复后写「12 个会话」／「已就绪」，
+  // 断言读这里。
+  const switchCounts = []
   const nodeListeners = new Map()
   const windowListeners = new Map()
   const documentListeners = new Map()
@@ -484,9 +491,15 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
   // `classList.toggle` 支持 `(name, force)` 两参形态），测试据此断言走到了第几步。
   for (let index = 0; index < SHELL.steps; index += 1) {
     const classes = new Set(index === 0 ? ['boot-step', 'is-active'] : ['boot-step'])
+    const countNode = { textContent: '' }
+    switchCounts.push(countNode)
     switchSteps.push({
       index,
       classes,
+      // 数字位。页面脚本用 `querySelector('.bsc')` 拿它再写字；替身从前没有这个
+      // 方法，那行数字就永远是空的（与 P1-5 同一条教训：替身缺什么，生产里就多
+      // 一条给替身让路的判据）。
+      querySelector: (selector) => (selector === '.bsc' ? countNode : null),
       classList: {
         toggle(name, force) {
           const on = force === undefined ? !classes.has(name) : Boolean(force)
@@ -605,6 +618,7 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
   return {
     node,
     switchSteps,
+    switchCounts,
     calls,
     beacons,
     document,
@@ -646,11 +660,51 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
 /**
  * 把过渡卡推完。真机上点 BOT 页右上角那一下先起四步卡（70ms 一步），走完再隔
  * 60ms 才真的离开页面——替身里 interval 不自己 fire，所以测试必须显式推。
+ *
+ * 2026-10-27② 起卡片还要等桥答复一份「已载入多少」，等不到 1.2s 兜底就自己走；
+ * 替身里那个 timeout 也不自己 fire，所以这里连它一起烧——等价于「桥 1.2 秒没答」。
  */
-function finishSwitch(page) {
+async function finishSwitch(page) {
   for (let step = 0; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
+  page.fireTimers(1200)
+  await page.settle()
   page.fireTimers(60)
+  await page.settle()
 }
+
+test('the way out says how much of the landing is already warm, on the row that speaks for it', async () => {
+  // 用户 2026-10-27②：「中间页也应该有数据的显示（即加载了多少数据的显示）」。
+  // 四步卡片快步走完只要 280ms，那时桥还什么都没说；现在它等 bridge 的答复（1200ms
+  // 兜底），把「读了多少会话 / 是否就绪」写在自己的那两行上。
+  const page = fakeBrowser({ answer: (method) => (method === 'page.cue' ? { rows: 12, ready: true } : {}) })
+  await page.settle()
+  assert.equal(SHELL.counts, SHELL.steps, 'every step carries one slot for its number')
+  page.click('bpHome', { preventDefault() {} })
+  await page.settle()
+  assert.equal(page.switchCounts[1].textContent, '12 个会话', 'the row that reads the list says how many rows it read')
+  assert.equal(page.switchCounts[3].textContent, '已就绪', 'the last row says whether the landing is warm')
+})
+
+test('a chat the roster already read opens with its rows and does not read them again', async () => {
+  // 用户 2026-10-27③a：「BOT 会话未提前读取：加载后点进 BOT 的会话还是会要加载」。
+  // 名单到手后就在后台把前几个会话的最新一页读进来；点进去直接用，不再空屏。
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') return { events: [saidByBot('预读过的一句', 400)], hasMore: false }
+      return {}
+    },
+  })
+  await page.settle(40)
+  const readBefore = page.calls.filter((call) => call.method === 'session.history').length
+  assert.ok(readBefore >= 1, 'the roster reads the newest page of what it lists, before anyone taps it')
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  assert.match(page.node('bpMsgs').innerHTML, /预读过的一句/, 'the first paint already carries the page')
+  await page.settle(40)
+  const readAfter = page.calls.filter((call) => call.method === 'session.history').length
+  assert.equal(readAfter, readBefore, 'opening a previewed chat does not read the page it already holds')
+})
 
 // 替身自己新加的两道门也要有锚——否则「加了守卫」这件事无法回归证明，门被
 // 悄悄删掉时测试面照旧全绿。
@@ -947,7 +1001,7 @@ test('a page opened with nothing behind it still finds the way home', async () =
   await page.settle()
   page.window.history.length = 1
   page.click('bpHome', { preventDefault() {} })
-  finishSwitch(page)
+  await finishSwitch(page)
   assert.deepEqual(page.navigations, [], 'there is nothing to go back to')
   assert.equal(page.location.href, '/', 'so it names the landing itself')
 })
@@ -959,8 +1013,7 @@ test('a page opened from another site goes to the landing, not back to that site
   // page, but it is not this site's landing.
   page.document.referrer = 'https://evil.example/post'
   page.click('bpHome', { preventDefault() {} })
-  finishSwitch(page)
-  await page.settle()
+  await finishSwitch(page)
   assert.deepEqual(page.navigations, [], 'going back would hand the phone to the site that linked here')
   assert.equal(page.location.href, '/', 'so the Pocket button names the landing itself')
 })
@@ -1084,16 +1137,20 @@ test('one long part is walked back within itself before the part before it', asy
     },
   })
   await page.settle()
+  // 2026-10-27③a 起，名单画完就会给头几个会话各读一页（预取）。那几读发生在
+  // 打开之前，所以先取一次基线：这里要说的是「打开这一个会话读了几页」。
+  const baseline = page.calls.filter((call) => call.method === 'session.history').length
   page.location.hash = '#s=s-chief&k=bot&t=Chief'
   page.fireWindow('hashchange')
   await page.settle(80)
 
-  const history = page.calls.filter((call) => call.method === 'session.history').map((call) => call.payload)
-  assert.equal(history.length, 3, 'the first read plus two pages back inside the part')
-  assert.equal(history[0].beforeSeq, undefined, 'the newest page needs no anchor')
-  assert.equal(history[1].beforeSeq, 300, 'the page after it starts at the oldest seq seen')
-  assert.equal(history[2].beforeSeq, 200)
-  assert.equal(history[2].maxMessages, 60, 'every page asks for the same window')
+  const history = page.calls.filter((call) => call.method === 'session.history').map((call) => call.payload).slice(baseline)
+  // 预取已经把这一段的最新一页读进缓存（③a），打开时不再重读它：所以这里从
+  // 「再往前两页」开始，第一读直接带锚。
+  assert.equal(history.length, 2, 'the preview held the newest page, so this part is read two pages back inside itself')
+  assert.equal(history[0].beforeSeq, 300, 'the page after the preview starts at the oldest seq seen')
+  assert.equal(history[1].beforeSeq, 200)
+  assert.equal(history[1].maxMessages, 60, 'every page asks for the same window')
 
   const order = page.calls.map((call) => call.method)
   assert.deepEqual(order.filter((name) => name === 'bot.earlier').length, 1, 'the part before it is read once, at the end')
@@ -1123,13 +1180,15 @@ test('a host that keeps claiming more without moving is read once, not forever',
     },
   })
   await page.settle()
+  // 同上：预取的那几读不计入「打开这个会话读了几页」。
+  const baseline = page.calls.filter((call) => call.method === 'session.history').length
   page.location.hash = '#s=s-chief&k=bot&t=Chief'
   page.fireWindow('hashchange')
   await page.settle(80)
 
-  const history = () => page.calls.filter((call) => call.method === 'session.history').length
+  const history = () => page.calls.filter((call) => call.method === 'session.history').length - baseline
   const earlier = () => page.calls.filter((call) => call.method === 'bot.earlier').length
-  assert.equal(history(), 2, 'the newest page, then one page that brought nothing older')
+  assert.equal(history(), 1, 'the preview held the newest page, and the one page back brought nothing older')
   assert.equal(earlier(), 0, 'the reach-back stops there rather than looping in place')
 
   const button = { disabled: false }
@@ -1251,36 +1310,36 @@ test('the list shows the way home, and taking it says so before leaving', async 
   assert.ok(!page.classes.has('bp-chat'))
 
   page.click('bpHome', { preventDefault() {} })
-  finishSwitch(page)
-  await page.settle()
+  await finishSwitch(page)
 
-  const beacon = page.beacons.find((entry) => entry.url === '/api/rpc')
-  assert.ok(beacon, 'the hop says so while this page is still going, on the one channel that survives it')
+  const cue = page.calls.find((call) => call.method === 'page.cue')
+  assert.ok(cue, 'the hop says so while this page is still going, on the request the browser finishes for a dying document')
+  assert.equal(cue.payload.page, 'landing',
+    'and it names the page it is heading for: the way out lands on the Pocket page')
   assert.deepEqual(page.navigations, ['back'], 'and the landing is reached by going back, not by a new entry')
 })
 
-test('the last word on the way out travels as a beacon, because the page is already going', async () => {
+test('the last word on the way out rides a keepalive request, because the answer is needed', async () => {
   const page = fakeBrowser({ answer: () => ({}) })
   await page.settle()
 
   page.click('bpHome', { preventDefault() {} })
-  finishSwitch(page)
-  await page.settle()
+  await finishSwitch(page)
 
-  // The navigation happens in the same turn, which is exactly when a plain
-  // fetch gets cancelled. The cue must ride the one channel the browser still
-  // finishes for a dying document — and must not also be sent as a fetch.
-  assert.equal(page.beacons.length, 1, 'one beacon, and nothing else, carries the cue')
-  assert.equal(page.beacons[0].url, '/api/rpc', 'and it goes to the same door every other call uses')
-  assert.equal(page.calls.filter((call) => call.method === 'page.cue').length, 0,
-    'the cue is not sent twice: the beacon is the one the browser keeps')
+  // 2026-10-27②：卡片要印「已载入多少」，beacon 交不回答案，所以走 keepalive
+  // fetch（文档消失后浏览器仍会把它做完），beacon 只在没有 fetch 时兜底。
+  assert.equal(page.calls.filter((call) => call.method === 'page.cue').length, 1,
+    'one cue, and nothing else, carries the word')
+  assert.equal(page.beacons.length, 0,
+    'the beacon is the fallback for a page without fetch, not the path taken when fetch is here')
 })
 
 // P1-5：真机的过渡卡是 70ms×4 的动画，走完再隔 60ms 才离开。替身从前没有
 // `querySelectorAll`，页面为此写了一条双判据，于是这条分支只有真机跑得到——
 // 动画里抛错让 `leave()` 永不执行（用户卡过渡页）时，测试面照样全绿。
-test('the way out shows every step of the card before it leaves', () => {
+test('the way out shows every step of the card before it leaves', async () => {
   const page = fakeBrowser({ answer: () => ({}) })
+  const cueCount = () => page.calls.filter((call) => call.method === 'page.cue').length
   assert.equal(page.switchSteps.length, 4,
     'the shell ships four boot steps, and the stand-in counts them off the markup instead of trusting a number')
   assert.deepEqual([...page.switchSteps[0].classes], ['boot-step', 'is-active'],
@@ -1288,21 +1347,23 @@ test('the way out shows every step of the card before it leaves', () => {
 
   page.click('bpHome', { preventDefault() {} })
   assert.equal(page.node('bpSwitchOverlay').hidden, false, 'the card covers the screen while the page is on its way out')
-  assert.equal(page.beacons.length, 0, 'nothing is said to the bridge while the card still has steps to show')
   assert.deepEqual(page.navigations, [], 'and the page has not started leaving')
 
   page.fireIntervals(70)
   assert.ok(page.switchSteps[0].classList.contains('is-done'), 'the step it walked past keeps is-done')
   assert.ok(page.switchSteps[1].classList.contains('is-active'), 'and the one it reached is is-active')
-  assert.equal(page.beacons.length, 0, 'still nothing said')
+  assert.deepEqual(page.navigations, [], 'still animating, so still here')
 
   for (let step = 1; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
   assert.ok(page.switchSteps.every((step) => step.classList.contains('is-done')), 'every step ends up walked')
-  assert.equal(page.beacons.length, 0,
-    'the beacon waits for the last step and its pause — this is the moment the stand-in used to skip past')
+  assert.deepEqual(page.navigations, [],
+    'the leave waits for the last step and its pause — this is the moment the stand-in used to skip past')
 
+  page.fireTimers(1200)
+  await page.settle()
   page.fireTimers(60)
-  assert.equal(page.beacons.length, 1, 'and only then does it say its one word')
+  await page.settle()
+  assert.equal(cueCount(), 1, 'and only then does it say its one word')
   assert.deepEqual(page.navigations, ['back'], 'with the landing reached the way it came in')
 })
 

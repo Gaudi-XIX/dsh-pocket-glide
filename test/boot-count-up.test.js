@@ -32,12 +32,12 @@ const ORGANS =
   grab('const COUNT_UP_MS=', 'function setCount(') +
   grab('function setCount(', '\nconst rpc=')
 
-// Build a bootSteps host with `rows` rows, each carrying one .boot-step-count span.
+// Build a bootSteps host with `rows` rows, each carrying one .bsc span.
 function makeWorld({ reduced = false } = {}) {
   const seeds = ['0 个工作区', '0 个会话', '0 条消息', '0', '0']
   const rows = Array.from({ length: 5 }, (_, i) => {
     const el = { textContent: seeds[i] }
-    return { el, querySelector: (sel) => (sel === '.boot-step-count' ? el : null) }
+    return { el, querySelector: (sel) => (sel === '.bsc' ? el : null) }
   })
   const host = { children: rows }
   const document = { getElementById: (id) => (id === 'bootSteps' ? host : null) }
