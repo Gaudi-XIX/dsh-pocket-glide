@@ -515,7 +515,9 @@ test('M8: a stored durable password short-circuits, whatever its width', () => {
     const bridge = new LanMobileBridge({
       harnessUrl: () => 'http://127.0.0.1:9',
       innerAuth: { ready: async () => undefined, invalidate: () => {} },
-      pairingPinStore: { load: () => ({ pin, pinConsent: true }), save: () => true },
+      // D-P1-2: a store hands back a digest; plaintext only comes from a
+      // pre-digest file, which is the `live` shape.
+      pairingPinStore: { load: () => ({ live: pin, legacy: true, pinConsent: true }), save: () => true },
       now: () => 10_000_000_000_000,
     })
     const view = bridge.readPairingPin()
@@ -523,6 +525,19 @@ test('M8: a stored durable password short-circuits, whatever its width', () => {
     assert.equal(view.consent, true)
     assert.equal(view.expired, false, 'a durable password never expires on its own')
   }
+})
+
+test('M8: a digest-only store answers consent without inventing a password', () => {
+  const bridge = new LanMobileBridge({
+    harnessUrl: () => 'http://127.0.0.1:9',
+    innerAuth: { ready: async () => undefined, invalidate: () => {} },
+    pairingPinStore: { load: () => ({ digest: `sha256-abc-${'0'.repeat(64)}`, pinConsent: true }), save: () => true },
+    now: () => 10_000_000_000_000,
+  })
+  const view = bridge.readPairingPin()
+  assert.equal(view.consent, true, 'the panel still knows consent is on')
+  assert.equal(view.pin, undefined, 'but no digits are invented to show for it')
+  assert.equal(view.expired, false, 'and it is not treated as expired')
 })
 
 test('M9: x-forwarded-for cannot rename the rate-limit bucket', async () => {

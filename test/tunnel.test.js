@@ -1246,7 +1246,9 @@ test('M8: a consented durable password survives every tunnel launch', async () =
   const t = await startBridge({
     bridgeOptions: {
       ...fakeTunnelSeam,
-      pairingPinStore: { load: () => ({ pin: durable, pinConsent: true }), save: () => true },
+      // D-P1-2: a store holds a digest. `live` is the pre-digest shape, kept for
+      // the record of what an older build wrote; nothing durable is written back.
+      pairingPinStore: { load: () => ({ live: durable, legacy: true, pinConsent: true }), save: () => true },
     },
   })
   try {

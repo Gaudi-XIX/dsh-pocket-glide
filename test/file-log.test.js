@@ -30,6 +30,7 @@ import {
   pairingPinReadPaths,
   pairingPinStorePath,
   readPairingPinState,
+  verifyPairingPin,
 } from '../lib/pin-store.js'
 
 const MAX_BYTES = 512 * 1024
@@ -396,12 +397,15 @@ test('DSH_HOME in force: the isolated root is the only thing Pocket touches', ()
     const store = createDefaultPairingPinStore()
     assert.equal(store.filePath, paths[0])
     assert.deepEqual(store.load(), {}, 'the machine password was NOT read into the isolated run')
-    assert.equal(readPairingPinState(legacyPin).pin, '246810', 'the isolated store did not read the machine one')
+    assert.equal(readPairingPinState(legacyPin).live, '246810', 'the isolated store did not read the machine one')
     assert.equal(existsSync(join(fakeHome, '.dsh')), false, 'and nothing reached the home fallback either')
 
     assert.equal(store.save({ pin: '135790', pinConsent: true }), true)
-    assert.deepEqual(store.load(), { pin: '135790', pinConsent: true })
-    assert.equal(readPairingPinState(legacyPin).pin, '246810', 'a save under an override never rewrites the machine copy')
+    // D-P1-2: what comes back is a digest, so the check is "does it admit the
+    // password", not "does it spell it out".
+    assert.equal(verifyPairingPin(store.load(), '135790'), true, 'the isolated run admits the password it just saved')
+    assert.equal(store.load().live, undefined, 'and keeps no plaintext to display')
+    assert.equal(readPairingPinState(legacyPin).live, '246810', 'a save under an override never rewrites the machine copy')
 
     const logger = createFileLogger()
     assert.equal(logger.path, join(isolated, 'pocket', 'logs', 'pocket.log'), 'the log lives under the same override')
@@ -433,14 +437,18 @@ test('no DSH_HOME: the password stays exactly where it is, and the phone keeps w
 
     const store = createDefaultPairingPinStore()
     assert.equal(store.filePath, legacyPin, 'the durable password is found where it already is')
-    assert.deepEqual(store.load(), { pin: '246810', pinConsent: true }, 'so a paired phone is not asked to pair again')
+    assert.deepEqual(store.load(), { live: '246810', legacy: true, pinConsent: true }, 'so a paired phone is not asked to pair again')
     assert.equal(existsSync(join(fakeHome, '.dsh', 'pocket', 'mobile-pairing-pin.json')), false, 'reading migrates nothing')
 
     assert.equal(store.save({ pin: '246810', pinConsent: true }), true)
     assert.equal(store.filePath, legacyPin, 'and a save without an override stays in the machine location — no relocation')
     assert.equal(existsSync(join(fakeHome, '.dsh', 'pocket', 'mobile-pairing-pin.json')), false, 'nothing was copied into the unified root either')
-    assert.deepEqual(readPairingPinState(legacyPin), { pin: '246810', pinConsent: true }, 'the file was rewritten in place, not moved')
-    assert.deepEqual(store.load(), { pin: '246810', pinConsent: true }, 'the paired phone still authenticates')
+    // D-P1-2: a save that carries a fresh password writes a digest, so the digits
+    // this pre-digest file held are gone afterwards — a deliberate upgrade, in the
+    // same file, with nothing moved.
+    assert.equal(verifyPairingPin(readPairingPinState(legacyPin), '246810'), true, 'the file was upgraded in place, not moved')
+    assert.match(readFileSync(legacyPin, 'utf8'), /"digest": "sha256-/, 'and it now names the password by digest')
+    assert.equal(verifyPairingPin(store.load(), '246810'), true, 'the paired phone still authenticates')
   } finally {
     restoreEnv(saved)
     rmSync(fakeHome, { recursive: true, force: true })
@@ -469,7 +477,7 @@ test('a password written by an override run is still found once the override is 
     process.env.HOME = fakeHome
     assert.equal(pairingPinReadPaths()[0], pairingPinStorePath(join(fakeLegacy, 'dsh-pocket')), 'machine location first')
     const back = createDefaultPairingPinStore()
-    assert.deepEqual(back.load(), { pin: '864213', pinConsent: true }, 'read back through the fallback rung')
+    assert.equal(verifyPairingPin(back.load(), '864213'), true, 'read back through the fallback rung')
   } finally {
     restoreEnv(saved)
     rmSync(fakeHome, { recursive: true, force: true })
