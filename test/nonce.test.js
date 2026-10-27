@@ -95,12 +95,14 @@ test('interactive reconnect page renders the guided restore flow', () => {
   assert.doesNotMatch(html, /\son(click|change|submit)=/, 'no CSP-blocked inline event attributes')
   assert.match(html, /fetch\('\/pair\/verify'/, 'PIN branch verifies through the pairing endpoint')
   assert.match(html, /rpc\('workspace\.list'\)/, 'stage 1 syncs the workspace')
-  assert.match(html, /rpc\('session\.list',\{limit:SESSION_LIST_ROWS\}\)/, 'stage 2 syncs 30 sessions')
+  // 审核 C-P1-4：桥的 session.list 从不读 payload.limit，页面却发 {limit:30} 并注释
+  // 宣称「只拉最近 30 行省隧道字节」。删掉死参数后这里钉「不带第二参」。
+  assert.match(html, /rpc\('session\.list'\)/, 'stage 2 syncs the session list, with no limit the bridge ignores')
   assert.match(html, /fetch\('\/api\/boot'/, 'stage 3 fetches the boot payload')
   assert.match(html, /sessionStorage\.setItem\('dsh-pocket-glide-boot'/, 'boot payload is stashed for handoff')
   assert.match(html, /location\.replace\('\/'\)/, 'the flow hands off to the app document')
   assert.match(html, /SHELL_ASSETS=\{"cssUrl":"\/app\.css\?h=deadbeef","jsUrl":"\/app\.js\?l=zh&h=deadbeef"\}/, 'asset URLs are embedded for prefetching')
-  assert.match(html, /SESSION_LIST_ROWS=30/, 'session prefetch limit is baked in')
+  assert.doesNotMatch(html, /SESSION_LIST_ROWS/, 'the dead prefetch limit constant is gone')
 })
 
 test('tunnel reconnect page renders the same guided flow', () => {

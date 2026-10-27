@@ -977,3 +977,14 @@ test('BUG2 the page holds one current selection, not a catalog shadow copy', () 
   assert.match(extractFunction(js, 'closeSessionStream'), /streamProjections=null;sessionSelection=null/,
     'leaving a session drops its selection with the rest of the per-session state')
 })
+
+// 审核 C-P1-3：sharedStageScript 里的 awaitPairConfirmation 在桌面端给出非 denied 的
+// 否定结论时抛 pinError(T.expired)。reconnect 页文案表原本没有 expired 键，T.expired
+// 是 undefined，手机侧于是落到 T.netFailed（「网络不稳，请点重试」）——因果与指引双错。
+// 这条不测运行时行为，只钉「表里有这一行」：文案随 T 一起序列化进页面脚本。
+test('the reconnect copy table answers an expired confirmation with its own line', () => {
+  const zh = renderMobileReconnectPage('zh', 'lan', {})
+  const en = renderMobileReconnectPage('en', 'lan', {})
+  assert.match(zh, /连接已过期，请在电脑上重新扫码。/, 'zh carries its own expired line')
+  assert.match(en, /This connection expired\. Scan the new QR code on the computer\./, 'en carries its own expired line')
+})

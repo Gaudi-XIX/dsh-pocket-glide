@@ -313,3 +313,33 @@ test('collectSessionTails hits memory cache on repeated calls without RPC', asyn
   assert.equal(rpcCount, 1, 'repeated call must hit cache without additional RPC')
   assert.equal(tails2.s1.events.length, 1)
 })
+
+test('the tail cache is bounded and drops the oldest entry first', async () => {
+  // 审核 B2-P2-2：tailsMemoryCache 原先没有上限，手机走过多少会话就把多少个
+  // compacted tail 永久钉在宿主内存里。这里故意填到 cap 之上再采集一次：修复前
+  // 尺寸会涨到 301，修复后停在 cap，且被淘汰的是最早那条（Map 插入序，命中不重排）。
+  const now = Date.now()
+  const bridge = makeBridge({
+    items: [{ sessionId: 's1', updatedAt: now - 1000, projections: { asOfSeq: 5 } }],
+    invokeHarness: async (endpoint) => {
+      if (endpoint === 'session/page') {
+        return {
+          ok: true,
+          value: { records: [{ seq: 1, type: 'assistant/message', data: { message: { content: [{ kind: 'text', text: 'hi' }] } } }] }
+        }
+      }
+      return { ok: false }
+    }
+  })
+  bridge.tailsMemoryCache = new Map()
+  for (let i = 0; i < 300; i++) {
+    bridge.tailsMemoryCache.set('old' + i, { throughSeq: 1, updatedAt: 1, events: [] })
+  }
+  const byId = new Map([['s1', { sessionId: 's1', updatedAt: now - 1000, projections: { asOfSeq: 5 } }]])
+  await bridge.collectSessionTails(['s1'], byId)
+
+  assert.ok(bridge.tailsMemoryCache.size < 300, 'the cache stops growing at its cap')
+  assert.equal(bridge.tailsMemoryCache.has('old0'), false, 'the oldest insertion is the one dropped')
+  assert.equal(bridge.tailsMemoryCache.has('old299'), true, 'the newest insertions survive')
+  assert.equal(bridge.tailsMemoryCache.has('s1'), true, 'and the answer that just came back is kept')
+})
