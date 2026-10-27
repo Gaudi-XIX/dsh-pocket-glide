@@ -24,6 +24,7 @@
 // only produce against a real Host.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import { createMuxMonitor } from '../lib/mux-client.js'
 import { streamSession } from '../lib/session-stream.js'
 
@@ -297,7 +298,7 @@ function sseHarness() {
   const frames = []
   const invalidations = []
   const state = { failures: 0, successes: 0, logs: [] }
-  const response = {
+  const response = Object.assign(new EventEmitter(), {
     statusCode: 0,
     headers: {},
     writableEnded: false,
@@ -313,7 +314,7 @@ function sseHarness() {
     end() {
       this.writableEnded = true
     },
-  }
+  })
   const request = { once() {}, removeListener() {} }
   const bridge = {
     options: {
