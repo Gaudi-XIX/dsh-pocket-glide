@@ -15,6 +15,7 @@ import {
   renderMobileReconnectPage,
   renderPairingPinPage
 } from '../lib/pages.js'
+import { BOT_PAGE_JS } from '../lib/bot-page.js'
 
 // The reconnect handoff and the pairing page used to carry their own copy of the
 // same five stage functions. They now pull one block from `sharedStageScript()`,
@@ -157,5 +158,15 @@ test('PARSE: every inline script of every phone page actually parses', () => {
     } catch (error) {
       assert.fail(`the ${locale} shell asset does not parse: ${error.message}`)
     }
+  }
+
+  // The bot page's script is served on its own route (/bot.js), so it never
+  // reaches the inline-block walk above — yet it is built the same way (a
+  // String.raw template that emits JavaScript) and took the shared markdown
+  // injection on 2026-10-27, so it gets the same parse gate.
+  try {
+    new vm.Script(BOT_PAGE_JS, { filename: 'bot.js' })
+  } catch (error) {
+    assert.fail(`the bot page script does not parse: ${error.message}`)
   }
 })

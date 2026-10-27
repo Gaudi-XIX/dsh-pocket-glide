@@ -604,7 +604,7 @@ test('A19c the clock is gated per bubble, not by the whole-turn running flag', (
 })
 
 test('A15 the projection keeps eventTime and normalizeUsage nested, not top level', () => {
-  const projection = between('function visibleMessages(', 'function inlineMarkdown(')
+  const projection = between('function visibleMessages(', 'function mdImageHook(')
   assert.ok(projection.includes('const eventTime='), 'eventTime must be declared inside visibleMessages')
   assert.ok(projection.includes('const normalizeUsage='), 'normalizeUsage must be declared inside visibleMessages')
   const window = between('function pad2(', 'function syncPromptUi(')
@@ -719,7 +719,7 @@ test('A18 the pill rides the LAST text block when an earlier step had text too',
 // the projections above print one pill per block again. Under interleaved segments
 // the winner is the final reply block in rendered order, backfilled after the walk.
 test('A19 the pill winner is the last reply block emitted, backfilled on the rendered tail', () => {
-  const projection = between('function visibleMessages(events)', 'function inlineMarkdown(')
+  const projection = between('function visibleMessages(events)', 'function mdImageHook(')
   assert.ok(projection.includes('let group=[],segment=0,lastText=-1,lastTime=undefined'),
     'the emitter must track the last reply position in rendered order')
   assert.ok(

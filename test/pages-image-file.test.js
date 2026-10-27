@@ -163,6 +163,12 @@ test('isTextualAttachment: the decision table', () => {
 // inlineMarkdown: known local paths become session-file images, the rest stays text
 // ---------------------------------------------------------------------------
 
+// 2026-10-27: the renderers moved to module level in lib/pages.js and reach the
+// page through markdownScript(); the image rewrite is now the page's
+// mdImageHook. This sandbox keeps the shipped bytes real — the hook and both
+// helpers come out of the served script with extractFunction, only the page
+// globals they read (activeSession / knownPathsOf / esc) are stubs. A
+// hand-written hook stand-in here would stop guarding the thing it names.
 function markdownSandbox(paths) {
   const js = assets.zh.js
   const known = new Set(paths)
@@ -172,6 +178,7 @@ function markdownSandbox(paths) {
     extractFunction(js, 'baseNameOf'),
     extractFunction(js, 'sessionFileUrl'),
     `const knownPathsOf=(id)=>known`,
+    extractFunction(js, 'mdImageHook'),
     extractFunction(js, 'inlineMarkdown'),
   ].join('\n')
   return new Function('known', `${body};return { inlineMarkdown }`)(known)

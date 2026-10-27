@@ -22,7 +22,7 @@ function between(startAnchor, endAnchor) {
 const code = [
   between('function turnKeyOf(', 'function contentBlocks(content)'),
   between('function contentBlocks(content)', 'function visibleMessages(events)'),
-  between('function visibleMessages(events)', 'function inlineMarkdown(text)'),
+  between('function visibleMessages(events)', 'function mdImageHook('),
 ].join('\n')
 
 const L = {

@@ -832,8 +832,10 @@ test('a message typed here goes out as that session, in the shape the landing us
   assert.equal(typeof sent.payload.clientTimeZone, 'string')
   assert.equal(page.node('bpPrompt').value, '', '发出去之后输入框才清空')
   // The optimistic row: the words were on screen before the round trip answered,
-  // and they stay until the Host shows the message itself.
-  assert.match(page.node('bpMsgs').innerHTML, /class="bp-msg user is-pending">在吗</, 'the send paints at once, marked pending')
+  // and they stay until the Host shows the message itself. The text now sits in
+  // an inner .markdown block (BOT_PAGE_JS renders through the shared markdown
+  // source), so the words come after that opening tag, not straight after .bp-msg.
+  assert.match(page.node('bpMsgs').innerHTML, /class="bp-msg user is-pending"><div class="markdown"><p>在吗<\/p>/, 'the send paints at once, marked pending')
 })
 
 test('the transcript keeps what was said and drops the machinery', async () => {
@@ -853,10 +855,40 @@ test('the transcript keeps what was said and drops the machinery', async () => {
   page.fireWindow('hashchange')
   await page.settle()
   const msgs = page.node('bpMsgs').innerHTML
-  assert.match(msgs, /class="bp-msg user">你好</)
-  assert.match(msgs, /class="bp-msg assistant">在</)
+  assert.match(msgs, /class="bp-msg user"><div class="markdown"><p>你好<\/p>/)
+  assert.match(msgs, /class="bp-msg assistant"><div class="markdown"><p>在<\/p>/)
   assert.ok(!msgs.includes('tool_use'), '工具调用不进手机的消息流')
   assert.ok(!msgs.includes('先想一想'), '思考也不进')
+})
+
+// 2026-10-27: the message body now renders through the same markdown source the
+// Pocket landing uses (pages.js markdownScript → BOT_PAGE_JS). This pins the two
+// halves of that contract: block/inline markdown becomes elements instead of
+// showing its own syntax, and the image rewrite — which needs the landing's
+// session-file organ — stays out, so a picture arrives as the text it was.
+test('a message body is drawn as markdown, and an image stays the text it arrived as', async () => {
+  const body = '# 标题\n\n说 **重点** 和 `代码`\n\n- 一\n- 二\n\n![截图](C:\\tmp\\a.png)'
+  const page = fakeBrowser({
+    answer: (method) => (method === 'session.history'
+      ? {
+          events: [
+            { event: { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: body }] } } } },
+          ],
+        }
+      : {}),
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle()
+  const msgs = page.node('bpMsgs').innerHTML
+  assert.ok(msgs.includes('<h1>标题</h1>'), 'a heading becomes a heading, not a line starting with #')
+  assert.ok(msgs.includes('<strong>重点</strong>'), 'bold becomes bold')
+  assert.ok(msgs.includes('<code>代码</code>'), 'a code span becomes code')
+  assert.ok(msgs.includes('<li>一</li>'), 'a list becomes a list')
+  assert.ok(!msgs.includes('**重点**'), 'no raw markdown syntax is left on screen')
+  assert.ok(!msgs.includes('<img'), 'no image is requested from a page that cannot serve session files')
+  assert.ok(msgs.includes('![截图](C:\\tmp\\a.png)'), 'the image syntax is shown as written')
 })
 
 // ---------------------------------------------------------------------------
@@ -1078,10 +1110,10 @@ test('opening a Bot chat reaches back past the newest part to what came before i
   await page.settle(60)
 
   const msgs = page.node('bpMsgs').innerHTML
-  assert.match(msgs, /class="bp-msg user">最早的那句话/, 'the oldest part is drawn, not just the newest')
-  assert.match(msgs, /class="bp-msg user">上一段说的话/, 'and the part right before it')
+  assert.match(msgs, /class="bp-msg user"><div class="markdown"><p>最早的那句话/, 'the oldest part is drawn, not just the newest')
+  assert.match(msgs, /class="bp-msg user"><div class="markdown"><p>上一段说的话/, 'and the part right before it')
   assert.match(msgs, /class="bp-divider"/, 'a divider marks where one part begins')
-  assert.match(msgs, /class="bp-msg assistant">最新那一段的话/, 'the part the page was pointed at stays at the bottom')
+  assert.match(msgs, /class="bp-msg assistant"><div class="markdown"><p>最新那一段的话/, 'the part the page was pointed at stays at the bottom')
 
   const calls = page.calls.filter((call) => call.method === 'bot.earlier')
   assert.equal(calls.length, 2, 'it keeps asking until the Host says there is nothing older')
