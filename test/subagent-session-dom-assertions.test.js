@@ -263,6 +263,10 @@ function buildRenderSandbox({ workspaces = [], summaries = [], expanded = null, 
     ${extractFunction(js, 'wsRunning')}
     ${extractFunction(js, 'wsGlyphOf')}
     ${extractFunction(js, 'wsHeadTimeAt')}
+    // The ungrouped bucket (0.4.6x) is built by ungroupedCards(); these DOM tests own
+    // the workspace cards only — the real bucket is covered by
+    // test/ungrouped-heading.test.js, which extracts the real function.
+    function ungroupedCards(){return workspaces}
     ${extractFunction(js, 'renderWorkspaces')}
     return {
       renderWorkspaces,

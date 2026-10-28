@@ -90,6 +90,10 @@ const listRuntime = ({ summaries = [], ledger = {}, activeSession = null, lastMs
       'tailTextOf',
       'normalizeSelection', 'fieldText',
     ].map((name) => extractFunction(js, name)).join('\n')}
+    // The ungrouped bucket (0.4.6x) is built by ungroupedCards(); these notice tests
+    // own the workspace cards only — the real bucket is covered by
+    // test/ungrouped-heading.test.js, which extracts the real function.
+    function ungroupedCards(){return workspaces}
     let lastMessageAt=${JSON.stringify(lastMsg)}
     let openedLedgerRaw=${JSON.stringify(JSON.stringify(ledger))}
     localStorage={}

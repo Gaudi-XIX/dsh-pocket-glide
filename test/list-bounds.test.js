@@ -203,6 +203,10 @@ function paintList({ workspaces, summaries, expanded = [], pinned = [], revealed
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     const store={}
     const localStorage={getItem:(key)=>store[key]||'{}',setItem:(key,value)=>{store[key]=String(value)}}
+    // The ungrouped bucket (0.4.6x) is defined by ungroupedCards(); these renderer
+    // tests own the workspace cards only, and the real bucket has its own test file
+    // (test/ungrouped-heading.test.js) which extracts the real function.
+    function ungroupedCards(){return workspaces}
     ${body}
     return { paint(){ renderWorkspaces(); return container.innerHTML } }
   `,

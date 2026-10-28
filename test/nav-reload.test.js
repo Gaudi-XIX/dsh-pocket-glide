@@ -62,7 +62,11 @@ test('A an unchanged catalogue repaints nothing, so the mandatory re-fetch keeps
   // scroll complaint lived exactly there. The repaint now happens only when the
   // markup actually differs.
   const render = sliceTo('function renderWorkspaces(){', 'function timeFor')
-  assert.match(render, /const html=workspaces\.map\(/, 'the markup is built into a local first')
+  // 0.4.6x: the renderer builds markup from the cards list (the workspace cards plus
+  // the「未分组」bucket) instead of the workspaces array, so the local-first rule is
+  // asserted on the list it actually maps over.
+  assert.match(render, /const cards=ungroupedCards\(\)/, 'the cards list is resolved up front')
+  assert.match(render, /const html=cards\.map\(/, 'the markup is built into a local first')
   assert.match(render, /if\(host\.innerHTML!==html\)host\.innerHTML=html/, 'and assigned only when it differs')
 })
 

@@ -500,6 +500,10 @@ const workspaceSandbox = ({ storage = {}, activeSession = null, lastMsg = {} } =
     const $=(id)=>container
     function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
     ${body}
+    // The ungrouped bucket (0.4.6x) is built by ungroupedCards(); these anchor tests
+    // own the workspace cards only — the real bucket is covered by
+    // test/ungrouped-heading.test.js, which extracts the real function.
+    function ungroupedCards(){return workspaces}
     let lastMessageAt=readLastMessageMap()
     return {
       renderWorkspaces,
