@@ -698,6 +698,18 @@ test('DM-1 dark mode: the primary family is the inverted pair, never a white-on-
     'and so is the pin submit button')
 })
 
+test('DM-2 the queue save button falls back to the inverted base, not a brand fill', () => {
+  // 2026-10-28 单 1（.agents/docs/ui-pocket-fix-batch-20261028.md）：`.queue-edit-btn.is-primary`
+  // 把保存按钮写成 #fff on var(--brand)，浅色 4.33:1 / 深色 3.22:1，两侧都不到 4.5 的正文门槛。
+  // 删掉这条覆盖后回落到 .queue-edit-btn 的 --surface 底 + --ink 字：浅色 16.39:1 / 深色 14.91:1。
+  assert.doesNotMatch(css, /\.queue-edit-btn\.is-primary\{[^}]*background:var\(--brand\)/,
+    'the queue save button must not fill with the brand and write white on it')
+  const base = cssRule(css, '.queue-edit-btn')
+  assert.ok(base, 'the queue edit buttons keep their shared base rule')
+  assert.match(base, /background:var\(--surface\)/, 'the fallback base is the surface fill')
+  assert.match(base, /color:var\(--ink\)/, 'and the ink text, so both modes clear 4.5:1')
+})
+
 test('E3 model and preset selections write through to session row projections immediately', () => {
   // selectModel 成功后就地写入 sessionSummaries 该行 projections.values.modelSelection.next，
   // 杜绝 10s 缓存窗口内 reopen 设置面板时被旧 summary 盖回。
