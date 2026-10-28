@@ -686,12 +686,14 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
  * 把过渡卡推完。真机上点 BOT 页右上角那一下先起四步卡（70ms 一步），走完再隔
  * 60ms 才真的离开页面——替身里 interval 不自己 fire，所以测试必须显式推。
  *
- * 2026-10-27② 起卡片还要等桥答复一份「已载入多少」，等不到 1.2s 兜底就自己走；
- * 替身里那个 timeout 也不自己 fire，所以这里连它一起烧——等价于「桥 1.2 秒没答」。
+ * 2026-10-27② 起卡片还要等桥答复一份「已载入多少」，等不到 1.6s 兜底就自己走；
+ * 替身里那个 timeout 也不自己 fire，所以这里连它一起烧——等价于「桥 1.6 秒没答」。
+ * 1.6 这个数字不是随手定的：桥那边等 warmPage 的上限是 `pageCueWaitMs ?? 1500`，
+ * 卡先放弃就会把数字写在正在卸载的文档上（2026-10-28）。
  */
 async function finishSwitch(page) {
   for (let step = 0; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
-  page.fireTimers(1200)
+  page.fireTimers(1600)
   await page.settle()
   page.fireTimers(60)
   await page.settle()
@@ -699,7 +701,7 @@ async function finishSwitch(page) {
 
 test('the way out says how much of the landing is already warm, on the row that speaks for it', async () => {
   // 用户 2026-10-27②：「中间页也应该有数据的显示（即加载了多少数据的显示）」。
-  // 四步卡片快步走完只要 280ms，那时桥还什么都没说；现在它等 bridge 的答复（1200ms
+  // 四步卡片快步走完只要 280ms，那时桥还什么都没说；现在它等 bridge 的答复（1.6s
   // 兜底），把「读了多少会话 / 是否就绪」写在自己的那两行上。
   const page = fakeBrowser({ answer: (method) => (method === 'page.cue' ? { rows: 12, workspaces: 3, ready: true } : {}) })
   await page.settle()
@@ -709,6 +711,43 @@ test('the way out says how much of the landing is already warm, on the row that 
   assert.equal(page.switchCounts[0].textContent, '3 个工作区', 'the first row says how many workspaces the landing holds')
   assert.equal(page.switchCounts[1].textContent, '12 个会话', 'the row that reads the list says how many rows it read')
   assert.equal(page.switchCounts[3].textContent, '已就绪', 'the last row says whether the landing is warm')
+})
+
+test('a cold summary never overwrites the numbers the page already holds with zeros', async () => {
+  // 2026-10-28：冷摘要（ready:false）里每一格都是 0。照写就把点下去那一刻刚用本地缓存
+  // 填好的「读了多少会话 / 多少消息」抹回 0——用户看到的正是「第 0/1 格恒 0」。
+  // 只有 ready:true 才允许写数字：桥没读到就说「未就绪」，一个数都不装。
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') return { events: [saidByBot('预读过的一句', 400)], hasMore: false }
+      if (method === 'page.cue') return { ready: false, rows: 0, workspaces: 0 }
+      return {}
+    },
+  })
+  await page.settle(40)
+  page.click('bpHome', { preventDefault() {} })
+  await page.settle()
+  assert.equal(page.switchCounts[1].textContent, '2 个会话', 'the rows this page already read stay on the row that counts them')
+  assert.equal(page.switchCounts[2].textContent, '2 条消息', 'and so do the messages it already holds')
+  assert.equal(page.switchCounts[3].textContent, '未就绪', 'a bridge that read nothing says so instead of printing zeros as facts')
+})
+
+test('the card outlasts the bridge’s own wait before giving up on the numbers', async () => {
+  // 桥那边等一次预热的上限是 `warmPage` 的 `pageCueWaitMs ?? 1500`（lib/bridge.js）。
+  // 卡片 1.2s 就自己走的话，慢答把数字写在正在卸载的文档上——手机上就是「第 0 格还是 0」。
+  // 所以这里钉住的是先后：1.2s 时必须还在等，1.6s 的兜底到了才准离开。
+  const page = fakeBrowser({ answer: () => ({}), hang: (method) => method === 'page.cue' })
+  await page.settle()
+  page.click('bpHome', { preventDefault() {} })
+  for (let step = 0; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
+  await page.settle()
+  page.fireTimers(1200)
+  await page.settle()
+  assert.deepEqual(page.navigations, [], '1.2s is inside the bridge’s window; leaving here is what loses the numbers')
+  page.fireTimers(1600)
+  await page.settle()
+  assert.deepEqual(page.navigations, ['back'], 'its own bound reaching 1.6s is what lets the card go')
 })
 
 test('a chat the roster already read opens with its rows and does not read them again', async () => {
@@ -1605,7 +1644,7 @@ test('the way out shows every step, and strikes a row only once its reading is s
   assert.deepEqual(page.navigations, [],
     'the leave waits for the last step and its pause — this is the moment the stand-in used to skip past')
 
-  page.fireTimers(1200)
+  page.fireTimers(1600)
   await page.settle()
   assert.ok(page.switchSteps.every((step) => step.classList.contains('is-done')),
     'the give-up timer settles every open row, so the card never leaves with an unstruck line')
