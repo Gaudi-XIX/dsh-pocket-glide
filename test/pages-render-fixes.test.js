@@ -643,31 +643,39 @@ test('E2 the read-only effort row still tells the truth about the current value'
   assert.match(show, /renderSessionSettings\(\)/, 'the live model/selection event still repaints')
 })
 
-test('DM-1 dark mode protects night vision: primary/send buttons, cancel, settings and dialogs avoid glaring white', () => {
-  // 1. 深色模式媒体查询覆盖，消除夜间纯白发光
+test('DM-1 dark mode: the primary family is the inverted pair, never a white-on-brand fill', () => {
+  // 2026-10-28 判据换向（.agents/docs/ui-dark-primary-fix-20261028.md + DESIGN.md「The Inverted
+  // Primary Rule」）：上一版把深色主按钮改成「品牌蓝底 + 白字」，为的是消除 --ink 反转成近白
+  // 带来的夜间高光；但 #fff on #6f86ff 只有 3.22:1，4.5 的正文门槛不达。现契约要求两侧同构：
+  // 深色 --ink(#f5f5f6) 底 + --paper(#141416) 字 = 16.89:1。所以本测反过来钉「深色块里不许
+  // 再有品牌蓝填充 + 白字的主操作覆盖」，反色由基础规则（token 自己翻转）给出。
   const darkBlockStart = css.indexOf('@media(prefers-color-scheme:dark)')
   assert.ok(darkBlockStart >= 0, 'mobile CSS owns a dark-mode media query')
-  const darkContent = css.slice(darkBlockStart)
+  const darkBlock = css.slice(darkBlockStart, css.indexOf('\n', darkBlockStart))
+  assert.doesNotMatch(darkBlock, /background:var\(--brand\)[^}]*color:#fff/,
+    'no dark rule may fill with the brand and write white on it')
 
-  // 发送按钮启用时走品牌蓝，禁用时走默认 surface，彻底消除白炽光
-  assert.match(darkContent, /\.composer \.primary:not\(:disabled\)\{background:var\(--brand\);border-color:var\(--brand\);color:#fff\}/,
-    'dark-mode send button uses brand accent with white arrow, not glaring ink')
-  assert.match(darkContent, /\.composer \.primary:disabled\{background:var\(--surface\);border-color:var\(--line\);color:var\(--muted\);box-shadow:none\}/,
+  // 发送按钮启用时走反色（--ink 底 / --paper 箭头），禁用时走 surface + muted：深色 16.89:1。
+  assert.ok(!darkBlock.includes('.composer .primary:not(:disabled)'),
+    'dark mode adds no brand-fill override on the enabled send button — it inherits --ink/--paper')
+  assert.match(darkBlock, /\.composer \.primary:disabled\{background:var\(--surface\);border-color:var\(--line\);color:var\(--muted\);box-shadow:none\}/,
     'dark-mode disabled send button avoids white glare with muted surface')
   // 停止生成按钮走暗底危险色
-  assert.match(darkContent, /\.primary\.cancel\{background:color-mix\(in srgb,var\(--danger\) 16%,var\(--card\)\)/,
+  assert.match(darkBlock, /\.primary\.cancel\{background:color-mix\(in srgb,var\(--danger\) 16%,var\(--card\)\)/,
     'dark-mode cancel/stop button uses dark card tinted with danger red')
   // 会话设置展开态避免白球
-  assert.match(darkContent, /\.settings-trigger\[aria-expanded=true\]\{border-color:var\(--brand\);background:var\(--hover\);color:var\(--brand\)\}/,
+  assert.match(darkBlock, /\.settings-trigger\[aria-expanded=true\]\{border-color:var\(--brand\);background:var\(--hover\);color:var\(--brand\)\}/,
     'dark-mode settings trigger expanded state avoids solid white')
-  // 提问弹窗主提交按钮
-  assert.match(darkContent, /\.question-actions \.submit-answer\{border-color:var\(--brand\);background:var\(--brand\);color:#fff\}/,
-    'dark-mode question submit button uses brand accent')
-  // 提问选项选中态
-  assert.match(darkContent, /\.question-option\.selected \.option-control\{border-color:var\(--brand\);background:var\(--brand\);color:#fff\}/,
-    'dark-mode question option selected control uses brand accent')
+  // 提问弹窗主提交按钮与选项选中态：深色块里不再覆盖，反色由基础规则给出。
+  for (const selector of ['.question-actions .submit-answer', '.question-option.selected .option-control']) {
+    assert.ok(!darkBlock.includes(selector), `the dark block no longer overrides ${selector}`)
+  }
+  assert.match(css, /\.submit-answer\{border-color:var\(--ink\);background:var\(--ink\);color:var\(--paper\);/,
+    'the question submit button is the inverted pair')
+  assert.match(css, /\.question-option\.selected \.option-control\{border-color:var\(--ink\);background:var\(--ink\);color:var\(--paper\)\}/,
+    'the selected option control is the inverted pair')
   // 浮层提示 toast 走深灰微光
-  assert.match(darkContent, /\.toast\{background:#232428;color:var\(--ink\);border:1px solid var\(--line\)/,
+  assert.match(darkBlock, /\.toast\{background:#232428;color:var\(--ink\);border:1px solid var\(--line\)/,
     'dark-mode toast uses dark elevated pill instead of stark white capsule')
 
   // 2. 白天模式基准保持不变，保证白天高对比度与易读性
@@ -676,12 +684,18 @@ test('DM-1 dark mode protects night vision: primary/send buttons, cancel, settin
   assert.ok(css.includes('.composer .primary,.primary.cancel{width:44px;min-width:44px;border-radius:50%;padding:0;background:var(--ink);border-color:var(--ink)}'),
     'daytime composer send button retains crisp black background')
 
-  // 3. 移动端重连页面在深色模式下同样消除全屏大白块
+  // 3. 移动端重连页面：深色块里原先那条「品牌蓝填充」是同特异性的死代码——同一 <style> 后段的
+  //    .primary / #pinSubmit 用 --ink/--bg 覆盖了它，页面实际一直是反色。2026-10-28 一并删掉，
+  //    免得它看起来像「深色主按钮是蓝底白字」的契约。
   const reconnectZh = renderMobileReconnectPage('zh', 'lan')
   assert.ok(
-    reconnectZh.includes('.primary,#pinSubmit{background:var(--brand);border-color:var(--brand);color:#fff}'),
-    'reconnect page primary and pinSubmit buttons use brand accent under dark mode',
+    !reconnectZh.includes('.primary,#pinSubmit{background:var(--brand)'),
+    'the reconnect page no longer ships a dead brand-fill override for its primary buttons',
   )
+  assert.match(reconnectZh, /\.primary\{[^}]*background:var\(--ink\);color:var\(--bg\)/,
+    'the reconnect page primary is the inverted pair')
+  assert.match(reconnectZh, /#pinSubmit\{[^}]*background:var\(--ink\);color:var\(--bg\)/,
+    'and so is the pin submit button')
 })
 
 test('E3 model and preset selections write through to session row projections immediately', () => {
