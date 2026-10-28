@@ -327,14 +327,10 @@ node tools/install-to-profile.mjs --install     # 写完后顺带跑 pnpm instal
 ```
 node --test --test-concurrency=1 test/*.test.js   # test/ 套件（真桥 + 假宿主，npm test 同此）
 node test-real-webserver.mjs                      # 官方 dsh-host-webserver 真装载集成件（见其头注）
-node tools/smoke-bridge.mjs                       # 自起桥实例：桌面 bootstrap/门禁/未配对拒绝/状态形状
-node tools/smoke-pairing.mjs                      # 配对 → dsh_mobile cookie → 设备可见性闭环
 node tools/gen-qr-fixtures.mjs                    # 重生成 test/fixtures/qr-matrices.json（dev-only，需 qrcode 包）
 node tools/render-stub.mjs                       # 渲染桩：真实页面资产+桩数据起本地服务（默认 127.0.0.1:4399），浏览器手机视口目验
 ```
 
-- 两个 smoke 脚本各自起独立桥实例并从 `start()` 快照取端口寻址；它们启停的是本地 HTTP 监听，不出网。
-  端口让位是有条件的：43127 被在役桥占住时它 +1 到 43128；若 43127 与 43128 **都**被占，`start()` 直接抛错。
 - 根上的 `test-real-webserver.mjs` 是**集成件**：它加载官方 payload 里的 `dsh-host-webserver` 与 `cordis`，
   把本插件按真实 cordis 装载链（`apply()` → `ctx.inject(['connection','webServer'])` → `webServer.register`）
   装上去，验注册形状被官方 `register()` 接受、重复 `(kind,path)` 抛错、插件只占 `/desktop` 与 `/brand-logo`
