@@ -81,6 +81,23 @@ test('nothing hidden, no field: a bridge with no hidden workspace ships no empty
   assert.equal('hiddenSessionIds' in boot.ws, false, 'an empty set adds nothing to a 1.7 MB document')
 })
 
+// The other half of the same signal (Truth-Guard 2026-10-28 12:1x): a hidden
+// workspace that IS resolved but whose item has not reached the snapshot yet (the
+// carrier has only just connected) must still ship the field — an empty list — so
+// the page knows something is hidden. Shipping nothing let those rows fall into
+// the bucket, which is the one boundary the user asked not to break.
+test('a hidden workspace with no resolved members yet ships an empty list, not nothing', async () => {
+  const now = Date.now()
+  const items = [row('a', now - 1000), row('orphan', now - 1000)]
+  const bridge = makeBridge({ items, workspaceItems: [twoWorkspaces[0]], hiddenId: HIDDEN })
+  const boot = await bridge.buildMobileBoot()
+
+  assert.deepEqual(boot.ws.hiddenSessionIds, [],
+    'the field says「something is hidden」; its emptiness says「not resolved yet」')
+  assert.equal(boot.ws.items.some((item) => item.workspaceId === HIDDEN), false,
+    'and the workspace itself is still not among the items')
+})
+
 // Regression (audit P1-1, 2026-10-24): the hidden ids used to be collected from
 // the session rows (`row.workspaceId === hiddenId`), and the host sends no
 // workspaceId on any row — so the set was always empty and the hidden workspace's
@@ -124,16 +141,17 @@ function extractFunction(source, name) {
 
 // The page's own function, run against the page's own state names: a fixture that
 // re-implemented the difference here would stay green while the page did nothing.
-function ungroupedCards({ workspaces, sessionSummaries, archivedSessionIds = [], hiddenWsSessionIds = [] }) {
+function ungroupedCards({ workspaces, sessionSummaries, archivedSessionIds = [], hiddenWsSessionIds = [], hiddenWsListed = false }) {
   const body = extractFunction(js, 'ungroupedCards')
   const make = new Function(
     'workspaces',
     'sessionSummaries',
     'archivedSessionIds',
     'hiddenWsSessionIds',
+    'hiddenWsListed',
     `${body};return ungroupedCards()`,
   )
-  return make(workspaces, sessionSummaries, archivedSessionIds, hiddenWsSessionIds)
+  return make(workspaces, sessionSummaries, archivedSessionIds, hiddenWsSessionIds, hiddenWsListed)
 }
 
 const summaries = (ids) => ids.map((sessionId) => ({ sessionId, updatedAt: 1, blank: false }))
@@ -208,6 +226,33 @@ test('a page with no workspaces at all still shows nothing invented', () => {
   assert.equal(hasUngrouped(cards), false)
 })
 
+// Truth-Guard 2026-10-28 12:1x: an empty set used to ship no field, so the page
+// could not tell「nothing is hidden」from「something is hidden and its members are
+// not resolved yet」— and in that window the hidden workspace's rows fell straight
+// into the new heading. Fail-closed: the field is present, the bucket stays away.
+test('a hidden workspace whose members are not resolved yet paints no bucket at all', () => {
+  const cards = ungroupedCards({
+    workspaces: [{ workspaceId: WORKSPACE, sessionIds: ['a'] }],
+    sessionSummaries: summaries(['a', 'bot1', 'orphan']),
+    hiddenWsSessionIds: [],
+    hiddenWsListed: true,
+  })
+
+  assert.equal(hasUngrouped(cards), false,
+    'those rows look exactly like orphans here — paint nothing rather than leak the exclusion')
+})
+
+test('and a resolved hidden membership still paints the bucket, minus those rows', () => {
+  const cards = ungroupedCards({
+    workspaces: [{ workspaceId: WORKSPACE, sessionIds: ['a'] }],
+    sessionSummaries: summaries(['a', 'bot1', 'orphan']),
+    hiddenWsSessionIds: ['bot1'],
+    hiddenWsListed: true,
+  })
+
+  assert.deepEqual(lastCard(cards).sessionIds, ['orphan'])
+})
+
 // The two strings a phone user actually reads. The dictionary is already
 // serialised by the time it reaches the asset, so the label is pinned in its
 // shipped form rather than in its source form.
@@ -225,10 +270,15 @@ test('the bucket card carries no「+」: there is no workspace behind it to crea
   assert.match(marker, /esc\(w\.ungrouped\?L\.ungrouped:/, 'the title is the bucket label, not a path')
 })
 
-test('the landing stores the hidden membership the bridge sends', () => {
+test('the landing stores the hidden membership the bridge sends, and whether it was sent at all', () => {
   assert.match(
     js,
-    /hiddenWsSessionIds=Array\.isArray\(ws\.hiddenSessionIds\)/,
+    /hiddenWsListed=Array\.isArray\(ws\.hiddenSessionIds\)/,
     'applyBootData is the one door every list answer comes through (boot, loadListData, fillListFromServer)',
+  )
+  assert.match(
+    js,
+    /hiddenWsSessionIds=hiddenWsListed\?ws\.hiddenSessionIds\.filter/,
+    'presence is the signal: an empty list still means「something is hidden」',
   )
 })
