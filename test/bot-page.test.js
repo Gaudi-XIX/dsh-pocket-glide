@@ -1044,6 +1044,178 @@ test('a question for another chat never shows up in this one', async () => {
   assert.equal(page.node('bpQuestion').hidden, true, '别人的提问不摆到这一页上')
 })
 
+// ---- 模型 / 思考档位入口（BOT 页）--------------------------------------------
+// 用户 2026-10-28：手机端三个动作都要——替你回话、关卡片、改模型。前两个早就有界面，
+// 第三个桥里一直有（`bot.update` 只收 model / effort），手机上没有入口。
+//
+// 下面这几条钉的是入口本身，不钉宿主：清单一个都不写死（读 `session.models`，也就是
+// 宿主的 `session/modelCatalog`），档位取同一份答案里每个模型的 `reasoning.efforts`；
+// 改完必须回读 `bot.team`，回读说没变就不许写「已换到」。
+
+const MODEL_CATALOG = {
+  default: { provider: 'magpie-gateway', model: 'group/pool' },
+  routableProviders: ['magpie-gateway'],
+  groups: [
+    {
+      id: 'magpie-gateway',
+      name: 'Magpie',
+      models: [
+        {
+          id: 'group/pool',
+          name: 'Pool',
+          reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }], defaultEffort: 'high' },
+        },
+        { id: 'group/flash', name: 'Flash' },
+      ],
+    },
+  ],
+}
+
+/** 团队视图里那个 Bot 记录带着 model（`botTeamView` 就裁到这一层）。 */
+function teamWithModel(model) {
+  const team = teamWith()
+  team.bots[0].model = model
+  return team
+}
+
+/** 点会话顶上入口那一下。 */
+function clickModelToggle(page) {
+  const target = {}
+  page.click('bpModelBar', { target: { closest: (sel) => (sel === '[data-model-toggle]' ? target : null) } })
+}
+
+/** 点面板里的某一行（模型或档位）。 */
+function clickModelPick(page, selector, attr, value) {
+  const target = { getAttribute: (name) => (name === attr ? value : null) }
+  page.click('bpModelPanel', { target: { closest: (sel) => (sel === selector ? target : null) } })
+}
+
+/** 打开 Chief 的会话，并让 `session.models` 答一份两模型的目录。 */
+function modelPage(over = {}) {
+  let held = teamWithModel('magpie-gateway/group/pool')
+  const page = fakeBrowser({
+    answer: (method, payload) => {
+      if (method === 'bot.team') return held
+      if (method === 'session.history') return { events: [] }
+      if (method === 'session.models') return MODEL_CATALOG
+      if (method === 'bot.update') {
+        if (typeof over.onUpdate === 'function') held = over.onUpdate(held, payload) || held
+        return {}
+      }
+      return {}
+    },
+  })
+  return openQuestionChat(page).then(() => page)
+}
+
+test('the model entry shows up inside a Bot chat and names what that Bot runs on', async () => {
+  const page = await modelPage()
+  const bar = page.node('bpModelBar')
+  assert.equal(bar.hidden, false, '会话里摆出入口')
+  assert.equal(bar.visible, true, '而且真的看得见（不是只有 hidden=false）')
+  assert.match(bar.innerHTML, /magpie-gateway\/group\/pool/,
+    '写的是 Bot 记录里的 model，不是界面自己的记忆')
+  assert.match(bar.innerHTML, /data-model-toggle="1"/, '它是可点的')
+})
+
+test('the list view keeps no model entry, because there is no Bot to change there', async () => {
+  const page = fakeBrowser({
+    answer: (method) => (method === 'bot.team' ? teamWithModel('magpie-gateway/group/pool') : {}),
+  })
+  await page.settle()
+  assert.equal(page.node('bpModelBar').hidden, true, '列表页没有入口')
+  assert.equal(page.node('bpModelBar').innerHTML, '', '也不留上回会话里的那行字')
+  assert.equal(page.node('bpModelPanel').hidden, true)
+})
+
+test('opening the entry reads the Host catalogue, and the current model carries its thinking levels', async () => {
+  const page = await modelPage()
+  clickModelToggle(page)
+  await page.settle()
+  assert.ok(page.calls.some((call) => call.method === 'session.models'),
+    '清单问的是宿主，不是写死在页面里的表')
+  const panel = page.node('bpModelPanel')
+  assert.equal(panel.hidden, false, '点开就摆出面板')
+  assert.equal(panel.visible, true)
+  assert.match(panel.innerHTML, /data-model-pick="magpie-gateway\/group\/pool"/, '当前模型在清单里')
+  assert.match(panel.innerHTML, /data-model-pick="magpie-gateway\/group\/flash"/, '别的模型也在')
+  assert.match(panel.innerHTML, /data-model-pick="magpie-gateway\/group\/pool" aria-pressed="true"/,
+    '当前那个带着选中态')
+  assert.match(panel.innerHTML, /data-effort-pick="low"/, '当前模型的档位列出来了')
+  assert.match(panel.innerHTML, /data-effort-pick="high"/)
+  // 收起：再点一下同一处，面板收走，但目录不再重读（已经拿到了）。
+  clickModelToggle(page)
+  await page.settle()
+  assert.equal(page.node('bpModelPanel').hidden, true)
+  assert.equal(page.calls.filter((call) => call.method === 'session.models').length, 1,
+    '目录读一次就够，收起再展开不重复问宿主')
+})
+
+test('picking a model goes through bot.update and is confirmed by re-reading the Bot', async () => {
+  const page = await modelPage({
+    onUpdate: (_held, payload) => (payload.model ? teamWithModel(payload.model) : _held),
+  })
+  clickModelToggle(page)
+  await page.settle()
+  const before = page.calls.filter((call) => call.method === 'bot.team').length
+  clickModelPick(page, '[data-model-pick]', 'data-model-pick', 'magpie-gateway/group/flash')
+  await page.settle()
+  assert.deepEqual(
+    page.calls.find((call) => call.method === 'bot.update').payload,
+    { id: 'chief', model: 'magpie-gateway/group/flash' },
+    '只发 id 与 model 两个字段——桥那侧的口径就是这样，界面不许自己加'
+  )
+  assert.ok(page.calls.filter((call) => call.method === 'bot.team').length > before,
+    '改完再读一次团队视图：确认靠回读，不靠 update 的答复')
+  assert.equal(page.node('bpToast').textContent, '已换到 magpie-gateway/group/flash')
+  assert.match(page.node('bpModelBar').innerHTML, /magpie-gateway\/group\/flash/,
+    '入口那一行跟着回读变了')
+  assert.match(page.node('bpModelPanel').innerHTML,
+    /data-model-pick="magpie-gateway\/group\/flash" aria-pressed="true"/,
+    '面板里的选中态也跟着回读走')
+})
+
+test('a Host that answers but still runs the old model is said so, not papered over', async () => {
+  const page = await modelPage() // 一直回读旧模型：update 收下了，但没真变
+  clickModelToggle(page)
+  await page.settle()
+  clickModelPick(page, '[data-model-pick]', 'data-model-pick', 'magpie-gateway/group/flash')
+  await page.settle()
+  assert.equal(page.node('bpToast').textContent,
+    '没换成：Bot 现在还是 magpie-gateway/group/pool',
+    '回读说没变，就不许写「已换到」')
+  assert.match(page.node('bpModelBar').innerHTML, /magpie-gateway\/group\/pool/,
+    '界面停在回读的事实上')
+})
+
+test('picking a thinking level sends that level and nothing else', async () => {
+  const page = await modelPage()
+  clickModelToggle(page)
+  await page.settle()
+  clickModelPick(page, '[data-effort-pick]', 'data-effort-pick', 'low')
+  await page.settle()
+  assert.deepEqual(
+    page.calls.find((call) => call.method === 'bot.update').payload,
+    { id: 'chief', effort: 'low' },
+    '档位单独一次 update，不夹带 model'
+  )
+  assert.equal(page.node('bpToast').textContent, '档位已设成 Low')
+  assert.match(page.node('bpModelPanel').innerHTML, /class="bp-pick is-on" data-effort-pick="low"/,
+    '刚设上的那一档就地打勾')
+})
+
+test('a model entry for one Bot never stays open into the next conversation', async () => {
+  const page = await modelPage()
+  clickModelToggle(page)
+  await page.settle()
+  assert.equal(page.node('bpModelPanel').hidden, false)
+  page.location.hash = ''
+  page.fireWindow('hashchange')
+  await page.settle()
+  assert.equal(page.node('bpModelBar').hidden, true, '回到列表，入口收起')
+  assert.equal(page.node('bpModelPanel').hidden, true, '面板也不许留在展开态')
+})
+
 test('a message typed here goes out as that session, in the shape the landing uses', async () => {
   const page = fakeBrowser({ answer: (method) => (method === 'session.history' ? { events: [] } : {}) })
   await page.settle()

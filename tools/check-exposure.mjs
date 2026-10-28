@@ -194,13 +194,25 @@ const PREFIX_ALLOWLIST = ['/brand-logo/']
 // 将来若真要放行前缀，必须先进 REGISTERED 逐条字面量登记，不许在这里开口子；
 // 自检里已钉死「前缀表只准有 /brand-logo/ 这一条」，加宽前缀会直接变红。
 
-/** `RPC_ALLOWLIST` 基线（AC1.2）。多出任何一项 = CRITICAL + 打印差集；少项只 warning（收紧不算暴露）。 */
+/**
+ * `RPC_ALLOWLIST` 基线（AC1.2）。多出任何一项 = CRITICAL + 打印差集；少项只 warning（收紧不算暴露）。
+ *
+ * 其中三项是**有意保留**、基线 28 → 31（2026-10-28，手机端三个动作）：
+ * - `bot.answer`：代答某一个 Bot 自己的 ask_user 卡；只收 sessionId / questionId / 所选选项，
+ *   宿主按卡上自己的选项原文重建答案，伪造的 id 与标签在宿主侧 fail closed。
+ * - `bot.dismiss`：关掉那张卡而不回答；只收一个 sessionId，宿主不留记录，重复一次会被拒。
+ * - `bot.update`：换这个 Bot 的模型 / 思考档位；只收 model 与 effort 两个字段，
+ *   改名、改角色、改说明都不在口径内。
+ */
 const RPC_BASELINE = [
   'agentPreset.list',
   'agentPreset.select',
+  'bot.answer',
   'bot.approval',
+  'bot.dismiss',
   'bot.earlier',
   'bot.team',
+  'bot.update',
   'command.execute',
   'commands.list',
   'file.upload',
@@ -565,7 +577,7 @@ function runSelfTest() {
   check('非 GET 目标集合', postPaths.join(','), [...POST_TARGETS].sort().join(','))
   check('网格 23 条', GRID.length, 23)
   check('Host 变体 4 组', VARIANTS.length, 4)
-  check('基线 28 项', RPC_BASELINE.length, 28)
+  check('基线 31 项', RPC_BASELINE.length, 31)
   check('登记表无通配', findWildcards(REGISTERED).length, 0)
   // 前缀表本身也要钉死（2026-10-24 复查建议 + fixer 收紧）：宽前缀（如 '/api'）不带 `*`，
   // findWildcards 看不见它，只有白名单式的逐字比对才拦得住。
