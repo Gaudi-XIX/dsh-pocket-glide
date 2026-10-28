@@ -69,7 +69,7 @@ Write-Host ''
 Write-Host '=== 5) 手机壳摘要：运行桥 V= 与磁盘实算比对 ==='
 # 生效判据（2026-10-21 定）：重启后运行桥 /sw.js 的 V= 等于按盘上 lib/pages.js
 # 实算的 zh 壳摘要（sha256(css \0 js).slice(0,12)）。桥只回 V，不回壳本体。
-$pocketDir = 'F:\defws\dsh-pocket'
+$pocketDir = Split-Path -Parent $PSScriptRoot
 $digestJs = @'
 import { createHash } from 'node:crypto';
 import { mobilePageAssets } from './lib/pages.js';
