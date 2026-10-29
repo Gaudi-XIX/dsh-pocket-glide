@@ -3065,8 +3065,10 @@ test('the answer being written reaches the transcript through the stream, not th
 
   const source = page.streams.at(-1)
   assert.ok(source, 'opening the chat opened the stream')
-  assert.equal(source.url, '/api/session/stream?sessionId=s-chief',
-    'it is the bridge’s own stream for this conversation, no endpoint of this page’s own')
+  // 带上手上已有的水位：进会话时屏上已经有 260 那一条，声明到这个序号，桥就不会把
+  // 整窗重新灌一遍（不带 sinceSeq 桥按 -1 处理，等于说手上一份都没有）。
+  assert.equal(source.url, '/api/session/stream?sessionId=s-chief&sinceSeq=260',
+    'it is the bridge’s own stream for this conversation, opened at the water mark already on screen')
 
   const pollsBefore = page.calls.filter((call) => call.method === 'session.history').length
   const rowsBefore = drawnRows(page)
@@ -3091,6 +3093,38 @@ test('the answer being written reaches the transcript through the stream, not th
   await page.settle(40)
   assert.equal(page.node('bpMsgs').innerHTML.split('正在写的这句的后半段').length - 1, 1,
     'the streamed copy gave way to the Host’s own row instead of being drawn beside it')
+})
+
+test('a chunk that arrives without its start frame is not wiped by the five-second poll', async () => {
+  // 入库检的必改：中途订阅、丢帧时这一回合没有 start 帧，水位还停在 -1。而让位判据是
+  // 「正式行 _seq 比水位大」——-1 之下任何既有 assistant 行都算更深，于是 5 秒一次的
+  // refreshLatest 每一拍都把正在写的字清空一次。用户看到的是「写了一半的字每 5 秒消
+  // 失一次」。这条不发 start、直接给 chunk，再手动推一拍轮询。
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') return { events: [saidByBot('写之前的那句', 260, 1_762_000_000_000)] }
+      return {}
+    },
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle(60)
+
+  const source = page.streams.at(-1)
+  assert.ok(source, 'opening the chat opened the stream')
+  // 只有 chunk，没有 start。
+  source.dispatch('token', { type: 'chunk', revision: 9, index: 0, chunk: { type: 'text-delta', text: '正在写的这句' } })
+  assert.match(page.node('bpMsgs').innerHTML, /正在写的这句/, 'the piece lands even without a start frame')
+
+  // 这一拍轮询读到的是「写之前的那句」（seq 260）。水位若还停在 -1，它就算比水位深，
+  // 正文被清空——这正是必改要堵的那条路。
+  page.fireIntervals(5000)
+  await page.settle(60)
+  const after = page.node('bpMsgs').innerHTML
+  assert.match(after, /正在写的这句/, 'the half-written answer survives the poll: the chunk established its own water mark')
+  assert.match(after, /写之前的那句/, 'and the transcript under it is still drawn')
 })
 
 test('a stream that cannot carry frames is closed, and the five-second poll still lands the last answer', async () => {
