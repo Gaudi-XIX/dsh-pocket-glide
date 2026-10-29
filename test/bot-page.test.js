@@ -1529,7 +1529,7 @@ test('a Bot writing to a Bot is drawn as one line naming the sender, like the de
 test('a handoff keeps its own label instead of collapsing into a sender line', async () => {
   const page = await openWith([handedOff(3), relayedBy('Pixel', 4, 'request')])
   const msgs = page.node('bpMsgs').innerHTML
-  assert.match(msgs, /<div class="bp-handoff"><span>\[Handoff · part 57\]/, 'the part boundary is on screen, as it is on the desktop')
+  assert.match(msgs, /<div class="earlier-divider"><span>\[Handoff · part 57\]/, 'the part boundary is on screen, as it is on the desktop')
   assert.match(msgs, /<div class="bp-event">· Pixel<\/div>/, 'and the relay next to it is still one line')
 })
 
