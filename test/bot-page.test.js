@@ -1372,18 +1372,26 @@ test('a working bot and a talking group say so on their rows', async () => {
   await page.settle()
   const members = page.node('bpMembersList').innerHTML
   assert.match(members, /正在 bash/, 'the member row names what the Bot is running')
-  assert.match(members, /is-busy/, 'the avatar carries the busy mark')
+  // 2026-10-29 判据 D5a②：正在活动改用 Pocket 的行级状态类（.task-row.is-running），
+  // BOT 原来的 .bp-avatar.is-busy 边框脉冲是第二套语言，已删。
+  assert.match(members, /class="bp-row is-running"/, 'the row carries Pocket is-running, not a pulsing avatar')
+  assert.doesNotMatch(members, /is-busy/, 'the pulsing busy mark is gone')
   const rooms = page.node('bpRoomsList').innerHTML
   assert.match(rooms, /讨论中/, 'the group row says a turn is running there')
-  assert.match(rooms, /is-busy/, 'the group chip carries the busy mark')
+  assert.match(rooms, /class="bp-row is-running"/, 'the group row uses the same state class')
+  assert.doesNotMatch(rooms, /is-busy/, 'and the same one, not a second')
 })
 
-test('a waiting bot gets the amber tag, an idle bot keeps its role alone', async () => {
+test('a waiting bot gets the amber row, an idle bot keeps its role alone', async () => {
   const team = teamWith()
   team.bots[0].waiting = true
   const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? team : {}) })
   await page.settle()
-  assert.match(page.node('bpMembersList').innerHTML, /等模型/, 'the greeting-on-hold state is named')
+  const html = page.node('bpMembersList').innerHTML
+  assert.match(html, /等模型/, 'the greeting-on-hold state is still named in words')
+  // 2026-10-29 判据 D5a③：换掉硬编码色的 .bp-tag-wait，改用 Pocket is-awaiting 的琥珀行。
+  assert.match(html, /class="bp-row is-awaiting"/, 'the row carries Pocket is-awaiting')
+  assert.doesNotMatch(html, /bp-tag-wait/, 'the hardcoded amber tag is gone')
 })
 
 test('a message carries the same three-tier clock the landing stamps', async () => {
@@ -1401,6 +1409,27 @@ test('a message carries the same three-tier clock the landing stamps', async () 
   const msgs = page.node('bpMsgs').innerHTML
   assert.match(msgs, /class="bp-tail">10:30</, 'today prints the time of day, like the landing')
   assert.ok((msgs.match(/class="bp-tail">/g) || []).length === 2, 'both sides of the chat carry the stamp')
+})
+
+test('the answer a working Bot is still writing carries the Pocket streaming cursor', async () => {
+  const now = new Date()
+  const at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 30).getTime()
+  const team = teamWith()
+  team.bots[0].working = { tool: 'bash' }
+  const page = fakeBrowser({
+    answer: (method) => (method === 'bot.team' ? team : method === 'session.history'
+      ? { events: [saidByUser('在吗', 2, at), saidByBot('正在写', 3, at)], hasMore: false }
+      : {}),
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle()
+  const msgs = page.node('bpMsgs').innerHTML
+  // 2026-10-29 判据 D5a②：会话里正在写的回答就是 Pocket 的
+  // <div class="markdown streaming">，闪烁光标来自共享样式源的 .streaming:after。
+  assert.match(msgs, /class="markdown streaming"/, 'the row being written carries the shared streaming class')
+  assert.equal((msgs.match(/class="markdown streaming"/g) || []).length, 1, 'only the last answer carries it')
 })
 
 test('a divider stamps when the earlier part began', async () => {
@@ -2318,6 +2347,24 @@ test('the Bot transcript inherits Pocket message geometry instead of re-declarin
   // 行距必须由 .message 的 margin 单独决定：留着 gap 就会变成 gap+12px，两页行距各算各的。
   assert.match(html, /#bpMsgs\{[^}]*flex-direction:\s*column;\s*gap:\s*0/, 'the transcript column has no gap of its own')
   assert.match(html, /\.bp-tail\{[^}]*margin-top:\s*6px/, 'the stamp sits 6px under the text, like Pocket .msg-tail')
+})
+
+test('the Bot rows speak Pocket state semantics instead of a second language', () => {
+  const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  const pocketHtml = renderMobilePage({ locale: 'zh', boot: null })
+  // 2026-10-29 判据 D5a③：等用户这一态沿用 Pocket 的琥珀语言，色值与 .task-row.is-awaiting 逐字相同。
+  assert.match(pocketHtml, /\.task-row\.is-awaiting\{background:#fdf3d3\}/, 'the shared source owns the amber row')
+  assert.match(pocketHtml, /\.task-row\.is-awaiting \.task-status\{color:#c08400\}/, 'and its status mark')
+  assert.match(pocketHtml, /@media \(prefers-color-scheme:dark\)\{\.task-row\.is-awaiting\{background:rgba\(201,138,4,\.17\)\}/, 'and the dark amber')
+  assert.match(html, /\.bp-row\.is-awaiting\{background:#fdf3d3\}/, 'the Bot row uses the same amber, not a hardcoded tag colour')
+  assert.match(html, /\.bp-row\.is-awaiting \.bp-avatar,\.bp-row\.is-awaiting \.bp-chip,\.bp-row\.is-awaiting \.bp-awaiting\{color:#c08400\}/, 'and the same #c08400 on its marks')
+  assert.match(html, /\.bp-row\.is-awaiting\{background:rgba\(201,138,4,\.17\)\}/, 'dark mode takes the same 17% amber')
+  assert.match(html, /\.bp-row\.is-awaiting \.bp-copy b,\.bp-row\.is-awaiting \.bp-awaiting\{color:#f0c56b\}/, 'and the same lightened text')
+  // 2026-10-29 判据 D5a②：正在活动只剩一套语言——Pocket 的行级 is-running，状态位取 brand。
+  assert.match(html, /\.bp-row\.is-running \.bp-avatar,\.bp-row\.is-running \.bp-chip\{color:var\(--brand\)\}/, 'running paints the status mark brand, like .task-row.is-running')
+  assert.doesNotMatch(html, /bpPulse/, 'the border pulse (a second language Pocket does not have) is gone')
+  assert.doesNotMatch(html, /\.bp-avatar\.is-busy/, 'and so is the busy avatar class')
+  assert.doesNotMatch(html, /bp-tag-wait/, 'and the hardcoded amber tag')
 })
 
 test('the Bot composer send button reuses Pocket circular layout and centers the arrow SVG without text nodes', () => {
