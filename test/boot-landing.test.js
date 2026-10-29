@@ -118,15 +118,18 @@ test('the boot payload names the transport, so the first stream is the right one
 // only ever rendered for a paired phone, so it names the cached route instead.
 // 2026-10: the boot switch overlay gained a brand logo <img>, a fourth slot of
 // the same cached form — the anchor below counts four, not three.
+// 2026-10-30: the Pocket home document gained its cold-start overlay
+// (#bootOverlay, 判据 6/7), whose card carries the same brand <img> — a fifth
+// slot, again the cached route and never inlined; measured 5 on 2026-10-30.
 // The recovery/PIN pages keep inlining: an unpaired phone cannot read a gated
 // route, and test/reconnect-icon.test.js K-1 pins that.
-test('the app document names the icon route instead of inlining it four times', async () => {
+test('the app document names the icon route instead of inlining it repeatedly', async () => {
   const bridge = makeBridge({ items: candidate })
   bridge.iconUiBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47])
   const { markup } = await render(bridge)
 
   assert.equal((markup.match(/data:image\/png/g) ?? []).length, 0, 'no base64 icon in the document')
-  assert.equal((markup.match(/\/app-icon\?ui=1/g) ?? []).length, 4, 'all four icon slots point at the cached small form')
+  assert.equal((markup.match(/\/app-icon\?ui=1/g) ?? []).length, 5, 'all five icon slots point at the cached small form')
 
   // With no small bytes in hand (no icon configured, or pngjs unavailable), the
   // document must not invent a route that 404s differently than before.
