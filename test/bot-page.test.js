@@ -9,6 +9,7 @@
 // 寻址可缓存、未配对寸步不让、首页那颗浮窗只在会话页里出现且指向 /bot。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import vm from 'node:vm'
 import { startBridge, httpFetch } from './helpers.js'
 import { BOT_PAGE_JS, renderBotPage } from '../lib/bot-page.js'
 import { renderMobilePage, renderMobileReconnectPage } from '../lib/pages.js'
@@ -435,7 +436,28 @@ const SHELL = shellShape()
 const SHELL_IDS = SHELL.ids
 
 /** 预热清单（不是白名单——权威是上面的 `SHELL_IDS`）：先把页面要碰的节点造出来。 */
-const PAGE_IDS = ['bpBack', 'bpHome', 'bpReload', 'bpTitle', 'bpHint', 'bpList', 'bpSkel', 'bpPending', 'bpRoomsCount', 'bpRoomsList', 'bpMembersCount', 'bpMembersList', 'bpMsgs', 'bpComposer', 'bpPrompt', 'bpSend', 'bpToast', 'bpSwitchOverlay']
+const PAGE_IDS = ['bpBack', 'bpHome', 'bpReload', 'bpTitle', 'bpHint', 'bpBar', 'bpList', 'bpSkel', 'bpMembersList', 'bpMsgs', 'bpComposer', 'bpPrompt', 'bpSettings', 'bpSettingsPanel', 'bpSend', 'bpToast', 'bpSwitchOverlay']
+
+// 判据 9 的队列断言要跑的是页面上真正发出去的那个 `previewQueue`，所以从
+// `BOT_PAGE_JS` 里把它抠出来在 vm 里求值——同一个函数体、同一份常量，不是另抄一遍。
+// （同一套取法 test/preload-scope.test.js 已在用，这里按同一范式补上主 bot 这一档。）
+function extractFunction(source, name) {
+  const start = source.indexOf(`function ${name}(`)
+  assert.notEqual(start, -1, `${name} must exist in the rendered page script`)
+  let depth = 0
+  for (let i = start; i < source.length; i += 1) {
+    const char = source[i]
+    if (char === '{') depth += 1
+    else if (char === '}') {
+      depth -= 1
+      if (depth === 0) return source.slice(start, i + 1)
+    }
+  }
+  assert.fail(`unbalanced braces after ${name}`)
+}
+
+const PREVIEW_BOTS = Number((BOT_PAGE_JS.match(/var PREVIEW_BOTS = (\d+)/) || [])[1])
+const PREVIEW_ROOMS = Number((BOT_PAGE_JS.match(/var PREVIEW_ROOMS = (\d+)/) || [])[1])
 
 /**
  * A browser stand-in holding just what `/bot`'s script touches: ten elements
@@ -495,6 +517,10 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null, js = BOT_P
       // 初值取壳里标记写死的那些（`bpMsgs`/`bpComposer`/`bpToast` 出生就 hidden，
       // `bpSend` 出生就 disabled）——真机就是这样，页面脚本得自己打开它们。
       const born = SHELL.flags.get(id) ?? { hidden: false, disabled: false }
+      // 判据 1 起，设置键用 aria-expanded 报自己的开合（Pocket 的 .settings-trigger
+      // 就是按这个属性上色的），所以替身必须像真机那样存得住属性——只答固定值的
+      // 替身会把「点开却没改属性」这种缺陷放过去。
+      const attrs = new Map()
       made = {
         id,
         hidden: born.hidden,
@@ -506,6 +532,8 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null, js = BOT_P
         scrollHeight: 0,
         clientHeight: 0,
         style: {},
+        getAttribute: (name) => (attrs.has(name) ? attrs.get(name) : null),
+        setAttribute: (name, value) => { attrs.set(name, String(value)) },
         addEventListener(type, fn) { nodeListeners.set(id + ':' + type, fn) },
         // 过渡卡的步骤。真机上 `#bpSwitchOverlay` 里就挂着壳里那几个 `.boot-step`，
         // 页面脚本对它们做 70ms/步的动画。替身从前没有这个方法，页面为此写了
@@ -583,6 +611,13 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null, js = BOT_P
         // had no getBoundingClientRect and no `:scope > .message`, so the anchor
         // code could never be asserted (P1-5 all over again: a stand-in that is
         // missing something makes the page carry a branch for it).
+        // 判据 3：消息流末尾那一行「正在干活」是个带 id 的节点，页面画完就该能按 id 取到。
+        // 替身此前只会答 `:scope > .message`，于是「末尾那行是不是它」在替身上根本问不出来
+        // ——一个缺能力的替身会让页面为它多长一条分支（P1-5 那个教训）。
+        made.querySelector = (selector) => {
+          if (selector !== '#bpTurnStatus') return null
+          return html.includes('id="bpTurnStatus"') ? { id: 'bpTurnStatus' } : null
+        }
         made.getBoundingClientRect = () => ({ top: 0, bottom: made.clientHeight, height: made.clientHeight })
         made.querySelectorAll = (selector) => {
           if (selector !== ':scope > .message') return []
@@ -794,7 +829,8 @@ async function finishSwitch(page) {
   for (let step = 0; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
   page.fireTimers(1600)
   await page.settle()
-  page.fireTimers(60)
+  // 判据 6D：完成文字落屏之后要停 500ms 才跳转，这条表就是那 0.5 秒。
+  page.fireTimers(500)
   await page.settle()
 }
 
@@ -940,7 +976,8 @@ test('an approval draws its two buttons only when the Host says the phone may an
       : {}),
   })
   await page.settle()
-  const html = page.node('bpPending').innerHTML
+  // 判据 4A⑤：「待答」不再单开一段，审批卡画进「主 BOT」那张卡的 .task-list 顶部。
+  const html = page.node('bpMembersList').innerHTML
   assert.match(html, /data-approve="allow" data-id="a-1"/, '允许 carries the card id')
   assert.match(html, /data-approve="reject" data-id="a-1"/, '拒绝 carries the same id')
   assert.match(html, /Chief · bash/, 'the card names who asked and for what')
@@ -961,8 +998,8 @@ test('a card the desktop must answer gets no buttons', async () => {
       : {}),
   })
   await page.settle()
-  assert.match(page.node('bpPending').innerHTML, /这条要在电脑上回答/)
-  assert.ok(!page.node('bpPending').innerHTML.includes('data-approve='), 'the phone draws no button it cannot answer')
+  assert.match(page.node('bpMembersList').innerHTML, /这条要在电脑上回答/)
+  assert.ok(!page.node('bpMembersList').innerHTML.includes('data-approve='), 'the phone draws no button it cannot answer')
 })
 
 test('an answer the Host already closed hands the button back and says why', async () => {
@@ -1018,7 +1055,7 @@ async function openQuestionChat(page) {
 test('an open question is a row that names the asker, the question and the chat that answers it', async () => {
   const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? teamWithQuestion() : {}) })
   await page.settle()
-  const html = page.node('bpPending').innerHTML
+  const html = page.node('bpMembersList').innerHTML
   assert.match(html, /data-open="bot"/, '这一行点得动（走的是列表里已有那个打开分支）')
   assert.match(html, /data-sid="s-chief"/, '它开的是能回答这个问题的那个会话')
   assert.match(html, /Chief · 需要你的回答/, '先说清是谁要选择')
@@ -1177,16 +1214,15 @@ function teamWithModel(model) {
   return team
 }
 
-/** 点会话顶上入口那一下。 */
+/** 点会话输入条里那枚设置键（判据 1：入口从标题行搬进 composer）。 */
 function clickModelToggle(page) {
-  const target = {}
-  page.click('bpModelBar', { target: { closest: (sel) => (sel === '[data-model-toggle]' ? target : null) } })
+  page.click('bpSettings')
 }
 
 /** 点面板里的某一行（模型或档位）。 */
 function clickModelPick(page, selector, attr, value) {
   const target = { getAttribute: (name) => (name === attr ? value : null) }
-  page.click('bpModelPanel', { target: { closest: (sel) => (sel === selector ? target : null) } })
+  page.click('bpSettingsPanel', { target: { closest: (sel) => (sel === selector ? target : null) } })
 }
 
 /** 打开 Chief 的会话，并让 `session.models` 答一份两模型的目录。 */
@@ -1207,45 +1243,68 @@ function modelPage(over = {}) {
   return openQuestionChat(page).then(() => page)
 }
 
-test('the model entry shows up inside a Bot chat and names what that Bot runs on', async () => {
+test('the settings key lives in the composer and names what that Bot runs on', async () => {
   const page = await modelPage()
-  const bar = page.node('bpModelBar')
-  assert.equal(bar.hidden, false, '会话里摆出入口')
-  assert.equal(bar.visible, true, '而且真的看得见（不是只有 hidden=false）')
-  assert.match(bar.innerHTML, /magpie-gateway\/group\/pool/,
+  const key = page.node('bpSettings')
+  assert.equal(key.hidden, false, '会话里摆出设置键')
+  assert.equal(key.visible, true, '而且真的看得见（不是只有 hidden=false）')
+  assert.equal(key.getAttribute('aria-expanded'), 'false', '出生是收起态')
+  const panel = page.node('bpSettingsPanel')
+  assert.equal(panel.hidden, true, '没点开就不摆面板')
+  clickModelToggle(page)
+  await page.settle()
+  assert.equal(key.getAttribute('aria-expanded'), 'true', '点开：键自己报展开')
+  assert.equal(panel.hidden, false, '面板摆出来')
+  assert.match(panel.innerHTML, /magpie-gateway\/group\/pool/,
     '写的是 Bot 记录里的 model，不是界面自己的记忆')
-  assert.match(bar.innerHTML, /data-model-toggle="1"/, '它是可点的')
+  assert.match(panel.innerHTML, /class="setting-pick" data-pick="model"/,
+    '面板套的是共享 .setting-* 那一套，只有一个字段')
+  // 判据 1：BOT 侧不许再有第二套入口/选择器的类名（§6 探针：真存在的旧类名）。
+  assert.doesNotMatch(panel.innerHTML, /bp-pick|bp-modelbar/, '旧模型入口的类名一个都不留')
+  // 判据 1 的落位口径：面板必须是 .bp-composer 的后代（`$('bpSettings').closest('.bp-composer')`
+  // 要能 `contains($('bpSettingsPanel'))`），否则 absolute 面板会相对页面定位、跑到屏幕外。
+  // §6 探针用壳里真实存在的 id 链：bpComposer 是 bpSettingsPanel 的祖先。
+  assert.ok(SHELL.ancestors.get('bpSettingsPanel').includes('bpComposer'),
+    '面板长在输入条里面，absolute 才有定位祖先')
 })
 
-test('the list view keeps no model entry, because there is no Bot to change there', async () => {
+test('the list view keeps no settings key, because there is no Bot to change there', async () => {
   const page = fakeBrowser({
     answer: (method) => (method === 'bot.team' ? teamWithModel('magpie-gateway/group/pool') : {}),
   })
   await page.settle()
-  assert.equal(page.node('bpModelBar').hidden, true, '列表页没有入口')
-  assert.equal(page.node('bpModelBar').innerHTML, '', '也不留上回会话里的那行字')
-  assert.equal(page.node('bpModelPanel').hidden, true)
+  assert.equal(page.node('bpSettings').hidden, true, '列表页没有入口')
+  assert.equal(page.node('bpSettings').getAttribute('aria-expanded'), 'false')
+  assert.equal(page.node('bpSettingsPanel').hidden, true)
+  // 判据 1：名单页那一次点击不许顺手读一份用不到的模型目录。
+  const before = page.calls.filter((call) => call.method === 'session.models').length
+  clickModelToggle(page)
+  await page.settle()
+  assert.equal(page.calls.filter((call) => call.method === 'session.models').length, before,
+    '列表页按设置键不读模型目录')
+  assert.equal(page.node('bpSettingsPanel').hidden, true, '也不摆出面板')
 })
 
-test('opening the entry reads the Host catalogue, and the current model carries its thinking levels', async () => {
+test('opening the key reads the Host catalogue, and the current model carries its thinking levels', async () => {
   const page = await modelPage()
   clickModelToggle(page)
   await page.settle()
   assert.ok(page.calls.some((call) => call.method === 'session.models'),
     '清单问的是宿主，不是写死在页面里的表')
-  const panel = page.node('bpModelPanel')
+  const panel = page.node('bpSettingsPanel')
   assert.equal(panel.hidden, false, '点开就摆出面板')
   assert.equal(panel.visible, true)
   assert.match(panel.innerHTML, /data-model-pick="magpie-gateway\/group\/pool"/, '当前模型在清单里')
   assert.match(panel.innerHTML, /data-model-pick="magpie-gateway\/group\/flash"/, '别的模型也在')
-  assert.match(panel.innerHTML, /data-model-pick="magpie-gateway\/group\/pool" aria-pressed="true"/,
+  assert.match(panel.innerHTML, /class="setting-opt is-on" data-model-pick="magpie-gateway\/group\/pool"/,
     '当前那个带着选中态')
   assert.match(panel.innerHTML, /data-effort-pick="low"/, '当前模型的档位列出来了')
   assert.match(panel.innerHTML, /data-effort-pick="high"/)
   // 收起：再点一下同一处，面板收走，但目录不再重读（已经拿到了）。
   clickModelToggle(page)
   await page.settle()
-  assert.equal(page.node('bpModelPanel').hidden, true)
+  assert.equal(page.node('bpSettingsPanel').hidden, true)
+  assert.equal(page.node('bpSettings').getAttribute('aria-expanded'), 'false')
   assert.equal(page.calls.filter((call) => call.method === 'session.models').length, 1,
     '目录读一次就够，收起再展开不重复问宿主')
 })
@@ -1267,11 +1326,11 @@ test('picking a model goes through bot.update and is confirmed by re-reading the
   assert.ok(page.calls.filter((call) => call.method === 'bot.team').length > before,
     '改完再读一次团队视图：确认靠回读，不靠 update 的答复')
   assert.equal(page.node('bpToast').textContent, '已换到 magpie-gateway/group/flash')
-  assert.match(page.node('bpModelBar').innerHTML, /magpie-gateway\/group\/flash/,
-    '入口那一行跟着回读变了')
-  assert.match(page.node('bpModelPanel').innerHTML,
-    /data-model-pick="magpie-gateway\/group\/flash" aria-pressed="true"/,
-    '面板里的选中态也跟着回读走')
+  assert.match(page.node('bpSettingsPanel').innerHTML, /magpie-gateway\/group\/flash/,
+    '面板里的选中态跟着回读走')
+  assert.match(page.node('bpSettingsPanel').innerHTML,
+    /class="setting-opt is-on" data-model-pick="magpie-gateway\/group\/flash"/,
+    '刚换上的那个就地打勾')
 })
 
 test('a Host that answers but still runs the old model is said so, not papered over', async () => {
@@ -1283,7 +1342,7 @@ test('a Host that answers but still runs the old model is said so, not papered o
   assert.equal(page.node('bpToast').textContent,
     '没换成：Bot 现在还是 magpie-gateway/group/pool',
     '回读说没变，就不许写「已换到」')
-  assert.match(page.node('bpModelBar').innerHTML, /magpie-gateway\/group\/pool/,
+  assert.match(page.node('bpSettingsPanel').innerHTML, /magpie-gateway\/group\/pool/,
     '界面停在回读的事实上')
 })
 
@@ -1299,20 +1358,21 @@ test('picking a thinking level sends that level and nothing else', async () => {
     '档位单独一次 update，不夹带 model'
   )
   assert.equal(page.node('bpToast').textContent, '档位已设成 Low')
-  assert.match(page.node('bpModelPanel').innerHTML, /class="bp-pick is-on" data-effort-pick="low"/,
+  assert.match(page.node('bpSettingsPanel').innerHTML, /class="setting-opt is-on" data-effort-pick="low"/,
     '刚设上的那一档就地打勾')
 })
 
-test('a model entry for one Bot never stays open into the next conversation', async () => {
+test('a settings panel for one Bot never stays open into the next conversation', async () => {
   const page = await modelPage()
   clickModelToggle(page)
   await page.settle()
-  assert.equal(page.node('bpModelPanel').hidden, false)
+  assert.equal(page.node('bpSettingsPanel').hidden, false)
   page.location.hash = ''
   page.fireWindow('hashchange')
   await page.settle()
-  assert.equal(page.node('bpModelBar').hidden, true, '回到列表，入口收起')
-  assert.equal(page.node('bpModelPanel').hidden, true, '面板也不许留在展开态')
+  assert.equal(page.node('bpSettings').hidden, true, '回到列表，入口收起')
+  assert.equal(page.node('bpSettings').getAttribute('aria-expanded'), 'false', '键也回到收起态')
+  assert.equal(page.node('bpSettingsPanel').hidden, true, '面板也不许留在展开态')
 })
 
 test('a message typed here goes out as that session, in the shape the landing uses', async () => {
@@ -1321,7 +1381,9 @@ test('a message typed here goes out as that session, in the shape the landing us
   page.location.hash = '#s=s-chief&k=bot&t=' + encodeURIComponent('Chief')
   page.fireWindow('hashchange')
   await page.settle()
-  assert.equal(page.node('bpTitle').textContent, 'Chief')
+  // 判据 2：会话页不再在标题行重复一遍会话名（返回键与它已表明身处会话），
+  // 只有列表页那行写 document.title。
+  assert.equal(page.node('bpTitle').textContent, '', '会话页标题行留空')
   assert.equal(page.node('bpComposer').hidden, false, '进入对话就把输入条放出来')
   assert.equal(page.node('bpList').hidden, true, '并把列表让位')
   assert.equal(page.node('bpMsgs').visible, true,
@@ -1407,16 +1469,18 @@ test('the roster paints into the slots it was handed, never over the page itself
   const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? teamWith() : {}) })
   await page.settle()
   assert.equal(page.node('bpList').innerHTML, '', 'the scroll box itself is never rewritten — the roster lands in the slots')
-  assert.match(page.node('bpRoomsList').innerHTML, /data-open="room" data-id="r-flow"/, 'the group row lands in its slot')
+  assert.match(page.node('bpMembersList').innerHTML, /data-open="room" data-id="r-flow"/, 'the group row lands in its slot')
   assert.match(page.node('bpMembersList').innerHTML, /data-sid="s-chief"/, 'the member row lands in its slot')
-  assert.equal(page.node('bpRoomsCount').textContent, '1')
-  assert.equal(page.node('bpMembersCount').textContent, '1')
+  assert.match(page.node('bpMembersList').innerHTML, /class="ws-card expanded"/, '判据 4A②：分区是卡片，且初始就是展开的')
+  // 判据 4A②：卡片头右格写这一区自己有几条——三条数（主 1 / 其他 0 / 群 1）各归各卡。
+  assert.deepEqual(
+    (page.node('bpMembersList').innerHTML.match(/class="ws-last-time">(\d+)</g) || []).map((s) => s.replace(/\D+/g, '')),
+    ['1', '0', '1'], 'each card carries its own count')
   assert.equal(page.node('bpMsgs').hidden, true, 'the chat half survived the paint: the old bug destroyed it')
   assert.equal(page.node('bpMsgs').visible, false, 'list view: the transcript is hidden, so it is not visible')
 })
 
-test('a working bot and a talking group say so on their rows', async () => {
-  const team = teamWith()
+test('a working bot and a talking group say so on their rows', async () => {  const team = teamWith()
   team.bots[0].working = { tool: 'bash' }
   team.rooms[0].running = true
   const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? team : {}) })
@@ -1425,11 +1489,11 @@ test('a working bot and a talking group say so on their rows', async () => {
   assert.match(members, /正在 bash/, 'the member row names what the Bot is running')
   // 2026-10-29 判据 D5a②：正在活动改用 Pocket 的行级状态类（.task-row.is-running），
   // BOT 原来的 .bp-avatar.is-busy 边框脉冲是第二套语言，已删。
-  assert.match(members, /class="bp-row is-running"/, 'the row carries Pocket is-running, not a pulsing avatar')
+  assert.match(members, /class="task-row is-running"/, 'the row carries Pocket is-running, not a pulsing avatar')
   assert.doesNotMatch(members, /is-busy/, 'the pulsing busy mark is gone')
-  const rooms = page.node('bpRoomsList').innerHTML
+  const rooms = page.node('bpMembersList').innerHTML
   assert.match(rooms, /讨论中/, 'the group row says a turn is running there')
-  assert.match(rooms, /class="bp-row is-running"/, 'the group row uses the same state class')
+  assert.match(rooms, /class="task-row is-running"/, 'the group row uses the same state class')
   assert.doesNotMatch(rooms, /is-busy/, 'and the same one, not a second')
 })
 
@@ -1442,7 +1506,7 @@ test('a waiting bot gets the amber row instead of a word of its own', async () =
   // 2026-10-29 判据 D5a③ / §4.1 第 2 条：换掉硬编码色的 .bp-tag-wait，改用 Pocket
   // is-awaiting 的琥珀行；「等模型」不再单独占一个文字标签——标签位只留两格，
   // 被角色与「正在 X」共用，等模型由整行的底色说出来。
-  assert.match(html, /class="bp-row is-awaiting"/, 'the row carries Pocket is-awaiting')
+  assert.match(html, /class="task-row is-awaiting"/, 'the row carries Pocket is-awaiting')
   assert.doesNotMatch(html, /等模型/, 'the state is told by the row, not by a word tag')
   assert.doesNotMatch(html, /bp-tag-wait/, 'the hardcoded amber tag is gone')
 })
@@ -1464,7 +1528,7 @@ test('a message carries the same three-tier clock the landing stamps', async () 
   assert.ok((msgs.match(/class="bp-tail">/g) || []).length === 2, 'both sides of the chat carry the stamp')
 })
 
-test('the answer a working Bot is still writing carries the Pocket streaming cursor', async () => {
+test('a working Bot says so on a status line at the tail, not by painting the answer as streaming', async () => {
   const now = new Date()
   const at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 30).getTime()
   const team = teamWith()
@@ -1479,10 +1543,63 @@ test('the answer a working Bot is still writing carries the Pocket streaming cur
   page.fireWindow('hashchange')
   await page.settle()
   const msgs = page.node('bpMsgs').innerHTML
-  // 2026-10-29 判据 D5a②：会话里正在写的回答就是 Pocket 的
-  // <div class="markdown streaming">，闪烁光标来自共享样式源的 .streaming:after。
-  assert.match(msgs, /class="markdown streaming"/, 'the row being written carries the shared streaming class')
-  assert.equal((msgs.match(/class="markdown streaming"/g) || []).length, 1, 'only the last answer carries it')
+  // 判据 3：进行中不再靠给最后一条消息加 .streaming 表达（那是第二套语言），改成消息流
+  // 末尾追加一行 #bpTurnStatus；文案由 working 的形状决定——对象带 tool 就报工具名。
+  assert.doesNotMatch(msgs, /class="markdown streaming"/, '最后一条消息不再被打上 streaming')
+  assert.doesNotMatch(msgs, /classList\.add\('streaming'\)/, '也不许在别处补一个 streaming')
+  assert.match(msgs, /<div id="bpTurnStatus" class="turn-status">正在 bash<\/div>/, '末尾那行报到工具名')
+  assert.equal((msgs.match(/id="bpTurnStatus"/g) || []).length, 1, '只有一行，不叠')
+  assert.ok(page.node('bpMsgs').querySelector('#bpTurnStatus'), '画完能按 id 取到它')
+  // 消息流末尾就是它：它后面不该再有别的行。
+  assert.ok(msgs.trimEnd().endsWith('</div>'), '结尾仍是一个闭合的 div')
+  assert.equal(msgs.replace(/[\s\S]*id="bpTurnStatus"/, '').replace(/<\/div>\s*$/, '').includes('bp-msg'),
+    false, '状态行排在所有消息之后，后面不再有消息行')
+})
+
+test('a working Bot with no tool named just says it is working', async () => {
+  const now = new Date()
+  const at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 30).getTime()
+  const team = teamWith()
+  team.bots[0].working = true
+  const page = fakeBrowser({
+    answer: (method) => (method === 'bot.team' ? team : method === 'session.history'
+      ? { events: [saidByUser('在吗', 2, at), saidByBot('在', 3, at)], hasMore: false }
+      : {}),
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle()
+  const msgs = page.node('bpMsgs').innerHTML
+  assert.match(msgs, /<div id="bpTurnStatus" class="turn-status">正在干活<\/div>/,
+    'working 是个布尔时只说「正在干活」，不编一个工具名')
+  assert.doesNotMatch(msgs, /分|秒/, '不带用时')
+})
+
+test('the status line goes away the moment the Bot stops working, with no completion line left behind', async () => {
+  const now = new Date()
+  const at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 30).getTime()
+  const team = teamWith()
+  team.bots[0].working = { tool: 'bash' }
+  let held = team
+  const page = fakeBrowser({
+    answer: (method) => (method === 'bot.team' ? held : method === 'session.history'
+      ? { events: [saidByUser('在吗', 2, at), saidByBot('正在写', 3, at)], hasMore: false }
+      : {}),
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle()
+  assert.ok(page.node('bpMsgs').innerHTML.includes('id="bpTurnStatus"'), '先有一行')
+  const still = teamWith()
+  still.bots[0].working = false
+  held = still
+  page.fireIntervals(5000) // 会话里那支五秒轮询：refreshLatest().then(refreshWorking)
+  await page.settle()
+  const after = page.node('bpMsgs').innerHTML
+  assert.doesNotMatch(after, /id="bpTurnStatus"/, '开工结束就收走，不留一行完成文案')
+  assert.doesNotMatch(after, /已完成|已就绪|写完了/, '也不留完成文案')
 })
 
 test('a divider stamps when the earlier part began', async () => {
@@ -2176,10 +2293,83 @@ test('the way out shows every step, and strikes a row only once its reading is s
   await page.settle()
   assert.ok(page.switchSteps.every((step) => step.classList.contains('is-done')),
     'the give-up timer settles every open row, so the card never leaves with an unstruck line')
-  page.fireTimers(60)
+  // 判据 6D：这条给的是「跳转那一档」，500ms 也是它；这一路 readyNote 为假，
+  // 直接 depart，不经过那次停留。
+  page.fireTimers(500)
   await page.settle()
   assert.equal(cueCount(), 1, 'and only then does it say its one word')
   assert.deepEqual(page.navigations, ['back'], 'with the landing reached the way it came in')
+})
+
+// 判据 6D：完成文字落屏之后要停 0.5 秒再走（t1 - t0 ∈ [500,1200]ms），而且这 0.5 秒
+// 必须是**自己那一支表**量出来的，不许靠帧同步顺带凑够。这一条把三件事分开钉：
+// ①「已就绪」落屏那一刻还没开始走；②下一档就是整整 500ms 的停留，不是 60ms 的余量；
+// ③读数没到（fail-closed 写「未就绪」）这条路上不做这次停留，仍按原来的兜底放行。
+test('the way out dwells half a second after the completion line, on its own timer', async () => {
+  const page = fakeBrowser({ answer: (method) => (method === 'page.cue' ? { rows: 12, workspaces: 3, ready: true } : {}) })
+  await page.settle()
+  page.click('bpHome', { preventDefault() {} })
+  // 桥的答复在微任务里就到了（真机也是 1.6s 上限内先答），于是这一帧里第四行
+  // 写成「已就绪」、所有行划线，0.5 秒的表从这一刻起算。
+  await page.settle()
+
+  assert.equal(page.switchCounts[3].textContent, '已就绪', 'the completion line is on screen before the dwell starts')
+  assert.ok(page.switchSteps.every((step) => step.classList.contains('is-done')), 'and every row is struck')
+  assert.deepEqual(page.navigations, [], 't0: the line landed, the page has not left yet')
+
+  // 判据 6D：t1 - t0 ≥ 500ms。只有 500ms 那一档烧掉之后才准离开——原来 60ms 的余量
+  // 让「已就绪」几乎与跳转同帧，用户根本看不到（判据 §2 第 6 条）。
+  page.fireTimers(500)
+  await page.settle()
+  assert.deepEqual(page.navigations, ['back'], 't1: half a second after t0, and not before')
+})
+
+test('the way out does not pretend it read the landing: no dwell on the not-ready branch', async () => {
+  const page = fakeBrowser({ answer: (method) => (method === 'page.cue' ? { ready: false, rows: 0, workspaces: 0 } : {}) })
+  await page.settle()
+  page.click('bpHome', { preventDefault() {} })
+  await page.settle()
+  for (let step = 0; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
+
+  assert.equal(page.switchCounts[3].textContent, '未就绪', 'the card says the landing is cold instead of "已就绪"')
+  assert.deepEqual(page.navigations, [], 'still here: nothing was read, so no dwell was earned either')
+
+  // 帧同步那支 60ms 的尾巴照旧放行——fail-closed 的路不该被一次它没挣到的停留拖慢。
+  page.fireTimers(60)
+  await page.settle()
+  assert.deepEqual(page.navigations, ['back'], 'the cold branch leaves on its old timing')
+})
+
+// 判据 6D 的承重断言：停留必须挂在自己的表上。只断言「500ms 后才走」的话，把
+// `setTimeout(depart, TRANSITION_DWELL_MS)` 删掉、让帧同步顺手多等一会儿，测试照样绿。
+test('the half-second dwell is a timer of its own, not spare time inside the frame sync', () => {
+  assert.match(BOT_PAGE_JS, /var TRANSITION_DWELL_MS = 500\b/, 'the dwell is a named constant, not a literal buried in a branch')
+  assert.match(BOT_PAGE_JS, /setTimeout\(depart, TRANSITION_DWELL_MS\)/, 'and it arms a timer of its own, on the way out')
+  assert.doesNotMatch(BOT_PAGE_JS, /setTimeout\(depart, 500\)/, 'the 0.5s is not inlined at the call site')
+  assert.doesNotMatch(BOT_PAGE_JS, /setTimeout\(go, 500\)/, 'nor is it folded into the frame sync’s own timer')
+})
+
+// 判据 9：预读队列 =（全部主 bot）∪（全部 pinned）∪（其余按 updatedAt 降序前 10 个）。
+// 主 bot 与 pinned 都**不占**那十个名额——名额只发给剩下的普通会话。无 sessionId 的
+// 不在队列里（没有可读的东西），群聊仍是另一条队列。
+test('the preload queue takes every main Bot, then every pinned one, then the newest ten of the rest', () => {
+  const previewQueue = (team, previews) =>
+    Array.from(vm.runInNewContext(`(${extractFunction(BOT_PAGE_JS, 'previewQueue')})`, { PREVIEW_BOTS, PREVIEW_ROOMS })(team, previews))
+
+  const bots = []
+  for (let i = 0; i < 3; i += 1) bots.push({ id: `main${i}`, sessionId: `main${i}`, updatedAt: 100 + i })
+  for (let i = 0; i < 15; i += 1) bots.push({ id: `bot${i}`, sessionId: `bot${i}`, updatedAt: i + 1 })
+  bots.push({ id: 'no-session', updatedAt: 999 })
+  const rooms = [{ id: 'r1' }, { id: 'r2' }]
+
+  const queue = previewQueue({ bots, rooms, mainBotIds: ['main0', 'main1', 'main2'] }, {})
+  assert.equal(PREVIEW_BOTS, 10, '十个仍是定值，主 bot 不从这里扣名额')
+  assert.equal(queue.length, 3 + 10 + 2, '三主 + 最新十个普通 + 两个群聊')
+  assert.deepEqual(queue.slice(0, 3), ['main2', 'main1', 'main0'], '主 bot 全取，按 updatedAt 倒序排在最前')
+  assert.deepEqual(queue.slice(3, 13), ['bot14', 'bot13', 'bot12', 'bot11', 'bot10', 'bot9', 'bot8', 'bot7', 'bot6', 'bot5'],
+    '其余只发十个名额，按 updatedAt 倒序')
+  assert.equal(queue.includes('no-session'), false, '没有 sessionId 就没有可读的东西，不进队列')
+  assert.deepEqual(queue.slice(13), ['r1', 'r2'], '群聊还是单独那一队')
 })
 
 test('a chat keeps the way back to the list, not to the landing', async () => {
@@ -2216,7 +2406,7 @@ test('the last roster is on screen before the team read returns, and carries no 
 
   assert.ok(page.node('bpMembersList').innerHTML.includes('Chief'),
     'the roster the phone drew last time is painted at once, before any read returns')
-  assert.ok(!page.node('bpPending').innerHTML.includes('data-approve'),
+  assert.ok(!page.node('bpMembersList').innerHTML.includes('data-approve'),
     'no 允许/拒绝 button comes back from a copy — a stale card must not be answerable')
 })
 
@@ -2282,9 +2472,7 @@ test('an unpaired clear empties the slots, never the scroll box that owns the sk
   page.fireDocument('visibilitychange')
   await page.settle()
   assert.equal(teamReads, 2, 'a visible page re-reads its roster')
-  assert.equal(page.node('bpRoomsList').innerHTML, '', 'room rows are cleared')
-  assert.equal(page.node('bpMembersList').innerHTML, '', 'member rows are cleared')
-  assert.equal(page.node('bpRoomsCount').textContent, '0', 'counts go to zero')
+  assert.equal(page.node('bpMembersList').innerHTML, '', 'the roster slot is cleared')
   // Not "bpMsgs exists" — the stand-in's node() never returns null, so that
   // assertion is always true (audit 2026-10-27 bundle E). What the clear must
   // not touch is the chat half's own state.
@@ -2528,7 +2716,12 @@ test('the Bot page viewport and typography prevent mobile WebView zoom-out scali
   assert.doesNotMatch(html, /\.bp-msg\{[^}]*font-size/, 'the message body declares no font size; it inherits 14px like Pocket .message')
   // 2026-10-29 判据 D2：基准是 Pocket 的 .task-row（44px / 13.5px·550），不是 64px / 15.5px。
   // 旧断言把 BOT 自己那套放大值当成了 Pocket 的值钉在这里，方向正好反了（Pocket 原文实测）。
-  assert.match(html, /\.bp-row\{[^}]*min-height:\s*44px/, 'card row height aligned with Pocket .task-row 44px')
+  // 2026-10-30 判据 4A④：行容器改叫 .task-row，几何一条也不再由 BOT 自己声明——它逐字来自共享源。
+  assert.doesNotMatch(html, /\.bp-row\{/, 'BOT 侧不再自己声明行容器几何（改叫 .task-row，由共享源提供）')
+  // 注释里出现过旧类名，也不算——判据 4A④ 要的是「不再有那条规则」，注释不是规则。
+  assert.doesNotMatch(html.replace(/\/\*[\s\S]*?\*\//g, ''), /\.bp-row\b/, '删干净：规则与注释都不留旧类名')
+  assert.doesNotMatch(html, /\.task-row\{/, '也不许在这里复制一份 .task-row（那是第二处定义，改一处另一处必漂）')
+  assert.match(renderMobilePage({ locale: 'zh', boot: null }), /\.task-row\{[^}]*min-height:\s*44px/, 'the shared source owns Pocket .task-row 44px')
   assert.match(html, /\.bp-copy b\{[^}]*font-size:\s*13\.5px/, 'card title aligned with Pocket .task-copy strong 13.5px')
 })
 
@@ -2556,18 +2749,23 @@ test('the Bot rows speak Pocket state semantics instead of a second language', (
   assert.match(pocketHtml, /\.task-row\.is-awaiting\{background:#fdf3d3\}/, 'the shared source owns the amber row')
   assert.match(pocketHtml, /\.task-row\.is-awaiting \.task-status\{color:#c08400\}/, 'and its status mark')
   assert.match(pocketHtml, /@media \(prefers-color-scheme:dark\)\{\.task-row\.is-awaiting\{background:rgba\(201,138,4,\.17\)\}/, 'and the dark amber')
-  assert.match(html, /\.bp-row\.is-awaiting\{background:#fdf3d3\}/, 'the Bot row uses the same amber, not a hardcoded tag colour')
-  assert.match(html, /\.bp-row\.is-awaiting \.bp-avatar,\.bp-row\.is-awaiting \.bp-chip\{color:#c08400\}/, 'and the same #c08400 on its marks')
-  assert.match(html, /\.bp-row\.is-awaiting\{background:rgba\(201,138,4,\.17\)\}/, 'dark mode takes the same 17% amber')
-  assert.match(html, /\.bp-row\.is-awaiting \.bp-copy b\{color:#f0c56b\}/, 'and the same lightened text')
+  // 2026-10-30 判据 4A④/④：BOT 的行容器就是 .task-row，于是这两态**零新增 CSS**——
+  // BOT 侧不再自己写一条琥珀/品牌的第二定义，也不许复制一份共享规则。
+  // 判据只看规则本体：注释里提到旧类名不算（那几条注释正是用来解释「副本为什么删」的），
+  // 所以先去掉注释再判，和 §6「探针要用真实选择器」的要求一致——探的是规则，不是散文。
+  const bare = html.replace(/\/\*[\s\S]*?\*\//g, '')
+  assert.doesNotMatch(bare, /\.[a-z-]*bp-row\.is-awaiting/, 'BOT 不再自己声明等用户的琥珀底')
+  assert.doesNotMatch(bare, /\.bp-row\.is-running/, '也不再自己声明进行中的状态色')
+  assert.doesNotMatch(bare, /\.task-row\.is-awaiting\{/, '更不许把共享那条复制到 BOT 侧')
+  assert.doesNotMatch(bare, /\.task-row\.is-running\{/, '同上，进行中那条也不复制')
   // 2026-10-29 判据 D5a②：正在活动只剩一套语言——Pocket 的行级 is-running，状态位取 brand。
-  assert.match(html, /\.bp-row\.is-running \.bp-avatar,\.bp-row\.is-running \.bp-chip\{color:var\(--brand\)\}/, 'running paints the status mark brand, like .task-row.is-running')
+  // 状态位在 BOT 侧仍是 .bp-avatar / .bp-chip；它们只保留几何，颜色由共享 .bp-working 与行级态给。
   // 2026-10-29 必改 2：状态位常态必须是中性态，否则 running 的 brand 是「蓝→蓝」的空操作——
   // 改前 .bp-avatar 常态就是 16% 品牌底 + brand 字，Bot 行看不出忙闲；群行的 .bp-chip 常态是灰的，
   // 所以同一条规则只在群行有效。两个 26px 圆形图标位同取 var(--hover)，两行字面同构。
   assert.match(html, /\.bp-avatar\{[^}]*background:var\(--hover\);[^}]*color:var\(--muted\)/, 'the avatar idles neutral, so is-running has something to change')
   assert.match(html, /\.bp-chip\{[^}]*background:var\(--hover\);[^}]*color:var\(--muted\)/, 'and the group chip idles the same neutral, not surface on a surface row')
-  assert.doesNotMatch(html, /\.bp-row\.is-running \.bp-chip\{background:/, 'running changes the mark colour only, like Pocket .task-status, with no tint of its own')
+  assert.doesNotMatch(html, /\.bp-chip\{background:/, 'running changes the mark colour only, like Pocket .task-status, with no tint of its own')
   assert.doesNotMatch(html, /bpPulse/, 'the border pulse (a second language Pocket does not have) is gone')
   assert.doesNotMatch(html, /\.bp-avatar\.is-busy/, 'and so is the busy avatar class')
   assert.doesNotMatch(html, /bp-tag-wait/, 'and the hardcoded amber tag')
@@ -2614,9 +2812,13 @@ test('the Bot composer send button reuses Pocket circular layout and centers the
   // 2026-10-29 判据 D3：发送键改成与 Pocket .composer .primary 同构的墨色反色
   // （border-color:var(--ink) + background:var(--ink) + color:var(--paper)），
   // 品牌蓝底白字两个主题都不达 AA，见判据 2.3。
-  assert.match(html, /\.bp-composer button\{[^}]*width:\s*44px;\s*min-width:\s*44px;\s*height:\s*44px;\s*border:\s*1px solid var\(--ink\);\s*border-radius:\s*50%/, 'pure 44x44 circular button')
-  assert.match(html, /\.bp-composer button\{[^}]*background:\s*var\(--ink\);\s*color:\s*var\(--paper\)/, 'send button uses the inverted primary pair, not the brand blue')
-  assert.doesNotMatch(html, /\.bp-composer button\{[^}]*background:\s*var\(--brand\)/, 'the brand-blue send button must be gone')
+  // 2026-10-30 判据 1：输入条里多了设置键，这条规则必须收窄到 #bpSend——否则设置键
+  // 会连同提交键一起吃到墨底反色。这里同时钉「收窄没改变选中元素」：还是 44×44 圆、
+  // 还是墨底反色，只是不再用元素选择器。
+  assert.match(html, /#bpSend\{[^}]*width:\s*44px;\s*min-width:\s*44px;\s*height:\s*44px;\s*border:\s*1px solid var\(--ink\);\s*border-radius:\s*50%/, 'pure 44x44 circular button')
+  assert.match(html, /#bpSend\{[^}]*background:\s*var\(--ink\);\s*color:\s*var\(--paper\)/, 'send button uses the inverted primary pair, not the brand blue')
+  assert.doesNotMatch(html, /#bpSend\{[^}]*background:\s*var\(--brand\)/, 'the brand-blue send button must be gone')
+  assert.doesNotMatch(html, /\.bp-composer button\{/, '元素选择器不再误伤设置键')
 })
 
 test('the floating action buttons on Pocket and Bot pages share one rule instead of two copies', () => {
