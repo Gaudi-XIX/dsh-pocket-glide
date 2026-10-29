@@ -1382,15 +1382,17 @@ test('a working bot and a talking group say so on their rows', async () => {
   assert.doesNotMatch(rooms, /is-busy/, 'and the same one, not a second')
 })
 
-test('a waiting bot gets the amber row, an idle bot keeps its role alone', async () => {
+test('a waiting bot gets the amber row instead of a word of its own', async () => {
   const team = teamWith()
   team.bots[0].waiting = true
   const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? team : {}) })
   await page.settle()
   const html = page.node('bpMembersList').innerHTML
-  assert.match(html, /等模型/, 'the greeting-on-hold state is still named in words')
-  // 2026-10-29 判据 D5a③：换掉硬编码色的 .bp-tag-wait，改用 Pocket is-awaiting 的琥珀行。
+  // 2026-10-29 判据 D5a③ / §4.1 第 2 条：换掉硬编码色的 .bp-tag-wait，改用 Pocket
+  // is-awaiting 的琥珀行；「等模型」不再单独占一个文字标签——标签位只留两格，
+  // 被角色与「正在 X」共用，等模型由整行的底色说出来。
   assert.match(html, /class="bp-row is-awaiting"/, 'the row carries Pocket is-awaiting')
+  assert.doesNotMatch(html, /等模型/, 'the state is told by the row, not by a word tag')
   assert.doesNotMatch(html, /bp-tag-wait/, 'the hardcoded amber tag is gone')
 })
 
@@ -2357,14 +2359,48 @@ test('the Bot rows speak Pocket state semantics instead of a second language', (
   assert.match(pocketHtml, /\.task-row\.is-awaiting \.task-status\{color:#c08400\}/, 'and its status mark')
   assert.match(pocketHtml, /@media \(prefers-color-scheme:dark\)\{\.task-row\.is-awaiting\{background:rgba\(201,138,4,\.17\)\}/, 'and the dark amber')
   assert.match(html, /\.bp-row\.is-awaiting\{background:#fdf3d3\}/, 'the Bot row uses the same amber, not a hardcoded tag colour')
-  assert.match(html, /\.bp-row\.is-awaiting \.bp-avatar,\.bp-row\.is-awaiting \.bp-chip,\.bp-row\.is-awaiting \.bp-awaiting\{color:#c08400\}/, 'and the same #c08400 on its marks')
+  assert.match(html, /\.bp-row\.is-awaiting \.bp-avatar,\.bp-row\.is-awaiting \.bp-chip\{color:#c08400\}/, 'and the same #c08400 on its marks')
   assert.match(html, /\.bp-row\.is-awaiting\{background:rgba\(201,138,4,\.17\)\}/, 'dark mode takes the same 17% amber')
-  assert.match(html, /\.bp-row\.is-awaiting \.bp-copy b,\.bp-row\.is-awaiting \.bp-awaiting\{color:#f0c56b\}/, 'and the same lightened text')
+  assert.match(html, /\.bp-row\.is-awaiting \.bp-copy b\{color:#f0c56b\}/, 'and the same lightened text')
   // 2026-10-29 判据 D5a②：正在活动只剩一套语言——Pocket 的行级 is-running，状态位取 brand。
   assert.match(html, /\.bp-row\.is-running \.bp-avatar,\.bp-row\.is-running \.bp-chip\{color:var\(--brand\)\}/, 'running paints the status mark brand, like .task-row.is-running')
   assert.doesNotMatch(html, /bpPulse/, 'the border pulse (a second language Pocket does not have) is gone')
   assert.doesNotMatch(html, /\.bp-avatar\.is-busy/, 'and so is the busy avatar class')
   assert.doesNotMatch(html, /bp-tag-wait/, 'and the hardcoded amber tag')
+})
+
+test('the row title is a flex line: the name alone ellipsizes, the tags never shrink, the sub line is the clock', async () => {
+  const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  // 2026-10-29 判据 §4.1 第 1 条：省略只允许发生在名字那一层。整行 b 若自己挂着
+  // overflow:hidden + text-overflow，标签是它的子元素，名字一长先被裁掉的就是「主」，
+  // 裁成半个字——所以标题改成 flex 行容器，标签 flex:none，名字单独包一层裁。
+  assert.match(html, /\.bp-copy b\{[^}]*display:flex[^}]*align-items:center[^}]*gap:4px[^}]*min-width:0/, 'the title is a flex line, not one ellipsized text block')
+  assert.doesNotMatch(html, /\.bp-copy b\{[^}]*text-overflow:ellipsis/, 'the ellipsis moved off the whole title')
+  assert.match(html, /\.bp-name\{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap\}/, 'the name alone is the layer that clips')
+  assert.match(html, /\.bp-tag\{flex:none;white-space:nowrap/, 'the main tag neither shrinks nor wraps')
+  assert.match(html, /\.bp-tag-slot\{flex:none;white-space:nowrap/, 'nor does the role / working slot')
+  // 判据第四节：副行让位给时间，规格取 Pocket .task-copy time。
+  assert.match(html, /\.bp-sub\{color:var\(--muted\);font-size:10\.5px;font-variant-numeric:tabular-nums/, 'the sub line takes the Pocket clock size')
+
+  const team = teamWith()
+  const at = new Date()
+  at.setHours(10, 30, 0, 0)
+  team.bots[0].updatedAt = at.getTime()
+  team.bots.push({ id: 'scout', name: 'Scout', role: '观察员', sessionId: 's-scout', updatedAt: at.getTime() })
+  const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? team : {}) })
+  await page.settle()
+  const members = page.node('bpMembersList').innerHTML
+  assert.match(members, /<b><span class="bp-name">Scout<\/span><span class="bp-tag-slot">观察员<\/span><\/b>/, 'an idle member shows its role in the one shared slot')
+  assert.match(members, /<span class="bp-sub">10:30<\/span>/, 'and the sub line is the clock, not the role again')
+  // 「主」已经占一格，角色若与它同字就不再重复一遍（夹具里 chief 的 role 正是「主」）。
+  assert.doesNotMatch(members, /class="bp-tag">主<\/span><span class="bp-tag-slot">主</, 'the main tag is not repeated by an identical role')
+
+  team.bots[1].working = { tool: 'bash' }
+  const page2 = fakeBrowser({ answer: (method) => (method === 'bot.team' ? team : {}) })
+  await page2.settle()
+  const working = page2.node('bpMembersList').innerHTML
+  assert.match(working, /<span class="bp-tag-slot"><span class="bp-working">正在 bash<\/span><\/span>/, 'a working member puts the work in the same slot, not a second one')
+  assert.doesNotMatch(working, /观察员/, 'and the role does not sit beside it')
 })
 
 test('the Bot composer send button reuses Pocket circular layout and centers the arrow SVG without text nodes', () => {
