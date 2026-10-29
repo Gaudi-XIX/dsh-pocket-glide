@@ -1180,13 +1180,14 @@ test('a question for another chat never shows up in this one', async () => {
   assert.equal(page.node('bpQuestion').hidden, true, '别人的提问不摆到这一页上')
 })
 
-// ---- 模型 / 思考档位入口（BOT 页）--------------------------------------------
+// ---- 模型入口（BOT 页）------------------------------------------------------
 // 用户 2026-10-28：手机端三个动作都要——替你回话、关卡片、改模型。前两个早就有界面，
 // 第三个桥里一直有（`bot.update` 只收 model / effort），手机上没有入口。
 //
 // 下面这几条钉的是入口本身，不钉宿主：清单一个都不写死（读 `session.models`，也就是
-// 宿主的 `session/modelCatalog`），档位取同一份答案里每个模型的 `reasoning.efforts`；
-// 改完必须回读 `bot.team`，回读说没变就不许写「已换到」。
+// 宿主的 `session/modelCatalog`）；改完必须回读 `bot.team`，回读说没变就不许写「已换到」。
+// 判据 1③ 定了这一页只有一个字段——模型；宿主答案里即便带着 reasoning.efforts（下面那份
+// 目录就带着），也不摆思考档位。
 
 const MODEL_CATALOG = {
   default: { provider: 'magpie-gateway', model: 'group/pool' },
@@ -1285,7 +1286,7 @@ test('the list view keeps no settings key, because there is no Bot to change the
   assert.equal(page.node('bpSettingsPanel').hidden, true, '也不摆出面板')
 })
 
-test('opening the key reads the Host catalogue, and the current model carries its thinking levels', async () => {
+test('opening the key reads the Host catalogue, and only the model is offered', async () => {
   const page = await modelPage()
   clickModelToggle(page)
   await page.settle()
@@ -1298,8 +1299,12 @@ test('opening the key reads the Host catalogue, and the current model carries it
   assert.match(panel.innerHTML, /data-model-pick="magpie-gateway\/group\/flash"/, '别的模型也在')
   assert.match(panel.innerHTML, /class="setting-opt is-on" data-model-pick="magpie-gateway\/group\/pool"/,
     '当前那个带着选中态')
-  assert.match(panel.innerHTML, /data-effort-pick="low"/, '当前模型的档位列出来了')
-  assert.match(panel.innerHTML, /data-effort-pick="high"/)
+  // 判据 1③：BOT 只有一个字段——模型。Pocket 那边的「预设」「思考强度」在这边不出现，
+  // 哪怕宿主答案里带着 reasoning.efforts（MODEL_CATALOG 就带着），也不许列出来。
+  assert.doesNotMatch(panel.innerHTML, /data-effort-pick/, '不摆思考档位这一组')
+  assert.doesNotMatch(panel.innerHTML, /思考档位/, '也不摆这一组的标题')
+  assert.equal((panel.innerHTML.match(/class="setting-field"/g) || []).length, 1,
+    '整块面板只有一个字段')
   // 收起：再点一下同一处，面板收走，但目录不再重读（已经拿到了）。
   clickModelToggle(page)
   await page.settle()
@@ -1344,22 +1349,6 @@ test('a Host that answers but still runs the old model is said so, not papered o
     '回读说没变，就不许写「已换到」')
   assert.match(page.node('bpSettingsPanel').innerHTML, /magpie-gateway\/group\/pool/,
     '界面停在回读的事实上')
-})
-
-test('picking a thinking level sends that level and nothing else', async () => {
-  const page = await modelPage()
-  clickModelToggle(page)
-  await page.settle()
-  clickModelPick(page, '[data-effort-pick]', 'data-effort-pick', 'low')
-  await page.settle()
-  assert.deepEqual(
-    page.calls.find((call) => call.method === 'bot.update').payload,
-    { id: 'chief', effort: 'low' },
-    '档位单独一次 update，不夹带 model'
-  )
-  assert.equal(page.node('bpToast').textContent, '档位已设成 Low')
-  assert.match(page.node('bpSettingsPanel').innerHTML, /class="setting-opt is-on" data-effort-pick="low"/,
-    '刚设上的那一档就地打勾')
 })
 
 test('a settings panel for one Bot never stays open into the next conversation', async () => {
@@ -1471,16 +1460,119 @@ test('the roster paints into the slots it was handed, never over the page itself
   assert.equal(page.node('bpList').innerHTML, '', 'the scroll box itself is never rewritten — the roster lands in the slots')
   assert.match(page.node('bpMembersList').innerHTML, /data-open="room" data-id="r-flow"/, 'the group row lands in its slot')
   assert.match(page.node('bpMembersList').innerHTML, /data-sid="s-chief"/, 'the member row lands in its slot')
-  assert.match(page.node('bpMembersList').innerHTML, /class="ws-card expanded"/, '判据 4A②：分区是卡片，且初始就是展开的')
+  // 判据 4A②/4B：三张分区卡出生就是展开的。单次命中即绿会放过「只第一张展开」的缺陷，
+  // 所以数次数，不是找一个。
+  assert.equal(
+    (page.node('bpMembersList').innerHTML.match(/class="ws-card expanded"/g) || []).length, 3,
+    '三张分区卡全都出生展开，不是只第一张')
+  // 判据 4A③：标题文案固定这三个，且不再是 .bp-section 那套 h2。
+  assert.deepEqual(
+    (page.node('bpMembersList').innerHTML.match(/class="ws-name">([^<]+)</g) || [])
+      .map((s) => s.replace(/class="ws-name">|</g, '')),
+    ['主 BOT', '其他 BOT', '群聊'], '三区标题就是这三个字')
+  assert.doesNotMatch(page.node('bpMembersList').innerHTML, /<h2/,
+    '判据 4A③：不许再套 .bp-section 那套标题')
   // 判据 4A②：卡片头右格写这一区自己有几条——三条数（主 1 / 其他 0 / 群 1）各归各卡。
   assert.deepEqual(
     (page.node('bpMembersList').innerHTML.match(/class="ws-last-time">(\d+)</g) || []).map((s) => s.replace(/\D+/g, '')),
     ['1', '0', '1'], 'each card carries its own count')
   assert.equal(page.node('bpMsgs').hidden, true, 'the chat half survived the paint: the old bug destroyed it')
   assert.equal(page.node('bpMsgs').visible, false, 'list view: the transcript is hidden, so it is not visible')
+  // 判据 2①：列表页那行标题仍是 document.title（只有会话页才留空）。
+  assert.equal(page.node('bpTitle').textContent, 'DS Bot', '列表页标题行写的是 document.title')
 })
 
-test('a working bot and a talking group say so on their rows', async () => {  const team = teamWith()
+test('each section is newest-first, and a main Bot outranks everyone in its own card', async () => {
+  // 判据 4C：分区内「主 bot 优先 → 其余按 updatedAt 降序」，群聊分区同样按 updatedAt
+  // 降序；不许吃接口原序。夹具故意把接口原序打乱（主 bot 的 updatedAt 最小、普通 bot
+  // 是降序给的），接口原序与期望序在每一区都不一样。
+  const bots = [
+    { id: 'main-old', name: 'MainOld', role: '主', sessionId: 's-main-old', updatedAt: 1 },
+    { id: 'other-d', name: 'OtherD', role: '成员', sessionId: 's-d', updatedAt: 40 },
+    { id: 'main-mid', name: 'MainMid', role: '主', sessionId: 's-main-mid', updatedAt: 2 },
+    { id: 'other-b', name: 'OtherB', role: '成员', sessionId: 's-b', updatedAt: 20 },
+    { id: 'main-new', name: 'MainNew', role: '主', sessionId: 's-main-new', updatedAt: 3 },
+    { id: 'other-e', name: 'OtherE', role: '成员', sessionId: 's-e', updatedAt: 50 },
+    { id: 'other-a', name: 'OtherA', role: '成员', sessionId: 's-a', updatedAt: 10 },
+    { id: 'other-c', name: 'OtherC', role: '成员', sessionId: 's-c', updatedAt: 30 },
+  ]
+  const rooms = [
+    { id: 'r-old', name: 'Old', members: [], updatedAt: 5 },
+    { id: 'r-new', name: 'New', members: [], updatedAt: 7 },
+  ]
+  const team = {
+    bots,
+    rooms,
+    mainBotIds: ['main-old', 'main-mid', 'main-new'],
+    questions: { count: 0 },
+    work: { approvals: [] },
+  }
+  const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? team : {}) })
+  await page.settle()
+  const html = page.node('bpMembersList').innerHTML
+  const order = (slice) => (slice.match(/data-sid="([^"]+)"/g) || []).map((s) => s.replace(/data-sid="|"/g, ''))
+
+  // 主 BOT 卡在前，里面三条按 updatedAt 降序：3 → 2 → 1。
+  assert.deepEqual(order(html), ['s-main-new', 's-main-mid', 's-main-old', 's-e', 's-d', 's-c', 's-b', 's-a'],
+    '主区三条按 updatedAt 倒序排在最前，其余五条按 updatedAt 倒序跟上')
+  const cards = html.split('<section class="ws-card')
+  assert.equal(order(cards[1]).length, 3, '主 BOT 卡里正好三条')
+  assert.deepEqual(order(cards[1]), ['s-main-new', 's-main-mid', 's-main-old'], '主区内部也是降序')
+  assert.deepEqual(order(cards[2]), ['s-e', 's-d', 's-c', 's-b', 's-a'], '其他 BOT 卡五条，降序')
+  // 群聊分区同样按 updatedAt 降序（7 → 5），不吃接口原序（5 → 7）。
+  assert.deepEqual((cards[3].match(/data-id="([^"]+)"/g) || []).map((s) => s.replace(/data-id="|"/g, '')),
+    ['r-new', 'r-old'], '群聊分区也按 updatedAt 降序')
+
+  // 承重断言：排序靠的是这个比较器，而不是「接口正好按这个顺序给的」。删掉三处
+  // .sort(byNewest) 里任何一处，上面的顺序断言就会红；这条钉的是它的存在。
+  assert.match(BOT_PAGE_JS, /var byNewest = function \(a, b\) \{ return \(Number\(b\.updatedAt\) \|\| 0\) - \(Number\(a\.updatedAt\) \|\| 0\) \}/,
+    '降序比较器只有一个，三处共用')
+  assert.match(BOT_PAGE_JS, /mainBots\.sort\(byNewest\)/, '主区排一次')
+  assert.match(BOT_PAGE_JS, /otherBots\.sort\(byNewest\)/, '其他区排一次')
+  assert.match(BOT_PAGE_JS, /rooms\.slice\(\)\.sort\(byNewest\)/, '群聊区排一次')
+})
+
+test('tapping a section head folds that card, and the fold is memory-only', async () => {
+  // 判据 4A⑥：点 .ws-toggle 切 expanded 类、aria-expanded 跟着变，状态只存内存。
+  const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? teamWith() : {}) })
+  await page.settle()
+  assert.equal((page.node('bpMembersList').innerHTML.match(/class="ws-card expanded"/g) || []).length, 3,
+    '出生三张都展开')
+  assert.equal(page.node('bpMembersList').innerHTML.match(/aria-expanded="true"/g).length, 3,
+    '三个折叠键出生都报展开')
+
+  const head = {
+    getAttribute: (name) => (name === 'data-ws-toggle' ? '群聊' : null),
+    setAttribute(name, value) { this[name] = String(value) },
+    classList: { add() {}, remove() {} },
+  }
+  const card = {
+    classList: {
+      classes: new Set(['ws-card', 'expanded']),
+      add(name) { this.classes.add(name) },
+      remove(name) { this.classes.delete(name) },
+      contains(name) { return this.classes.has(name) },
+    },
+  }
+  head.closest = (selector) => (selector === '.ws-card' ? card : null)
+  page.click('bpList', { target: { closest: (selector) => (selector === '[data-ws-toggle]' ? head : null) } })
+  await page.settle()
+  assert.equal(head['aria-expanded'], 'false', '点一下：这个键报收起')
+  assert.equal(card.classList.contains('expanded'), false, '这张卡的 expanded 也摘了')
+
+  // 只存内存：折叠不写 localStorage（判据 4A⑥ 与 §5 第 4B 裁决）。本页确实用
+  // localStorage，但只存名单缓存这一个键（TEAM_CACHE_KEY），折叠没有自己的键。
+  assert.deepEqual(Array.from(page.store.keys()), ['pocketBotTeam'],
+    '折叠没有落进 localStorage：这里只有名单缓存那一个键')
+  // 这一条在 baseline 与 head 上都是 0 命中（名单缓存里从来没有过折叠字段），
+  // 按 §6 它不构成本批的证据，只是防「以后有人图省事把折叠塞进缓存」的回归守卫；
+  // 真正的承重断言是上面那条键集 deepEqual。
+  assert.doesNotMatch(page.store.get('pocketBotTeam') || '', /collapsed/i,
+    '名单缓存里也不带折叠状态')
+})
+
+test('a working bot and a talking group say so on their rows', async () => {
+  const team = teamWith()
   team.bots[0].working = { tool: 'bash' }
   team.rooms[0].running = true
   const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? team : {}) })
@@ -1546,6 +1638,12 @@ test('a working Bot says so on a status line at the tail, not by painting the an
   // 判据 3：进行中不再靠给最后一条消息加 .streaming 表达（那是第二套语言），改成消息流
   // 末尾追加一行 #bpTurnStatus；文案由 working 的形状决定——对象带 tool 就报工具名。
   assert.doesNotMatch(msgs, /class="markdown streaming"/, '最后一条消息不再被打上 streaming')
+  // 承重断言：baseline 那套「挑出最后一条 assistant 再给它挂 .streaming」的写法是靠
+  // `lastAnswer` 这个下标变量撑起来的（`e46e979:lib/bot-page.js` 里 4 处）。本批把它连同
+  // `i === lastAnswer ? ' streaming' : ''` 一起删干净了——这才是真删掉的标识。
+  assert.doesNotMatch(BOT_PAGE_JS, /lastAnswer/, '挑「最后一条 assistant」的那套下标逻辑整段删掉了')
+  // 回归守卫：防止有人再把 streaming 这套第二语言补回来（baseline 里它本就不是这个写法，
+  // 所以这条只守未来，不证明本批删了什么）。
   assert.doesNotMatch(msgs, /classList\.add\('streaming'\)/, '也不许在别处补一个 streaming')
   assert.match(msgs, /<div id="bpTurnStatus" class="turn-status">正在 bash<\/div>/, '末尾那行报到工具名')
   assert.equal((msgs.match(/id="bpTurnStatus"/g) || []).length, 1, '只有一行，不叠')
@@ -2345,6 +2443,8 @@ test('the way out does not pretend it read the landing: no dwell on the not-read
 test('the half-second dwell is a timer of its own, not spare time inside the frame sync', () => {
   assert.match(BOT_PAGE_JS, /var TRANSITION_DWELL_MS = 500\b/, 'the dwell is a named constant, not a literal buried in a branch')
   assert.match(BOT_PAGE_JS, /setTimeout\(depart, TRANSITION_DWELL_MS\)/, 'and it arms a timer of its own, on the way out')
+  // 下面两条是回归守卫（baseline 与 HEAD 都是 0 命中，它们守未来、不证明本批删了什么）：
+  // 0.5 秒既不许内联在调用点，也不许折进帧同步自己的表里——那样就变成「帧同步顺手多等一会儿」。
   assert.doesNotMatch(BOT_PAGE_JS, /setTimeout\(depart, 500\)/, 'the 0.5s is not inlined at the call site')
   assert.doesNotMatch(BOT_PAGE_JS, /setTimeout\(go, 500\)/, 'nor is it folded into the frame sync’s own timer')
 })
@@ -2702,6 +2802,32 @@ test('the BOT page counts the chats it already read, before the cue answers', ()
     /if \(knownRows > 0\) cardCount\(1, knownRows\)/,
     'writes them into the session step when there is anything to say',
   )
+})
+
+// 判据 2：左上角返回键与 Pocket 一致——悬浮不占位、44×44 圆、Pocket 那条折线图标，
+// 会话页不显示 Bot 名字；消息区顶部内边距跟着变成 4px。
+test('the corner back key floats over the page like Pocket, and the chat header carries no name', () => {
+  const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  // 判据 2②：会话页那根工具条脱离文档流，所以返回键不占位。BOT 只有一根条，它还服
+  // 列表页（列表页的标题与刷新键本来在流内），所以悬浮只在 body.bp-chat 下成立——
+  // 一刀切成 absolute 会把列表页的标题压到头一张分区卡上（2026-10-30 走查实测）。
+  assert.match(html, /body\.bp-chat \.bp-bar\{position:\s*absolute;\s*inset:\s*0 0 auto;\s*z-index:\s*2;\s*min-height:\s*44px;.*?padding:\s*0;\s*background:\s*transparent;\s*pointer-events:\s*none\}/,
+    '会话页工具条悬浮、不占位、不吃点击')
+  // 这条在 baseline e46e979 与 head 上都是 0 命中，它守的是 2575f96 那笔的回归
+  // （当时把 .bp-bar 一刀切成 absolute，列表页标题压到第一张卡上）。按 §6「0 命中
+  // 当证据等于没核对」，这里如实标明它不是本批的改动证据，只是防复发。
+  assert.doesNotMatch(html, /(^|\})\s*\.bp-bar\{position:\s*absolute/,
+    '列表页那根条仍在流内（否则标题压在卡上）')
+  assert.match(html, /\.bp-bar button\{[^}]*pointer-events:\s*auto/, '键本身仍然点得动')
+  assert.match(html, /\.bp-bar \.bp-hint\{[^}]*pointer-events:\s*none/, '提示文字不吃点击')
+  // 判据 2③：44×44 圆 + 阴影，图标是 Pocket 那条折线，不再是字符 ‹。
+  assert.match(html, /\.bp-bar #bpBack\{[^}]*width:\s*44px;\s*min-width:\s*44px;\s*height:\s*44px[^}]*border-radius:\s*50%;\s*padding:\s*0;\s*box-shadow:\s*0 2px 8px rgba\(0,0,0,\.06\)/,
+    '44×44 圆，带 Pocket 那层浅阴影')
+  assert.match(html, /<button id="bpBack"[^>]*><svg width="20" height="20"[^>]*><path d="M10\.5 3L5\.5 8L10\.5 13" stroke="currentColor" stroke-width="1\.5"/,
+    '图标是 Pocket 那条折线，20×20、1.5 粗')
+  assert.doesNotMatch(html, /<button id="bpBack"[^>]*>‹/, '字符 ‹ 那版已经不在')
+  // 判据 2④：消息区顶部内边距 6px → 4px（Pocket 的 .chat-open .messages 就是 4px）。
+  assert.match(html, /#bpMsgs\{[^}]*padding:\s*4px 2px 14px\}/, '消息区顶部 4px')
 })
 
 test('the Bot page viewport and typography prevent mobile WebView zoom-out scaling regression', () => {
