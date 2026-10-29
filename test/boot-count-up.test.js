@@ -229,7 +229,11 @@ test('both bootstrap pages gate the ladder and hand each row its number as it op
   ]) {
     const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
     assert.equal(count(scripts, 'gateLadder();'), 1, `${name}: the gate is opened once, before the reads go out`)
-    assert.equal(count(scripts, 'const openRow=(n)=>{setStep(n);releaseCount(n)};'), 1, `${name}: entering a row is what opens it`)
+    assert.equal(
+      count(scripts, 'const openRow=(n)=>{for(let i=0;i<n;i+=1)settleRow(i);setStep(n);if(n===lastRow)return;releaseCount(n)};'),
+      1,
+      `${name}: entering a row is what opens it — and every row the ladder has passed is settled first`,
+    )
     assert.equal(count(scripts, 'const stage=stageRunner(openRow);'), 1, `${name}: the runner drives rows through openRow`)
     assert.ok(count(scripts, 'await stage(') >= 3, `${name}: every row is walked one after another`)
     assert.equal(count(scripts, 'countCrawl('), 0, `${name}: no in-flight odometer`)
@@ -269,13 +273,15 @@ test('the ladder rows start at 0, ready to crawl from the moment a row opens', (
   // 2026-10-25 用户改口径（m00001③ + 复核反馈）：「到每一步开始的时候，右边就开始
   // 跳数字」——行打开时立刻开始爬，答案后到再收口。行模板出厂预填 0（data-probe="0"），
   // 爬升器从 0 起步；真值由 countUp→paintCount 写入。
+  // 2026-10-30 判据 6A 追加：**末行**不预填 0，它开口就说「准备中」/preparing——那一行
+  // 没有数字可爬，写 0 就是拿一个不存在的读数冒充进度。末行按各页自己的行数算，不写死。
   const html = renderMobileReconnectPage('zh', 'lan', {})
   const script = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
-  assert.match(
-    script,
-    /data-probe="0">0'\+\(units\[i\]\?units\[i\]\(\):''\)\+'<\/span>/,
-    'the count span ships "0 + 这一行的量词" so the sweep reads "0 个工作区" from the first frame',
+  assert.ok(
+    script.includes("(i===lastRow?(ZH?'准备中':'preparing'):'0'+(units[i]?units[i]():''))"),
+    'the count span ships "0 + 这一行的量词" on counted rows and 准备中 on the last row',
   )
+  assert.ok(script.includes("data-probe=\"0\">'"), 'the seed still ships inside the .bsc span')
   assert.match(script, /const units=\[ROW_UNIT\.workspace,ROW_UNIT\.sessionList,ROW_UNIT\.session/, 'each count row is handed its own unit')
 })
 
