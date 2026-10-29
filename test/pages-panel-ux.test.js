@@ -225,6 +225,32 @@ test('both connection pages warm the shell the moment they load', () => {
   }
 })
 
+// 2026-10-29 卡二 §2 A9（保留项守卫）：过渡卡改成按数据推进之后，删掉了 70ms 节拍与
+// 1200ms 到点放行，「等不到就永远等」的风险必须由别处兜住。这里钉住两页原有的兜底不被
+// 顺手改掉：① 壳预热被 12s 界住（挂死的 WebView 里 rAF 会停，没有这条就永远停在第四行）；
+// ② 界住之后仍然报一次「打不开」，不是静默继续；③ reconnect 页失败后给出重试按钮。
+test('a stalled shell warm-up is bounded and still reports a failed open', () => {
+  const pages = [
+    ['pairing', renderPairingPinPage('zh', null)],
+    ['reconnect', renderMobileReconnectPage('zh', 'tunnel')],
+  ]
+  for (const [name, html] of pages) {
+    assert.match(
+      html,
+      /new Promise\((?:r|resolve)=>setTimeout\((?:r|resolve),12000\)\)/,
+      `${name} bounds the shell warm-up with a 12s race (a parked WebView must not hang the ladder forever)`
+    )
+    assert.match(
+      html,
+      /setTimeout\(\(\)=>fail\(T\.openFailed\),4000\)/,
+      `${name} still reports a failed open when the app never comes up`
+    )
+  }
+  const reconnect = pages[1][1]
+  assert.match(reconnect, /again\.id='stageRetry'/, 'reconnect keeps its retry button after a failed stage run')
+  assert.match(reconnect, /catch\(e\)\{diag\('stage3',e\)\}/, 'reconnect keeps swallowing the row-4 warm-up failure instead of failing the page')
+})
+
 test('the handoff reads go out in one batch, and the ladder only ever climbs', () => {
   const pin = renderPairingPinPage('zh', null)
   const reconnect = renderMobileReconnectPage('zh', 'tunnel')
