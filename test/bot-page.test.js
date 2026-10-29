@@ -2379,21 +2379,48 @@ test('the Bot composer send button reuses Pocket circular layout and centers the
   assert.doesNotMatch(html, /\.bp-composer button\{[^}]*background:\s*var\(--brand\)/, 'the brand-blue send button must be gone')
 })
 
-test('the floating action buttons on Pocket and Bot pages share identical circular geometry, border-radius and shadow', () => {
+test('the floating action buttons on Pocket and Bot pages share one rule instead of two copies', () => {
   const botHtml = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
   const pocketHtml = renderMobilePage({ locale: 'zh', boot: null })
 
-  // Both have identical 52x52 circular styling
-  assert.match(botHtml, /\.bp-fab\{[^}]*width:\s*52px;\s*height:\s*52px;\s*border:\s*1px solid var\(--line\);\s*border-radius:\s*50%;\s*background:\s*var\(--card\);\s*color:\s*var\(--brand\);\s*box-shadow:\s*0 4px 16px rgba\(0,0,0,\.12\)/)
+  // 2026-10-29 判据 D7①：这枚圆钮的几何只有一处定义，在共享样式源 /app.css 里。
   assert.match(pocketHtml, /\.bot-fab\{[^}]*width:\s*52px;\s*height:\s*52px;\s*border:\s*1px solid var\(--line\);\s*border-radius:\s*50%;\s*background:\s*var\(--card\);\s*color:\s*var\(--brand\);\s*box-shadow:\s*0 4px 16px rgba\(0,0,0,\.12\)/)
-
-  // Both have identical active state scaling
-  assert.match(botHtml, /\.bp-fab:active\{[^}]*background:\s*var\(--hover\);\s*transform:\s*scale\(\.92\)/)
   assert.match(pocketHtml, /\.bot-fab:active\{[^}]*background:\s*var\(--hover\);\s*transform:\s*scale\(\.92\)/)
+
+  // Bot 页挂同一个类名，自己不再抄一份（抄的那份是 .bp-fab）。
+  assert.match(botHtml, /<a id="bpHome" class="bot-fab"/, 'the Bot home anchor uses the shared class')
+  assert.doesNotMatch(botHtml, /\.bp-fab[{:]/, 'the Bot page must not keep a second copy of the circular geometry')
 
   // Both anchors are marked draggable="false"
   assert.match(botHtml, /id="bpHome"[^>]*draggable="false"/)
   assert.match(pocketHtml, /id="botFab"[^>]*draggable="false"/)
+})
+
+// 2026-10-29 判据 D7①：过渡卡是两页同一张卡，样式只该有一份。
+// 上一版 Bot 页把 .switch-overlay 全套、.boot-step 全套、.bsc 连同 @keyframes 又抄了
+// 一遍；抄本比共享源多写了 display/align-items/gap 与 .bsc 四条，两处细节各写一次。
+test('the Bot transition card borrows the shared overlay language instead of copying it', () => {
+  const botHtml = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  const pocketHtml = renderMobilePage({ locale: 'zh', boot: null })
+
+  // 共享源里这一套是全的，过渡卡在两页都靠它。
+  for (const rule of [
+    /\.switch-overlay\{[^}]*position:\s*fixed;\s*inset:\s*0/,
+    /\.switch-overlay\[hidden\]\{display:\s*none\}/,
+    /\.switch-overlay h1\{[^}]*font-size:\s*24px/,
+    /\.boot-step\{[^}]*font-size:\s*14px;\s*padding:\s*6px 0\}/,
+    /\.boot-step-label\{flex:\s*1\}/,
+    /@keyframes bspin\{to\{transform:rotate\(360deg\)\}\}/,
+  ]) {
+    assert.match(pocketHtml, rule, 'the shared sheet carries the transition card: ' + rule)
+  }
+
+  // Bot 页只留自己的结构性差异（#bpSwitchOverlay 这个容器），不再存样式副本。
+  assert.match(botHtml, /<div id="bpSwitchOverlay" class="switch-overlay" hidden>/)
+  // 只认「规则本体」的形态（选择器后紧跟 {）——注释里提到这些类名不算副本。
+  for (const copy of [/\.switch-overlay\{/, /\.switch-overlay\[hidden\]\{/, /\.switch-overlay \.brand\{/, /\.switch-overlay h1\{/, /\.boot-steps\{/, /\.boot-step\{/, /\.boot-step-label\{/, /\.bsc\{/, /@keyframes bspin/]) {
+    assert.doesNotMatch(botHtml, copy, 'the Bot page must not restate ' + copy)
+  }
 })
 
 // 2026-10-28 闸门二退回项：共用卡在 pages.js 里无条件渲染「跳过」，而本页的委托只接了
