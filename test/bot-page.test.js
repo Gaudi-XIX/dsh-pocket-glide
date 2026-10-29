@@ -2307,7 +2307,12 @@ test('the Bot composer send button reuses Pocket circular layout and centers the
   const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
   assert.match(html, /<button id="bpSend" class="primary" aria-label="发送" disabled><svg width="17" height="17"/, 'reuses Pocket primary class with centered SVG')
   assert.doesNotMatch(html, /<button id="bpSend"[^>]*>[^<]*发送/, 'no inline text node inside button')
-  assert.match(html, /\.bp-composer button\{[^}]*width:\s*44px;\s*min-width:\s*44px;\s*height:\s*44px;\s*border:\s*0;\s*border-radius:\s*50%/, 'pure 44x44 circular button')
+  // 2026-10-29 判据 D3：发送键改成与 Pocket .composer .primary 同构的墨色反色
+  // （border-color:var(--ink) + background:var(--ink) + color:var(--paper)），
+  // 品牌蓝底白字两个主题都不达 AA，见判据 2.3。
+  assert.match(html, /\.bp-composer button\{[^}]*width:\s*44px;\s*min-width:\s*44px;\s*height:\s*44px;\s*border:\s*1px solid var\(--ink\);\s*border-radius:\s*50%/, 'pure 44x44 circular button')
+  assert.match(html, /\.bp-composer button\{[^}]*background:\s*var\(--ink\);\s*color:\s*var\(--paper\)/, 'send button uses the inverted primary pair, not the brand blue')
+  assert.doesNotMatch(html, /\.bp-composer button\{[^}]*background:\s*var\(--brand\)/, 'the brand-blue send button must be gone')
 })
 
 test('the floating action buttons on Pocket and Bot pages share identical circular geometry, border-radius and shadow', () => {
