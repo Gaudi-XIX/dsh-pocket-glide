@@ -443,7 +443,38 @@ const PAGE_IDS = ['bpBack', 'bpHome', 'bpReload', 'bpTitle', 'bpHint', 'bpList',
  * that answers `/api/rpc` from `answer(method, payload)`, and timers that never
  * fire (the page's pollers are not what these tests are about).
  */
-function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
+function fakeBrowser({ answer = () => ({}), seed = null, hang = null, js = BOT_PAGE_JS } = {}) {
+  // 会话流的替身。真机上 `new EventSource(url)` 由浏览器给，注入进来测试才发得了帧：
+  // 替身不给，生产代码就得多一条「没有 EventSource 就不接流」的判据，那条判据在真
+  // 机上的唯一作用是给替身让路（P1-5）。给得上，接流才是真的被测到。
+  const streams = []
+  class FakeEventSource {
+    constructor(url) {
+      this.url = url
+      this.handlers = Object.create(null)
+      this.closed = false
+      this.onerror = null
+      streams.push(this)
+    }
+    addEventListener(type, fn) {
+      ;(this.handlers[type] ??= []).push(fn)
+    }
+    /** 推一帧。真机上桥推下来的就是 JSON 文本，页面自己 parse。 */
+    dispatch(type, frame) {
+      for (const fn of this.handlers[type] ?? []) fn({ data: JSON.stringify(frame) })
+    }
+    /** 推一帧不是 JSON 的，页面不许为此抛错。 */
+    dispatchRaw(type, data) {
+      for (const fn of this.handlers[type] ?? []) fn({ data })
+    }
+    /** 流开不出来（隧道就是这种：连得上、帧留不住）。真机上触发的是 onerror。 */
+    fail() {
+      if (this.onerror) this.onerror({ type: 'error' })
+    }
+    close() {
+      this.closed = true
+    }
+  }
   const nodes = new Map()
   // 过渡卡的四步（由下面那个 for 按 `SHELL.steps` 造出来）。页面动画会 toggle 它们
   // 的 class，测试于是能断言「走到了哪一步」而不是只能看它有没有直接跳走。
@@ -704,11 +735,12 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
   const fakeSetInterval = (fn, ms) => { intervals.push({ fn, ms, alive: true }); return intervals.length }
   const fakeClearInterval = (id) => { const entry = intervals[id - 1]; if (entry) entry.alive = false }
   new Function(
-    'document', 'window', 'location', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Intl', 'localStorage', 'navigator',
-    BOT_PAGE_JS
-  )(document, window, location, fetch, fakeSetInterval, fakeClearInterval, fakeSetTimeout, () => {}, Intl, localStorage, navigator)
+    'document', 'window', 'location', 'fetch', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Intl', 'localStorage', 'navigator', 'EventSource',
+    js
+  )(document, window, location, fetch, fakeSetInterval, fakeClearInterval, fakeSetTimeout, () => {}, Intl, localStorage, navigator, FakeEventSource)
   return {
     node,
+    streams,
     switchSteps,
     switchCounts,
     calls,
@@ -2669,3 +2701,136 @@ test('the shared card’s skip control is wired, not a dead button', () => {
   assert.match(BOT_PAGE_JS, /name === 'cancel'\)\s*dismissQuestion\(\)/, 'the close key still closes')
   assert.match(BOT_PAGE_JS, /name === 'continue'\)\s*submitQuestion\(\)/, 'submit still submits')
 })
+
+// ---------------------------------------------------------------------------
+// 正在写的那一句（用户 2026-10-29 21:57：「最后一个回复不显示」）
+//
+// 这一页原先只有 5 秒一次的 session.history，而正在写的回合还没落进 history —— 末行
+// 于是停在上一句。接流之后，字从流上来、行仍只有 chat.latest 一个来源（流往末尾挂一
+// 条 _stream 行，每次重挂先摘掉它），隧道下开不出流就退回轮询。S1/S2 各钉一条腿，
+// S3 反向把 chunk 那条分支变异掉，证明 S1 的断言真的在称它的重量。
+// ---------------------------------------------------------------------------
+
+/** The page's own transcript read: strips tags so an assertion can talk about words. */
+function drawnRows(page) {
+  const html = page.node('bpMsgs').innerHTML
+  return (html.match(/class="bp-msg message (user|assistant)/g) || []).length
+}
+
+test('the answer being written reaches the transcript through the stream, not through the next poll', async () => {
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      // 轮询读到的只有写之前那一条：这句只能从流上进来。
+      if (method === 'session.history') return { events: [saidByBot('写之前的那句', 260, 1_762_000_000_000)] }
+      return {}
+    },
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle(60)
+
+  const before = page.node('bpMsgs').innerHTML
+  assert.match(before, /写之前的那句/, 'the polled row is on screen when the chat opens')
+  assert.doesNotMatch(before, /正在写的这句/, 'and nothing of the turn being written is known yet')
+
+  const source = page.streams.at(-1)
+  assert.ok(source, 'opening the chat opened the stream')
+  assert.equal(source.url, '/api/session/stream?sessionId=s-chief',
+    'it is the bridge’s own stream for this conversation, no endpoint of this page’s own')
+
+  const pollsBefore = page.calls.filter((call) => call.method === 'session.history').length
+  const rowsBefore = drawnRows(page)
+  source.dispatch('token', { type: 'start', revision: 9 })
+  source.dispatch('token', { type: 'chunk', revision: 9, index: 0, chunk: { type: 'text-delta', text: '正在写的这句' } })
+  source.dispatch('token', { type: 'chunk', revision: 9, index: 1, chunk: { type: 'text-delta', text: '的后半段' } })
+  source.dispatch('token', { type: 'chunk', revision: 9, index: 2, chunk: { type: 'reasoning-delta', text: '（这是推理，不该进回复）' } })
+
+  const after = page.node('bpMsgs').innerHTML
+  assert.match(after, /正在写的这句的后半段/, 'the answer lands while it is still being written')
+  assert.doesNotMatch(after, /这是推理/, 'a reasoning delta is not painted as the reply')
+  assert.equal(page.calls.filter((call) => call.method === 'session.history').length, pollsBefore,
+    'nothing was polled to get it: it came down the stream')
+  assert.equal(drawnRows(page), rowsBefore + 1, 'the live answer is the one new row at the bottom, not a rewritten page')
+  assert.ok(after.indexOf('写之前的那句') < after.indexOf('正在写的这句的后半段'),
+    'and it sits under what was already said')
+
+  // 写完之后 Host 的正式行接手：同一句不许画两遍，正式行要能落到同一个位置。
+  source.dispatch('event', {
+    event: { type: 'assistant/message', seq: 263, time: 1_762_000_000_500, data: { message: { content: [{ type: 'text', text: '正在写的这句的后半段' }] } } },
+  })
+  await page.settle(40)
+  assert.equal(page.node('bpMsgs').innerHTML.split('正在写的这句的后半段').length - 1, 1,
+    'the streamed copy gave way to the Host’s own row instead of being drawn beside it')
+})
+
+test('a stream that cannot carry frames is closed, and the five-second poll still lands the last answer', async () => {
+  let history = [saidByBot('写之前的那句', 260, 1_762_000_000_000)]
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') return { events: history }
+      return {}
+    },
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle(60)
+
+  const source = page.streams.at(-1)
+  assert.ok(source, 'the stream was tried')
+  source.fail()
+  assert.equal(source.closed, true, 'a stream that cannot carry frames is closed instead of being retried for ever')
+  // 隧道下桥连得上、帧留不住：断了之后这一页不许停在原地，5 秒一次的读还在。
+  history = [saidByBot('写之前的那句', 260, 1_762_000_000_000), saidByBot('写完的那句话', 263, 1_762_000_001_000)]
+  page.fireIntervals(5000)
+  await page.settle(60)
+  assert.match(page.node('bpMsgs').innerHTML, /写完的那句话/, 'the poll is the fallback: the last answer still lands')
+
+  // 回列表要把流断掉：否则上一个会话的帧会往列表上写字。
+  page.location.hash = ''
+  page.fireWindow('hashchange')
+  await page.settle(20)
+  assert.equal(source.closed, true, 'leaving the conversation closes its stream')
+})
+
+test('REVERSE: with the chunk body emptied the answer being written never reaches the transcript', async () => {
+  // 反向承重（§5 S3）。变异只动一行：chunk 里往流式行追字那句换成空操作，其余一字
+  // 不改。S1 那条断言必须因此变红，而且红在「最后一条没更新」——actual 里仍画着写
+  // 之前那句、却没有正在写的这句；若它红在别处（页面没开、抛错），这条测试同样红。
+  const mutated = BOT_PAGE_JS.replace(
+    "chat.streamText = String(chat.streamText || '') + piece",
+    "chat.streamEnded = false"
+  )
+  assert.notEqual(mutated, BOT_PAGE_JS, 'the mutation landed on the line it means to break')
+
+  const page = fakeBrowser({
+    js: mutated,
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') return { events: [saidByBot('写之前的那句', 260, 1_762_000_000_000)] }
+      return {}
+    },
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle(60)
+  const source = page.streams.at(-1)
+  source.dispatch('token', { type: 'start', revision: 9 })
+  source.dispatch('token', { type: 'chunk', revision: 9, index: 0, chunk: { type: 'text-delta', text: '正在写的这句' } })
+
+  let failure = null
+  try {
+    assert.match(page.node('bpMsgs').innerHTML, /正在写的这句/, 'the answer being written is on screen')
+  } catch (error) {
+    failure = error
+  }
+  assert.ok(failure, 'the mutation must break the assertion — otherwise it is not carrying the weight')
+  const actual = String(failure.actual)
+  assert.doesNotMatch(actual, /正在写的这句/, 'it goes red on the last answer not being updated')
+  assert.match(actual, /写之前的那句/, 'while the transcript itself is still drawn: the red is not somewhere else')
+})
+
