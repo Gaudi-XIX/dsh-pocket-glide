@@ -242,7 +242,7 @@ test('a stalled shell warm-up is bounded and still reports a failed open', () =>
     )
     assert.match(
       html,
-      /setTimeout\(\(\)=>fail\(T\.openFailed\),4000\)/,
+      /setTimeout\(\(\)=>\{(?:settleAll\(\);)?fail\(T\.openFailed\)\},4000\)/,
       `${name} still reports a failed open when the app never comes up`
     )
   }
@@ -263,7 +263,14 @@ test('the handoff reads go out in one batch, and the ladder only ever climbs', (
     assert.match(html, /const reads=\[\s*withRetry\(\(\)=>rpc\('workspace\.list'\)\)/, `${name} builds all three reads up front`)
     assert.match(html, /reads\.forEach\(p=>p\.catch\(\(\)=>\{\}\)\)/, `${name} disarms the not-yet-awaited legs`)
     assert.match(html, /await stage\(\d,\s*\(\)=>reads\[\d\]\)/, `${name} walks the rows in order`)
-    assert.match(html, /const openRow=\(n\)=>\{setStep\(n\);releaseCount\(n\)\};/, `${name} opens a row's number as the ladder enters it`)
+    // 6B-3：阶梯越过某行时先 settleRow 把那一行落定（真值没来就落回 0+单位，不许停在
+    // 扫描线的随机数字上），然后点亮这一行；末行不参与扫描（早返回，等完成文字），
+    // 其余行才 releaseCount 交出数字。
+    assert.match(
+      html,
+      /const openRow=\(n\)=>\{for\(let i=0;i<n;i\+=1\)settleRow\(i\);setStep\(n\);if\(n===lastRow\)return;releaseCount\(n\)\};/,
+      `${name} opens a row's number as the ladder enters it, settling the rows it passes`
+    )
     assert.match(html, /const stage=stageRunner\(openRow\);/, `${name} the runner drives the rows through openRow`)
     assert.match(html, /gateLadder\(\)/, `${name} opens the count gate before the reads go out`)
   }
