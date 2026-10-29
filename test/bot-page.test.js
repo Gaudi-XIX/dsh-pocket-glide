@@ -2297,8 +2297,10 @@ test('the Bot page viewport and typography prevent mobile WebView zoom-out scali
   assert.match(html, /-webkit-text-size-adjust:\s*100%!important/, 'locks webkit text-size-adjust to prevent WebView shrinking')
   assert.match(html, /text-size-adjust:\s*100%!important/, 'locks text-size-adjust')
   assert.match(html, /font:\s*15px\/1\.5/, 'base font size is 15px aligned with Pocket')
-  assert.match(html, /\.bp-row\{[^}]*min-height:\s*64px/, 'card row height aligned with Pocket 64px')
-  assert.match(html, /\.bp-copy b\{[^}]*font-size:\s*15\.5px/, 'card title aligned with Pocket 15.5px')
+  // 2026-10-29 判据 D2：基准是 Pocket 的 .task-row（44px / 13.5px·550），不是 64px / 15.5px。
+  // 旧断言把 BOT 自己那套放大值当成了 Pocket 的值钉在这里，方向正好反了（Pocket 原文实测）。
+  assert.match(html, /\.bp-row\{[^}]*min-height:\s*44px/, 'card row height aligned with Pocket .task-row 44px')
+  assert.match(html, /\.bp-copy b\{[^}]*font-size:\s*13\.5px/, 'card title aligned with Pocket .task-copy strong 13.5px')
 })
 
 test('the Bot composer send button reuses Pocket circular layout and centers the arrow SVG without text nodes', () => {
