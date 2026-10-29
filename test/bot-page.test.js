@@ -510,6 +510,12 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
           }
           return out
         }
+        // 2026-10-29：进一次会话消息区被整段重写的次数，就是用户说的「刚进来时候
+        // 会跳」的计量口径（卡三 A4）。计数只能在 setter 里：paintChat 自己有一条
+        // 守卫（键没变就不写 DOM），所以「调用了几次」不等于「重画了几次」——写下去
+        // 的次数才是看得见的那几次。
+        let writes = 0
+        made.htmlWrites = () => writes
         Object.defineProperty(made, 'innerHTML', {
           configurable: true,
           get: () => html,
@@ -517,6 +523,7 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
           // that shrank pulls the reader up. The anchor restore measures against
           // that clamp, so the stand-in has to do it too.
           set: (next) => {
+            writes += 1
             html = String(next)
             const max = Math.max(0, rowsOf().length * 40 - made.clientHeight)
             if (made.scrollTop > max) made.scrollTop = max
@@ -527,6 +534,18 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
           get: () => rowsOf().length * 40,
         })
         made.clientHeight = 300
+        // 页面「贴底」的写法是 `scrollTop = scrollHeight`，真浏览器会把它钳到
+        // `scrollHeight - clientHeight`。替身不钳的话，「钉在底部」与「冲过头」
+        // 在断言里是同一个读数，A5 那条判据就永远打不了勾。
+        let parked = 0
+        Object.defineProperty(made, 'scrollTop', {
+          configurable: true,
+          get: () => parked,
+          set: (next) => {
+            const max = Math.max(0, rowsOf().length * 40 - made.clientHeight)
+            parked = Math.min(Math.max(0, Math.round(Number(next) || 0)), max)
+          },
+        })
         // The geometry the scroll anchor reads. The box sits at the top of the
         // viewport; each row is forty pixels tall, so a row's top is its index
         // times forty minus whatever has been scrolled. Before this the stand-in
@@ -1609,6 +1628,71 @@ test('opening a Bot chat reaches back past the newest part to what came before i
   assert.ok(!msgs.includes('data-earlier'), 'with nothing older left there is no button to press')
 })
 
+test('entering a chat repaints the transcript at most four times instead of thirteen', async () => {
+  // 卡三 A1／A4（用户 2026-10-29 20:18：「刚进来时候会跳」）。改前：一页只有十
+  // 几条消息，`loadChat` 为了凑满 FILL_ROWS=60 行继续向前补，最多 6 跳，每跳整段
+  // 重画两遍（忙碌一遍、数据到一遍），进一次会话最多重画 13 遍，肉眼就是跳。
+  // 改后：第一页已经超过一屏就停，一次也不补。
+  let pages = 0
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') {
+        const events = []
+        for (let i = 0; i < 12; i += 1) events.push(saidByBot('第 ' + i + ' 句', 100 - i))
+        return { events }
+      }
+      if (method === 'bot.earlier') {
+        pages += 1
+        return { items: earlierPage(3, 'p' + pages + '-'), cursor: { part: pages + 1, beforeSeq: 7 } }
+      }
+      return {}
+    },
+  })
+  await page.settle(40)
+  const box = page.node('bpMsgs')
+  const before = box.htmlWrites()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle(80)
+
+  // 十二行 = 480px，替身的一屏是 300px：打开即满屏，不该再向前翻一页
+  const paints = box.htmlWrites() - before
+  assert.ok(paints <= 4, 'entering repaints the transcript at most four times, got ' + paints)
+  assert.equal(page.calls.filter((call) => call.method === 'bot.earlier').length, 0,
+    'a first page that already covers the screen is left alone')
+})
+
+test('a first page shorter than the screen keeps reaching back until the screen is full', async () => {
+  // 卡三 A2／A3／A5：「一屏就停」不等于「只读一页」。第一页没填满屏时要接着补，
+  // 补到满屏或者没有更早记录为止；忙碌态只在首跳画一次，不然同一段内容会被画两遍。
+  let pages = 0
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') return { events: [saidByBot('一句', 9), saidByBot('二句', 8), saidByBot('三句', 7)] }
+      if (method === 'bot.earlier') {
+        pages += 1
+        return { items: earlierPage(3, 'p' + pages + '-'), cursor: { part: pages + 1, beforeSeq: 6 } }
+      }
+      return {}
+    },
+  })
+  await page.settle(40)
+  const box = page.node('bpMsgs')
+  const before = box.htmlWrites()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle(80)
+
+  // 三行 120px 不够一屏，补一页六行 240px 还不够，补到九行 360px 才停
+  assert.equal(pages, 2, 'it keeps reading until the screen is full, then stops')
+  assert.ok(box.scrollHeight > box.clientHeight + 8, 'and the screen really is full')
+  const paints = box.htmlWrites() - before
+  assert.ok(paints <= 2 + pages, 'one paint per page it reads plus one busy paint at most, got ' + paints + ' for ' + pages + ' pages')
+  assert.ok(box.scrollHeight - box.scrollTop - box.clientHeight <= 2, 'a reader who was at the bottom is still at the bottom')
+})
+
 test('one screen full is where the automatic reach-back stops, the button does the rest', async () => {
   let pages = 0
   const page = fakeBrowser({
@@ -1628,15 +1712,20 @@ test('one screen full is where the automatic reach-back stops, the button does t
   await page.settle(80)
 
   const auto = page.calls.filter((call) => call.method === 'bot.earlier')
-  assert.equal(auto.length, 2, '60 rows is a screen: two pages of 30 and it stops on its own')
+  // 2026-10-29 起「一屏」按消息区的真实高度量（一行 40px、替身一屏 300px），
+  // 不再数 60 行：三十条一页就有 1200px，补过一页就停。
+  assert.equal(auto.length, 1, 'one page of thirty already covers the screen, so it stops there')
   assert.match(page.node('bpMsgs').innerHTML, /data-earlier="1"/, 'the rest is behind the button')
 
+  const rowsBefore = (page.node('bpMsgs').innerHTML.match(/class="bp-msg /g) || []).length
   const button = { disabled: false }
   page.click('bpMsgs', { target: { closest: (selector) => (selector === '[data-earlier]' ? button : null) } })
   await page.settle(20)
   const all = page.calls.filter((call) => call.method === 'bot.earlier')
-  assert.equal(all.length, 3, 'the button asks for exactly one more page')
-  assert.deepEqual(all[2].payload, { sessionId: 's-chief', cursor: { part: 2, beforeSeq: 7 } }, 'from where the automatic fill stopped')
+  assert.equal(all.length, 2, 'the button asks for exactly one more page')
+  assert.deepEqual(all[1].payload, { sessionId: 's-chief', cursor: { part: 1, beforeSeq: 7 } }, 'from where the automatic fill stopped')
+  const rowsAfter = (page.node('bpMsgs').innerHTML.match(/class="bp-msg /g) || []).length
+  assert.ok(rowsAfter > rowsBefore, 'pressing the button still adds rows: the one-screen rule is the automatic path only')
 })
 
 test('a group chat is one Session, so it has no earlier parts to reach for', async () => {
