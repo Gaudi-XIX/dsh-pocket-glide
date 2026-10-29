@@ -45,7 +45,7 @@ function extractFunction(source, name) {
 }
 
 const botQuestions = vm.runInNewContext(`(${extractFunction(BRIDGE_SOURCE, 'botQuestions')})`, { isRecord })
-const botTeamView = vm.runInNewContext(`(${extractFunction(BRIDGE_SOURCE, 'botTeamView')})`, { isRecord, botQuestions })
+const botTeamView = vm.runInNewContext(`(${extractFunction(BRIDGE_SOURCE, 'botTeamView')})`, { isRecord, botQuestions, Set })
 // Objects built inside that context carry another realm's prototypes, so deepStrictEqual
 // would fail on identity alone. The phone only ever sees JSON, so compare JSON.
 const plain = (value) => JSON.parse(JSON.stringify(value))
@@ -145,6 +145,26 @@ test('botTeamView turns a ds-bot shaped state answer into the phone view', () =>
     model: 'deepseek/x',
     sessionId: 's1',
     waiting: false,
+    working: { tool: 'bash' },
+  })
+  // Paired with a prefetch context the row gains exactly two fields (task card
+  // 2026-10-29 §3 B3): the clock comes from the bridge's own session.list rows
+  // (the Host's state view has no updatedAt), the pin from the UNFILTERED
+  // workspace snapshot. Without ctx neither field is added — the older call path
+  // stays byte-identical, which is why the assertion above still holds.
+  const withCtx = botTeamView(stateAnswer(), {
+    pinnedIds: new Set(['s1']),
+    updatedAtOf: (id) => (id === 's1' ? 1730000000000 : 0),
+  })
+  assert.deepEqual(plain(withCtx.bots[0]), {
+    id: 'b1',
+    name: 'Ops',
+    role: 'editor',
+    model: 'deepseek/x',
+    sessionId: 's1',
+    waiting: false,
+    updatedAt: 1730000000000,
+    pinned: true,
     working: { tool: 'bash' },
   })
   assert.deepEqual(plain(view.rooms[0]), {

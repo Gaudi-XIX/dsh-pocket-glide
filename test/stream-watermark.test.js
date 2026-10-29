@@ -105,7 +105,12 @@ test('A-3 leaving a session releases that session watermark', () => {
 test('AC-A5 an emptied snapshot no longer counts as the first frame', () => {
   assert.match(js, /markStreamSnapshot\(incoming\.length>0\)/)
   assert.ok(!js.includes('markStreamSnapshot(true)'), '空快照不得再被当成首帧')
-  assert.ok(js.includes("resolve('timeout'),900)"), 'the fallback timer it unblocks stays armed')
+  // 2026-10-29（任务卡 §2 A8）：这条腿原来钉的是「900ms 的兜底定时器留在原地」，
+  // 现在那条时序闸本身就删了——首帧 await 只由读回结果结束（快照帧 / 流报错 /
+  // 重新 arm / 骨架 watchdog 判定读不到）。所以改成两条：闸不在了，且半开流
+  // 仍有腿去 settle，不会把首页永远挂住。
+  assert.ok(!js.includes("resolve('timeout'),900)"), '900ms 时序闸已删，首帧等待不再有凭空的上限')
+  assert.match(js, /markStreamSnapshot\(false\);/, '骨架 watchdog 仍能 settle 首帧等待：半开流不发快照时由它接手')
 })
 
 // ---------------------------------------------------------------------------- AC-A6

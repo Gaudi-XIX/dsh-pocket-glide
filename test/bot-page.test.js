@@ -2271,7 +2271,15 @@ test('the landing card counts the Bots the page already knows, before anything a
     assets: { cssUrl: '/app.css?h=1', jsUrl: '/app.js?h=2' },
   })
   assert.match(html, /var bots=0,chats=0;/, 'counts the distinct Bot names this page already holds')
-  assert.match(html, /if\(bots\)cardCount\(0,bots\);/, 'writes that count into the first step before the cue')
+  // 2026-10-29（任务卡 §2 A1/A3）：这张卡不再按 70ms 节拍机械推进、也不再等 cue 才写数。
+  // 页面自己已知的计数先进缓冲，行亮起的那一刻直接定稿——所以断言从「cardCount 立刻被调用」
+  // 改成「计数进缓冲」+「激活时写缓冲值」，pre-cue 有读数的要求本身没变。
+  assert.match(html, /if\(bots\)cardCounts\[0\]=bots;/, 'stashes that count so the first row can paint')
+  assert.match(
+    html,
+    /if\(cardCounts\[i\]===undefined\)cardScan\(i\);else cardSetRow\(i,String\(cardCounts\[i\]\)\)/,
+    'the row writes the stashed count the moment it lights, without waiting for the cue'
+  )
 })
 
 test('the BOT page counts the chats it already read, before the cue answers', () => {

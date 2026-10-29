@@ -21,7 +21,10 @@ import { BOT_PAGE_JS } from '../lib/bot-page.js'
 // same five stage functions. They now pull one block from `sharedStageScript()`,
 // so every organ below must exist exactly once in the source and once per page.
 const SHARED_ORGANS = [
-  'const STEP_DWELL_MS=200,FETCH_TIMEOUT_MS=10000;',
+  // 2026-10-29：首行的 STEP_DWELL_MS=200 已删（阶梯不再有固定节拍，改由各腿读回结果
+  // 驱动推进，见 lib/pages.js 里 stageRunner 的注释）。锚跟着改成剩下的那条常量——
+  // 改锚不改结构：仍然要求这段共享源码只存在一份、每页各内联一次。
+  'const FETCH_TIMEOUT_MS=10000;',
   'function withTimeout(promise,ms){',
   'function pinError(message){',
   'const rpc=async(method,payload={})=>{',

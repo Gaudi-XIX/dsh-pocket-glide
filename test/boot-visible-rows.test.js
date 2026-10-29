@@ -11,6 +11,14 @@
 //   2. nothing is lost: every row is still in `partial`, so「更多」needs no RPC;
 //   3. the fingerprint still covers the full catalogue, or the landing's
 //      no-repaint check would stop noticing a change to a row it is hiding.
+//
+// 2026-10-29 (task card §3): the DISPLAY half above is unchanged — pinned plus the
+// 24h window, one byte moved (the guard files are test/landing-attention.test.js
+// and test/list-bounds.test.js). What changed is the PRELOAD half: the tail pack
+// that travels with the document is now「every pinned row ∪ the newest ten」,
+// de-duplicated, instead of a pinned-first sort truncated to ten — which silently
+// dropped pins past the tenth. That rule has its own file, test/preload-scope.test.js
+// (B2), so this one stays about what rides in `items`.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
