@@ -1472,6 +1472,74 @@ test('a divider stamps when the earlier part began', async () => {
   assert.match(msgs, /09:05 · 更早的记录/, 'the divider prints the part boundary like the landing does')
 })
 
+// ---------------------------------------------------------------------------
+// Bot 之间的往来（用户 2026-10-29 21:57：「我希望跟电脑端一样，bot之间的对话默认折」）
+//
+// 一个 Bot 写给另一个 Bot，宿主记的是 source.kind:'bot' 的 user/message。电脑端
+// 把它画成一行「Message from / Reply from + 名字」（ds-bot client.js EventLine），
+// 更早那几段走 bot.earlier 时本页也画成 `· 名字`（earlierRows）；只有最新这一页
+// 因为 source.kind 不是 'user' 整条丢掉，于是只有往来记录的段打开是空白的。
+// ---------------------------------------------------------------------------
+
+/** One relay record as the Host writes it: a user/message whose source is a Bot. */
+function relayedBy(name, seq, role) {
+  return {
+    event: {
+      type: 'user/message', seq,
+      data: { message: { source: { kind: 'bot', form: 'relay', role: role || 'request', senderName: name, senderSessionId: 's-' + name.toLowerCase() }, content: [{ type: 'text', text: '[Message from ' + name + '] 这边的一段正文，很长很长' }] } },
+    },
+  }
+}
+
+/** A handoff record: a part boundary the Host writes into the new part. */
+function handedOff(seq) {
+  return {
+    event: {
+      type: 'user/message', seq,
+      data: { message: { source: { kind: 'bot', form: 'relay', role: 'handoff', senderName: 'DS Bot', handoff: true }, content: [{ type: 'text', text: '[Handoff · part 57] DS Bot moved your own chat with the user into a new part.' }] } },
+    },
+  }
+}
+
+/** A system injection: not a Bot speaking, nothing this page may draw. */
+function injected(kind, seq) {
+  return { event: { type: 'user/message', seq, data: { message: { source: { kind }, content: [{ type: 'text', text: '系统注入的 ' + kind + ' 正文' }] } } } }
+}
+
+async function openWith(events) {
+  const page = fakeBrowser({
+    answer: (method) => (method === 'bot.team' ? teamWith() : method === 'session.history' ? { events, hasMore: false } : {}),
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle()
+  return page
+}
+
+test('a Bot writing to a Bot is drawn as one line naming the sender, like the desktop', async () => {
+  const page = await openWith([relayedBy('Pixel', 4, 'request'), relayedBy('Curator', 6, 'reply')])
+  const msgs = page.node('bpMsgs').innerHTML
+  assert.match(msgs, /<div class="bp-event">· Pixel<\/div>/, 'the sender is named on one line, the way bot.earlier rows already are')
+  assert.match(msgs, /<div class="bp-event">· Curator<\/div>/, 'a reply is one line too')
+  assert.ok(!msgs.includes('这边的一段正文'), 'the body stays folded: the desktop shows the sender line, not the whole message')
+  assert.ok(!msgs.includes('bp-empty'), 'and the part is not empty any more')
+})
+
+test('a handoff keeps its own label instead of collapsing into a sender line', async () => {
+  const page = await openWith([handedOff(3), relayedBy('Pixel', 4, 'request')])
+  const msgs = page.node('bpMsgs').innerHTML
+  assert.match(msgs, /<div class="bp-event">\[Handoff · part 57\]/, 'the part boundary is on screen, as it is on the desktop')
+  assert.match(msgs, /<div class="bp-event">· Pixel<\/div>/, 'and the relay next to it is still one line')
+})
+
+test('the injections the Host puts in a turn stay off the transcript', async () => {
+  const page = await openWith([injected('runtime-context', 1), injected('plugin:memory', 2), injected('tool-jobs', 3), relayedBy('Pixel', 4, 'request')])
+  const msgs = page.node('bpMsgs').innerHTML
+  assert.ok(!msgs.includes('系统注入的'), 'no system injection became a message, even one whose source.kind is bot-like')
+  assert.match(msgs, /<div class="bp-event">· Pixel<\/div>/, 'the Bot that really wrote is still named')
+})
+
 test('a send that fails takes its optimistic row back and says why', async () => {
   const page = fakeBrowser({
     answer: (method) => {
