@@ -2303,6 +2303,23 @@ test('the Bot page viewport and typography prevent mobile WebView zoom-out scali
   assert.match(html, /\.bp-copy b\{[^}]*font-size:\s*13\.5px/, 'card title aligned with Pocket .task-copy strong 13.5px')
 })
 
+test('the Bot transcript inherits Pocket message geometry instead of re-declaring it', () => {
+  const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  const pocketHtml = renderMobilePage({ locale: 'zh', boot: null })
+  // 2026-10-29 判据 D4：.bp-msg 本身就带 message 类，用户气泡与助手行的几何
+  // （82% / 22px / 9px 15px / margin 8px 0 14px / padding 0 4px / 相邻 12px）
+  // 由共享样式源提供。BOT 原文里的 84% / 20px / 9px 14px / padding 0 3px 是第二套值，
+  // 留着就永远有两处定义，改一处另一处必漂。
+  assert.match(pocketHtml, /\.message\.user\{[^}]*max-width:\s*82%;[^}]*background:\s*var\(--hover\);\s*border-radius:\s*22px;\s*padding:\s*9px 15px;\s*margin:\s*8px 0 14px\}/, 'the shared source still carries Pocket geometry')
+  assert.match(pocketHtml, /\.message\.assistant\{[^}]*padding:\s*0 4px;\s*margin:\s*0\}/, 'and the assistant row')
+  assert.match(pocketHtml, /\.message\.assistant\+\.message\.assistant\{[^}]*margin-top:\s*12px/, 'and the 12px between two assistant rows')
+  assert.doesNotMatch(html, /\.bp-msg\.user\{/, 'the Bot page no longer re-declares the user bubble')
+  assert.doesNotMatch(html, /\.bp-msg\.assistant\{/, 'nor the assistant row')
+  // 行距必须由 .message 的 margin 单独决定：留着 gap 就会变成 gap+12px，两页行距各算各的。
+  assert.match(html, /#bpMsgs\{[^}]*flex-direction:\s*column;\s*gap:\s*0/, 'the transcript column has no gap of its own')
+  assert.match(html, /\.bp-tail\{[^}]*margin-top:\s*6px/, 'the stamp sits 6px under the text, like Pocket .msg-tail')
+})
+
 test('the Bot composer send button reuses Pocket circular layout and centers the arrow SVG without text nodes', () => {
   const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
   assert.match(html, /<button id="bpSend" class="primary" aria-label="发送" disabled><svg width="17" height="17"/, 'reuses Pocket primary class with centered SVG')
