@@ -2489,7 +2489,11 @@ test('the Bot page viewport and typography prevent mobile WebView zoom-out scali
   assert.match(html, /<meta name="viewport" content="[^"]*interactive-widget=resizes-content[^"]*">/, 'viewport resizes content')
   assert.match(html, /-webkit-text-size-adjust:\s*100%!important/, 'locks webkit text-size-adjust to prevent WebView shrinking')
   assert.match(html, /text-size-adjust:\s*100%!important/, 'locks text-size-adjust')
-  assert.match(html, /font:\s*15px\/1\.5/, 'base font size is 15px aligned with Pocket')
+  assert.match(html, /font:\s*14px\/1\.5/, 'base font size is 14px, the same value as the Pocket body')
+  // 2026-10-29 必改 1：消息正文不得自带字号。BOT 原来 body 与 .bp-msg 两处都是 15px，
+  // 而 Pocket 的 .message 继承 body 的 14px——同一个组件两页差 7%，375px 下换行位置差一两个字。
+  // 钉成「.bp-msg 不声明 font-size」，把 15px 加回去这条就红。
+  assert.doesNotMatch(html, /\.bp-msg\{[^}]*font-size/, 'the message body declares no font size; it inherits 14px like Pocket .message')
   // 2026-10-29 判据 D2：基准是 Pocket 的 .task-row（44px / 13.5px·550），不是 64px / 15.5px。
   // 旧断言把 BOT 自己那套放大值当成了 Pocket 的值钉在这里，方向正好反了（Pocket 原文实测）。
   assert.match(html, /\.bp-row\{[^}]*min-height:\s*44px/, 'card row height aligned with Pocket .task-row 44px')
@@ -2526,6 +2530,12 @@ test('the Bot rows speak Pocket state semantics instead of a second language', (
   assert.match(html, /\.bp-row\.is-awaiting \.bp-copy b\{color:#f0c56b\}/, 'and the same lightened text')
   // 2026-10-29 判据 D5a②：正在活动只剩一套语言——Pocket 的行级 is-running，状态位取 brand。
   assert.match(html, /\.bp-row\.is-running \.bp-avatar,\.bp-row\.is-running \.bp-chip\{color:var\(--brand\)\}/, 'running paints the status mark brand, like .task-row.is-running')
+  // 2026-10-29 必改 2：状态位常态必须是中性态，否则 running 的 brand 是「蓝→蓝」的空操作——
+  // 改前 .bp-avatar 常态就是 16% 品牌底 + brand 字，Bot 行看不出忙闲；群行的 .bp-chip 常态是灰的，
+  // 所以同一条规则只在群行有效。两个 26px 圆形图标位同取 var(--hover)，两行字面同构。
+  assert.match(html, /\.bp-avatar\{[^}]*background:var\(--hover\);[^}]*color:var\(--muted\)/, 'the avatar idles neutral, so is-running has something to change')
+  assert.match(html, /\.bp-chip\{[^}]*background:var\(--hover\);[^}]*color:var\(--muted\)/, 'and the group chip idles the same neutral, not surface on a surface row')
+  assert.doesNotMatch(html, /\.bp-row\.is-running \.bp-chip\{background:/, 'running changes the mark colour only, like Pocket .task-status, with no tint of its own')
   assert.doesNotMatch(html, /bpPulse/, 'the border pulse (a second language Pocket does not have) is gone')
   assert.doesNotMatch(html, /\.bp-avatar\.is-busy/, 'and so is the busy avatar class')
   assert.doesNotMatch(html, /bp-tag-wait/, 'and the hardcoded amber tag')
