@@ -496,11 +496,59 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null } = {}) {
         // A height to compensate with: forty pixels a row, the box one screen
         // tall. Without it scrollHeight is 0 and the "reading further back
         // leaves the view where it was" logic has nothing to move.
+        let html = ''
+        // Every child the transcript draws, in the order it appears: the older
+        // button, dividers, event rows and messages. Both scrollHeight and the
+        // anchor geometry read this one list, so a row's pixel top and the
+        // box's total height can never disagree.
+        const rowsOf = () => {
+          const out = []
+          const re = /class="(bp-(?:msg|divider|event|older)[^"]*)"/g
+          let match
+          while ((match = re.exec(html))) {
+            out.push({ classes: match[1].split(/\s+/), message: /\bbp-msg\b/.test(match[1]) })
+          }
+          return out
+        }
+        Object.defineProperty(made, 'innerHTML', {
+          configurable: true,
+          get: () => html,
+          // A real box clamps its scrollTop to the content it is given: content
+          // that shrank pulls the reader up. The anchor restore measures against
+          // that clamp, so the stand-in has to do it too.
+          set: (next) => {
+            html = String(next)
+            const max = Math.max(0, rowsOf().length * 40 - made.clientHeight)
+            if (made.scrollTop > max) made.scrollTop = max
+          },
+        })
         Object.defineProperty(made, 'scrollHeight', {
           configurable: true,
-          get: () => (made.innerHTML.match(/class="bp-(msg|divider|event|older)/g) || []).length * 40,
+          get: () => rowsOf().length * 40,
         })
         made.clientHeight = 300
+        // The geometry the scroll anchor reads. The box sits at the top of the
+        // viewport; each row is forty pixels tall, so a row's top is its index
+        // times forty minus whatever has been scrolled. Before this the stand-in
+        // had no getBoundingClientRect and no `:scope > .message`, so the anchor
+        // code could never be asserted (P1-5 all over again: a stand-in that is
+        // missing something makes the page carry a branch for it).
+        made.getBoundingClientRect = () => ({ top: 0, bottom: made.clientHeight, height: made.clientHeight })
+        made.querySelectorAll = (selector) => {
+          if (selector !== ':scope > .message') return []
+          const rows = rowsOf()
+          const out = []
+          for (let index = 0; index < rows.length; index += 1) {
+            if (!rows[index].message) continue
+            const top = index * 40 - made.scrollTop
+            out.push({
+              index: out.length,
+              rowIndex: index,
+              getBoundingClientRect: () => ({ top, bottom: top + 40, height: 40 }),
+            })
+          }
+          return out
+        }
       }
       nodes.set(id, made)
     }
@@ -1243,7 +1291,7 @@ test('a message typed here goes out as that session, in the shape the landing us
   // and they stay until the Host shows the message itself. The text now sits in
   // an inner .markdown block (BOT_PAGE_JS renders through the shared markdown
   // source), so the words come after that opening tag, not straight after .bp-msg.
-  assert.match(page.node('bpMsgs').innerHTML, /class="bp-msg user is-pending"><div class="markdown"><p>在吗<\/p>/, 'the send paints at once, marked pending')
+  assert.match(page.node('bpMsgs').innerHTML, /class="bp-msg message user is-pending"><div class="markdown"><p>在吗<\/p>/, 'the send paints at once, marked pending')
 })
 
 test('the transcript keeps what was said and drops the machinery', async () => {
@@ -1263,8 +1311,8 @@ test('the transcript keeps what was said and drops the machinery', async () => {
   page.fireWindow('hashchange')
   await page.settle()
   const msgs = page.node('bpMsgs').innerHTML
-  assert.match(msgs, /class="bp-msg user"><div class="markdown"><p>你好<\/p>/)
-  assert.match(msgs, /class="bp-msg assistant"><div class="markdown"><p>在<\/p>/)
+  assert.match(msgs, /class="bp-msg message user"><div class="markdown"><p>你好<\/p>/)
+  assert.match(msgs, /class="bp-msg message assistant"><div class="markdown"><p>在<\/p>/)
   assert.ok(!msgs.includes('tool_use'), '工具调用不进手机的消息流')
   assert.ok(!msgs.includes('先想一想'), '思考也不进')
 })
@@ -1518,10 +1566,10 @@ test('opening a Bot chat reaches back past the newest part to what came before i
   await page.settle(60)
 
   const msgs = page.node('bpMsgs').innerHTML
-  assert.match(msgs, /class="bp-msg user"><div class="markdown"><p>最早的那句话/, 'the oldest part is drawn, not just the newest')
-  assert.match(msgs, /class="bp-msg user"><div class="markdown"><p>上一段说的话/, 'and the part right before it')
+  assert.match(msgs, /class="bp-msg message user"><div class="markdown"><p>最早的那句话/, 'the oldest part is drawn, not just the newest')
+  assert.match(msgs, /class="bp-msg message user"><div class="markdown"><p>上一段说的话/, 'and the part right before it')
   assert.match(msgs, /class="bp-divider"/, 'a divider marks where one part begins')
-  assert.match(msgs, /class="bp-msg assistant"><div class="markdown"><p>最新那一段的话/, 'the part the page was pointed at stays at the bottom')
+  assert.match(msgs, /class="bp-msg message assistant"><div class="markdown"><p>最新那一段的话/, 'the part the page was pointed at stays at the bottom')
 
   const calls = page.calls.filter((call) => call.method === 'bot.earlier')
   assert.equal(calls.length, 2, 'it keeps asking until the Host says there is nothing older')
@@ -1748,6 +1796,94 @@ test('reading further back leaves the reader looking at the same message', async
   assert.equal(box.scrollHeight - beforeHeight, 10 * ROW, 'ten older rows were added above')
   assert.equal(box.scrollTop, beforeTop + 10 * ROW,
     'and the view moved down by exactly their height, so the same message is still in front of the reader')
+})
+
+// 2026-10-29, in the card's own terms: a poll must not move what the reader is
+// looking at (top of #bpMsgs as the reference, first visible row as the offset,
+// the landing's own 2px threshold from lib/pages.js:3134) and must not drop rows
+// already drawn. Both halves are computed here, not judged by eye.
+test('a poll that hands back fewer rows leaves the drawn ones where they were', async () => {
+  let reads = 0
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') {
+        reads += 1
+        // A part turned over between reads: the second page starts later and
+        // holds fewer rows than the screen already has. Replacing the drawn rows
+        // with it (what refreshLatest used to do wholesale) drops the older half.
+        const first = reads === 1 ? 1 : 8
+        const count = reads === 1 ? 12 : 5
+        return { events: Array.from({ length: count }, (_, i) => saidByBot(`第 ${first + i} 句`, first + i)), hasMore: false }
+      }
+      return {}
+    },
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle(60)
+
+  const box = page.node('bpMsgs')
+  const lookAt = () => {
+    const rows = box.querySelectorAll(':scope > .message')
+    const top = box.getBoundingClientRect().top
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect()
+      if (rect.bottom > top + 2) return { rows: rows.length, offset: Math.round(rect.top - top) }
+    }
+    return { rows: rows.length, offset: null }
+  }
+  box.scrollTop = 100 // the reader stopped a little above the newest line
+  const before = lookAt()
+  assert.equal(before.rows, 12, 'the first read drew a dozen rows')
+  assert.ok(before.offset !== null, 'and one of them is in front of the reader')
+
+  page.fireIntervals(5000)
+  await page.settle(20)
+
+  const after = lookAt()
+  assert.ok(after.rows >= before.rows, 'the rows already drawn are still on screen')
+  assert.ok(Math.abs(after.offset - before.offset) <= 2,
+    'and the reader still has the same row in front of them, within the landing\'s 2px threshold')
+})
+
+test('the word you sent is on screen once, through the poll that brings it back', async () => {
+  let reads = 0
+  let showFrom = null
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method === 'bot.team') return teamWith()
+      if (method === 'session.history') {
+        reads += 1
+        // The Host shows nothing until the poll after the send: a queued word
+        // takes a read or two to surface.
+        if (showFrom === null || reads < showFrom) return { events: [], hasMore: false }
+        return { events: [saidByUser('在吗', 9), saidByBot('在', 10)], hasMore: false }
+      }
+      return {}
+    },
+  })
+  await page.settle()
+  page.location.hash = '#s=s-chief&k=bot&t=Chief'
+  page.fireWindow('hashchange')
+  await page.settle(60)
+
+  const countOf = (haystack, needle) => haystack.split(needle).length - 1
+  showFrom = reads + 2 // the send's own refresh reads once; the poll reads after it
+
+  page.node('bpPrompt').value = '在吗'
+  page.click('bpSend', {})
+  await page.settle(20)
+  const optimistic = page.node('bpMsgs').innerHTML
+  assert.equal(countOf(optimistic, '在吗'), 1, 'the optimistic row is the only copy on screen')
+  assert.match(optimistic, /is-pending/, 'and it is marked still waiting')
+
+  page.fireIntervals(5000)
+  await page.settle(20)
+  const shown = page.node('bpMsgs').innerHTML
+  assert.equal(countOf(shown, '在吗'), 1, 'the Host showing the word does not draw it twice')
+  assert.ok(!shown.includes('is-pending'), 'the optimistic copy is gone')
 })
 
 // ---------------------------------------------------------------------------
