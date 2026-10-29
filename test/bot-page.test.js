@@ -2233,7 +2233,10 @@ test('answering a card ends the warm copy, so the next read is a real one', asyn
 test('the Bot page uses PIN-code style transition card with Pocket heading when switching to Pocket', () => {
   const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
   assert.match(html, /id="bpSwitchOverlay" class="switch-overlay" hidden/, 'the switch overlay is in markup')
-  assert.match(html, /<div class="card"><div class="brand" style="flex-wrap:wrap">/, 'reuses the connection page card and its wordmark row')
+  // 2026-10-29 判据 D6 + 第五节 A：视觉顺序 h1(24) → p(14) → boot-step(13) → brand(13)，
+  // 品牌行从主标题上方挪到阶梯下方，当页脚签名——这样它不会再小于自己下方任何文本。
+  assert.match(html, /<div class="card"><h1>Pocket<\/h1><p>/, 'the card opens with the heading, not the wordmark')
+  assert.match(html, /<\/div><div class="brand" style="flex-wrap:wrap">/, 'and the wordmark closes it as a footer signature')
   assert.match(html, /Curiouser and curiouser!/, 'the card wears the same wordmark line as the landing')
   assert.match(html, /<em style="flex-basis:100%;text-align:center">/, 'the line sits on its own row, not beside the name')
   assert.match(html, /<h1>Pocket<\/h1>/, 'carries the Pocket heading')
@@ -2247,7 +2250,9 @@ test('the Bot page uses PIN-code style transition card with Pocket heading when 
 test('the Pocket page uses PIN-code style transition card with BOT heading when switching to Bot', () => {
   const html = renderMobilePage({ locale: 'zh', boot: null })
   assert.match(html, /id="switchOverlay" class="switch-overlay" hidden/, 'the Pocket switch overlay is in markup')
-  assert.match(html, /<div class="card"><div class="brand" style="flex-wrap:wrap">/, 'reuses the connection page card and its wordmark row')
+  // 2026-10-29 判据 D6 + 第五节 A：与 BOT 侧那张卡同序，品牌行落在阶梯之后。
+  assert.match(html, /<div class="card"><h1>BOT<\/h1><p>/, 'the card opens with the heading, not the wordmark')
+  assert.match(html, /<\/p><div class="brand" style="flex-wrap:wrap">/, 'and the wordmark closes it as a footer signature')
   assert.match(html, /Curiouser and curiouser!/, 'the card wears the same wordmark line as the landing')
   assert.match(html, /<em style="flex-basis:100%;text-align:center">/, 'the line sits on its own row, not beside the name')
   assert.match(html, /<h1>BOT<\/h1>/, 'carries the BOT heading')
@@ -2444,7 +2449,7 @@ test('the Bot transition card borrows the shared overlay language instead of cop
     /\.switch-overlay\{[^}]*position:\s*fixed;\s*inset:\s*0/,
     /\.switch-overlay\[hidden\]\{display:\s*none\}/,
     /\.switch-overlay h1\{[^}]*font-size:\s*24px/,
-    /\.boot-step\{[^}]*font-size:\s*14px;\s*padding:\s*6px 0\}/,
+    /\.boot-step\{[^}]*font-size:\s*13px;\s*padding:\s*6px 0\}/,
     /\.boot-step-label\{flex:\s*1\}/,
     /@keyframes bspin\{to\{transform:rotate\(360deg\)\}\}/,
   ]) {
@@ -2456,6 +2461,35 @@ test('the Bot transition card borrows the shared overlay language instead of cop
   // 只认「规则本体」的形态（选择器后紧跟 {）——注释里提到这些类名不算副本。
   for (const copy of [/\.switch-overlay\{/, /\.switch-overlay\[hidden\]\{/, /\.switch-overlay \.brand\{/, /\.switch-overlay h1\{/, /\.boot-steps\{/, /\.boot-step\{/, /\.boot-step-label\{/, /\.bsc\{/, /@keyframes bspin/]) {
     assert.doesNotMatch(botHtml, copy, 'the Bot page must not restate ' + copy)
+  }
+})
+
+// 2026-10-29 判据 D6 + 第五节 A：切换页内部字号必须严格递减
+// （h1 ≥ p ≥ .boot-step > .bsc），且 .brand 不得小于它下方任何文本——定案是把品牌行
+// 从主标题上方挪到阶梯下方当页脚签名，这样它下方再没有文本，字号也不用动。
+test('the transition cards keep one decreasing type ladder with the wordmark as its footer', () => {
+  const pocketHtml = renderMobilePage({ locale: 'zh', boot: null })
+  const botHtml = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+
+  // 数字只写一次，在共享源里；两张卡都读它。
+  assert.match(pocketHtml, /\.switch-overlay h1\{[^}]*font-size:\s*24px/, 'h1 tops the ladder')
+  assert.match(pocketHtml, /\.switch-overlay p\{[^}]*font-size:\s*14px/, 'the sub line sits under it')
+  assert.match(pocketHtml, /\.boot-step\{[^}]*font-size:\s*13px/, 'the step rows drop one notch below the sub line')
+  assert.match(pocketHtml, /class="bsc" data-unit="[^"]*" style="[^"]*font-size:12px/, 'and the reading inside a step is smaller still')
+  assert.match(pocketHtml, /\.switch-overlay \.brand\{[^}]*font-size:\s*13px/, 'the wordmark closes at 13px, never below what it sits under')
+
+  // 页脚签名：品牌行在阶梯之后（markup 顺序，不用 CSS order 兜）。
+  for (const [name, html, anchor] of [
+    ['pocket', pocketHtml, 'id="switchOverlay"'],
+    ['bot', botHtml, 'id="bpSwitchOverlay"'],
+  ]) {
+    const at = html.indexOf(anchor)
+    assert.ok(at >= 0, `${name}: the card is in the markup`)
+    const card = html.slice(html.indexOf('<div class="card">', at))
+    const ladder = card.indexOf('class="boot-steps show"')
+    const brand = card.indexOf('class="brand"')
+    assert.ok(ladder >= 0, `${name}: the ladder is inside the card`)
+    assert.ok(brand > ladder, `${name}: the wordmark comes after the ladder, not above the heading`)
   }
 })
 
