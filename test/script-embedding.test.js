@@ -174,3 +174,54 @@ test('PARSE: every inline script of every phone page actually parses', () => {
     assert.fail(`the bot page script does not parse: ${error.message}`)
   }
 })
+
+// 阶梯的<定义位置>是这份文档能不能跑的前提，不只是字节问题。
+//
+// 带 assets 的文档里，外链 app.js 一定排在 bootstrap 之前，而经典脚本按文档顺序执行；
+// app.js 本体（lib/pages.js 主脚本）里的冷启动卡在顶层就调 `ladderRun({...})`。所以阶梯
+// 一旦只住在 bootstrap 里（commit d0449d3 的做法），真机冷开时 app.js 先跑，抛
+// `ReferenceError: ladderRun is not defined`，catch 里 ovFail() 又撞上 `ovLadder` 的 TDZ
+// 抛出第二个错，async IIFE reject，loadListData/renderWorkspaces 再也不会执行，而
+// `window.__pocketAppReady=true` 照常置位——遮罩永久停在「正在打开 Pocket」，列表空白。
+//
+// 三条既有测试都看不见它：handoff-boot-dedup 只称字节，landing-transition-card 只把
+// bootstrap 抽出来跑（主脚本被替身掉），bot-page 只对字符串做 match。这条测试钉的是
+// 顺序本身：定义必须出现在外链 script 标签之前，且全文只有一份定义。
+test('the ladder is defined before the external app.js that already calls it', () => {
+  for (const locale of ['zh', 'en']) {
+    const assets = mobilePageAssets({ locale })
+    const urls = { cssUrl: `/app.css?l=${locale}&h=000000000000`, jsUrl: `/app.js?l=${locale}&h=000000000000` }
+    const html = renderMobilePage({ locale, assets: urls })
+
+    assert.equal(
+      occurrences(html, 'function ladderRun('),
+      1,
+      `${locale}: the ladder must ship exactly once in the shipped document`
+    )
+    const defined = html.indexOf('function ladderRun(')
+    const external = html.indexOf(`<script src="${urls.jsUrl}"`)
+    assert.ok(external > 0, `${locale}: the shipped document must load the app.js asset`)
+    assert.ok(
+      defined >= 0 && defined < external,
+      `${locale}: the ladder definition (at ${defined}) must precede the app.js tag (at ${external}); classic scripts run in document order, so app.js would otherwise call an undefined ladderRun and leave the phone on a dead overlay`
+    )
+
+    // 定义在 head 的内联经典脚本里，不是 IIFE 内部，所以顶层 function 就是全局：
+    // app.js 与 bootstrap 两边的调用都不需要 window 挂载，也不许再加一份副本。
+    assert.equal(
+      occurrences(html, 'window.ladderRun='),
+      0,
+      `${locale}: the ladder is a head-level function, so no window export may carry a second copy`
+    )
+    // 被证明的是「调用方在外链资产里」这件事本身，否则上面那条顺序断言会空转。
+    assert.ok(
+      assets.js.includes('ladderRun({'),
+      `${locale}: the app.js asset is the caller this ordering protects, and it calls the ladder at top level`
+    )
+    assert.equal(
+      occurrences(assets.js, 'function ladderRun('),
+      0,
+      `${locale}: the asset must not redefine the ladder; one definition, in the document head`
+    )
+  }
+})

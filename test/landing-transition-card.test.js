@@ -16,15 +16,29 @@ import { pocketToBotRows, renderMobilePage } from '../lib/pages.js'
 const ROWS = pocketToBotRows(true)
 
 // 页面上真正发出去的那段内联脚本。只有带 assets 时才注入，所以这里必须带 assets 渲染。
-function landingBootstrap() {
-  const html = renderMobilePage({
+function landingDocument() {
+  return renderMobilePage({
     locale: 'zh',
     boot: null,
     assets: { jsUrl: '/app.js', cssUrl: '/app.css' },
   })
-  const match = html.match(/<script>\(function\(\)\{([\s\S]*?)\}\)\(\)<\/script>/)
+}
+
+function landingBootstrap() {
+  const match = landingDocument().match(/<script>\(function\(\)\{([\s\S]*?)\}\)\(\)<\/script>/)
   assert.ok(match, '落地页必须内联过渡卡的 bootstrap 脚本')
   return match[1]
+}
+
+// 阶梯运行时住在 head 的内联经典脚本里（见 lib/pages.js renderMobilePage 的顺序说明：
+// 外链 app.js 先于 bootstrap 执行，所以定义必须在 head）。浏览器先跑 head、再跑 bootstrap，
+// 这里照同一顺序把两段拼进同一个函数体——省掉 head 那段，就会被 `ladderRun is not defined` 打红，
+// 那正是真机冷开会发生的事。
+function landingHead() {
+  const blocks = [...landingDocument().matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map((m) => m[1])
+  const withLadder = blocks.find((body) => body.includes('function ladderRun('))
+  assert.ok(withLadder, 'head 里必须有阶梯运行时的定义，否则外链 app.js 里的冷启动卡取不到它')
+  return withLadder
 }
 
 /**
@@ -115,7 +129,8 @@ function harness({ cue = 'ok', value = { bots: 2, rooms: 3, ready: true }, summa
     'window', 'document', 'getComputedStyle', 'fetch', 'navigator', 'location',
     'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'requestAnimationFrame',
     'sessionSummaries',
-    landingBootstrap(),
+    `${landingHead()}
+${landingBootstrap()}`,
   )
 
   return {

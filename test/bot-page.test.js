@@ -2439,6 +2439,9 @@ test('the way out does not pretend it read the landing: no dwell on the not-read
   // 一次 500ms 的停留都没挣到，也不该被它拖慢。
   assert.deepEqual(page.navigations, ['back'], 'the cold branch leaves without the half-second dwell it never earned')
   // 反证：那一档 500ms 的停留表根本不存在，烧它也不会再走一次。
+  // 说清这条验的是什么：它证明的是 onDone 的幂等守卫（ladder 里 `if(left)return`）
+  // 挡住重复交棒，不证明「停留时长」——停留时长由上面 6D 那组的 dwellTimer 断言管。
+  // 别把它读成时序证据：这个断言在任何时长的实现下都能绿。
   page.fireTimers(500)
   await page.settle()
   assert.deepEqual(page.navigations, ['back'], 'and no dwell table was left behind for that 500ms to burn')
