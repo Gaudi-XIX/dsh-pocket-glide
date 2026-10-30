@@ -73,13 +73,24 @@ function extractFunction(source, name) {
     `${name} is defined ${hits.length} times in the asset (at ${hits.join(', ')}): the extractor would silently measure the FIRST one`,
   )
   const start = hits[0]
+  // 参数列表先走完再数花括号：`unclaimedSessionIds(summaries, workspaces, options = {})`
+  // 的默认值里就有 `{`，直接从 `{` 起数会在签名中间截断，抽出半截函数体。
+  let i = source.indexOf('(', start)
+  let paren = 0
+  for (; i < source.length; i += 1) {
+    if (source[i] === '(') paren += 1
+    else if (source[i] === ')') {
+      paren -= 1
+      if (paren === 0) break
+    }
+  }
   let depth = 0
-  for (let i = source.indexOf('{', start); i < source.length; i += 1) {
-    const char = source[i]
+  for (let j = i; j < source.length; j += 1) {
+    const char = source[j]
     if (char === '{') depth += 1
     else if (char === '}') {
       depth -= 1
-      if (depth === 0) return source.slice(start, i + 1)
+      if (depth === 0) return source.slice(start, j + 1)
     }
   }
   throw new Error(`unbalanced braces after ${name}`)
@@ -125,6 +136,9 @@ const PAGE_NAMES = [
   'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank', 'wsHeadTimeAt', 'renderWorkspaces',
   'tailTextOf', 'normalizeSelection', 'fieldText', 'esc',
   'mergeBotParts', 'visibleSessions', 'projectSessionRows', 'applyRunningMarks', 'ungroupedCards',
+  // 归属的唯一算法：`ungroupedCards` 与桥侧 `pageWarmSummary` 读的是同一个纯函数
+  // （判据 2：不许第二份过滤，收进公共函数）。少它，页面沙箱会 ReferenceError。
+  'unclaimedSessionIds',
 ]
 
 // 变量声明顺序照抄 asset：`projectSessionRows` 读 `pendingSendAt`/`pendingSend`/`activeSession`，
@@ -377,16 +391,19 @@ test('subagent rows are not counted, even in a workspace that holds nothing else
   assert.equal(bridge.pageWarmSummary('landing').rows, 1)
 })
 
-test('a pinned row survives the window and an unclaimed row is kept, as on the page', () => {
-  // 置顶行不论多旧都在视图里（`bootRangeCap` 的 p 项）；没有工作区认领的行是页面「未分组」
-  // 那一桶（`ungroupedCards`），也是有行画的。两者都在数里。
+test('a pinned row survives the window, and an unclaimed row is not painted at all', () => {
+  // 置顶行不论多旧都在视图里（`bootRangeCap` 的 p 项）。
+  //
+  // 没有工作区认领的行（「未分组」那一桶）：用户 2026-10-30「隐藏就是两个工作区，未分组和
+  // DSBOT」把那张卡从主页退场后，这些行在主页上一处也不落——桥侧这一格也不再数它们
+  // （两侧读同一个 `unclaimedSessionIds`，判据 2）。所以这里期望 1 行，不是 2 行。
   const rows = [rowOf('s-pin', OLD), rowOf('s-old', OLD), rowOf('s-orp', OLD)]
   const items = [{ workspaceId: 'w-a', sessionIds: ['s-pin', 's-old'] }]
   const bridge = makeBridge({ rows, items, pinnedSessionIds: ['s-pin'] })
   const A = bridge.pageWarmSummary('landing').rows
   const B = taskRows(paintLanding({ workspaces: items, rows, pinned: ['s-pin'] }))
-  assert.equal(A, 2, 'the pinned row plus the unclaimed row; the old unpinned row is behind the window edge')
-  assert.equal(A, B, 'and the landing paints exactly those two')
+  assert.equal(A, 1, 'the pinned row; the old unpinned row is behind the window edge and the unclaimed row has no card to land on')
+  assert.equal(A, B, 'and the landing paints exactly that one row')
 })
 
 test('a few hundred live rows are reported in full, not truncated to a round number', () => {

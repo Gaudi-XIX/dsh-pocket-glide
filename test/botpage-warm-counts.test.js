@@ -78,8 +78,12 @@ test('a snapshot that has not arrived omits the workspace count instead of inven
   delete bridge.workspaceSnapshot
   // 会话行是真的（ready 保持 true，卡片照写会话数），但工作区这一格**一个数字都不发**：
   // 落回 0 会把「没读到」装成「读了 0 个」，正是本次要根治的假读数（Truth-Guard 2026-10-28 08:3x）。
+  //
+  // 会话数是 0：快照没到 ⇒ 没有任何工作区认领这些行 ⇒ 它们属于「未分组」那一桶，而用户
+  // 2026-10-30 已把那张卡从主页退场（「隐藏就是两个工作区，未分组和DSBOT」）⇒ 主页此刻也画
+  // 不出这一行。两侧读同一个 `unclaimedSessionIds`，所以这里与页面一致（判据 1 的 A===B）。
   const summary = bridge.pageWarmSummary('landing')
-  assert.deepEqual(summary, { ready: true, rows: 1, bots: 0, rooms: 0 })
+  assert.deepEqual(summary, { ready: true, rows: 0, bots: 0, rooms: 0 })
   assert.equal('workspaces' in summary, false, 'the field is absent, so the card leaves that cell alone')
 })
 

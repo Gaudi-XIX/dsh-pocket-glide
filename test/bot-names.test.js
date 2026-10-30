@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { botSessionNamesFromState } from '../lib/projections.js';
 import { LanMobileBridge, stampBotNames } from '../lib/bridge.js';
-import { BOT_NAMES_CACHE_MS } from '../lib/constants.js';
+import { BOT_NAMES_CACHE_MS, defaultDshHome } from '../lib/constants.js';
 
 const roster = (name) =>
   JSON.stringify({ bots: { a: { name, segments: [{ sessionId: 's1' }] } } });
@@ -57,6 +57,31 @@ test('an unknown or empty state yields no names, so nothing is stamped', () => {
   for (const state of [null, undefined, {}, { bots: null }, { bots: [] }, 'x', 7]) {
     assert.equal(botSessionNamesFromState(state).size, 0);
   }
+});
+
+test('the roster path defaults to the Host data root, not the profile directory', () => {
+  // The roster lives under DSH_HOME (this machine: F:\AgentData\dsh\data), which is
+  // NOT under the per-user profile directory. The old literal
+  // `join(homedir(), '.dsh', 'bot', 'state.json')` named a path that does not exist
+  // on this machine — and `homedir` was never even imported, so the call threw on
+  // every refresh and `botNamesForSessions` swallowed it as a missing file: no row
+  // was ever stamped with a Bot name. The path is resolved by the same
+  // `defaultDshHome()` every other data path uses.
+  const bridge = Object.create(LanMobileBridge.prototype);
+  bridge.options = {};
+  const path = bridge.botStatePath();
+  assert.equal(path, join(defaultDshHome(), 'bot', 'state.json'));
+  assert.ok(
+    path.startsWith(defaultDshHome()),
+    'the roster must live under the Host data root, never under the profile directory',
+  );
+  assert.equal(path.endsWith(join('bot', 'state.json')), true, '…and the layout under it is unchanged');
+});
+
+test('an explicit path still wins over the default', () => {
+  const bridge = Object.create(LanMobileBridge.prototype);
+  bridge.options = { botStatePath: 'X:/custom/state.json' };
+  assert.equal(bridge.botStatePath(), 'X:/custom/state.json');
 });
 
 test('the roster is read once per window, then re-read when it changes on disk', async (t) => {

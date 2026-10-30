@@ -124,16 +124,28 @@ test('a pin inside the hidden workspace is dropped with it', async () => {
   assert.deepEqual(boot.ws.pinnedSessionIds, ['a'], 'the Bot team cannot ride back in on the pin list')
 })
 
+// Brace-match, but starting after the parameter list: a signature with a default
+// object (`options = {}`) closes the depth counter before the body opens, and the
+// extractor would hand back a truncated header that `new Function` cannot compile.
 function extractFunction(source, name) {
   const start = source.indexOf(`function ${name}(`)
   assert.notEqual(start, -1, `${name} must exist in the rendered asset`)
+  let i = source.indexOf('(', start)
+  let paren = 0
+  for (; i < source.length; i++) {
+    if (source[i] === '(') paren++
+    else if (source[i] === ')') {
+      paren--
+      if (paren === 0) break
+    }
+  }
   let depth = 0
-  for (let i = start; i < source.length; i++) {
-    const char = source[i]
+  for (let j = i; j < source.length; j++) {
+    const char = source[j]
     if (char === '{') depth++
     else if (char === '}') {
       depth--
-      if (depth === 0) return source.slice(start, i + 1)
+      if (depth === 0) return source.slice(start, j + 1)
     }
   }
   throw new Error(`unbalanced braces after ${name}`)
@@ -149,7 +161,7 @@ function ungroupedCards({ workspaces, sessionSummaries, archivedSessionIds = [],
     'archivedSessionIds',
     'hiddenWsSessionIds',
     'hiddenWsListed',
-    `${body};return ungroupedCards()`,
+    `${extractFunction(js, 'unclaimedSessionIds')}\n${body};return ungroupedCards()`,
   )
   return make(workspaces, sessionSummaries, archivedSessionIds, hiddenWsSessionIds, hiddenWsListed)
 }
@@ -158,18 +170,100 @@ const summaries = (ids) => ids.map((sessionId) => ({ sessionId, updatedAt: 1, bl
 const lastCard = (cards) => cards[cards.length - 1]
 const hasUngrouped = (cards) => cards.some((card) => card.ungrouped === true)
 
-test('an unclaimed session is painted under「未分组」, and the claimed ones stay where they are', () => {
+// ---------------------------------------------------------------------------
+// 渲染层：页面还画不画那张桶卡（用户 2026-10-30「隐藏就是两个工作区，未分组和DSBOT」）
+// ---------------------------------------------------------------------------
+// 归属仍由 ungroupedCards() 算（桥侧 pageWarmSummary 读同一个函数，两侧必须一致），
+// 画不画在 renderWorkspaces 这一层判。沙箱与 test/list-bounds.test.js:167 paintList
+// 同构，唯一差别：那支把 ungroupedCards 换成桩（它只测工作区卡），这里必须用真函数，
+// 否则「桶卡不画」这条判据测的是桩而不是页面。
+const L = JSON.parse(js.match(/^const L=(\{.*\});/m)[1])
+function assetNumber(pattern, label) {
+  const hit = js.match(pattern)
+  assert.ok(hit, `${label} must stay a plain number in the rendered asset`)
+  return Number(hit[1])
+}
+function assetString(pattern, label) {
+  const hit = js.match(pattern)
+  assert.ok(hit, `${label} must stay on the rendered asset`)
+  return hit[1]
+}
+const UNREAD_OPEN_KEY = assetString(/UNREAD_OPEN_KEY='([^']+)'/, 'UNREAD_OPEN_KEY')
+const LAST_MESSAGE_KEY = assetString(/LAST_MESSAGE_KEY='([^']+)'/, 'LAST_MESSAGE_KEY')
+const UNREAD_RECENCY_MS = assetNumber(/UNREAD_RECENCY_MS=(\d+)/, 'UNREAD_RECENCY_MS')
+const LAST_MESSAGE_MAX = assetNumber(/LAST_MESSAGE_MAX=(\d+)/, 'LAST_MESSAGE_MAX')
+const BLANK_ROW_VISIBLE_MS = assetNumber(/BLANK_ROW_VISIBLE_MS=(\d+)/, 'BLANK_ROW_VISIBLE_MS')
+const LIST_ROWS_MAX = assetNumber(/LIST_ROWS_MAX=(\d+)/, 'LIST_ROWS_MAX')
+const WS_FLAGS_MAX = assetNumber(/WS_FLAGS_MAX=(\d+)/, 'WS_FLAGS_MAX')
+const RECENT_WINDOW_MS = assetNumber(/RECENT_WINDOW_MS=(\d+)/, 'RECENT_WINDOW_MS')
+const MORE_ROWS = assetNumber(/MORE_ROWS=(\d+)/, 'MORE_ROWS')
+
+const taskRows = (html) => (html.match(/<button class="task-row/g) || []).length
+
+function paintPage({ workspaces, sessionSummaries, hiddenWsSessionIds = [], archivedSessionIds = [], expanded = [] }) {
+  const host = { innerHTML: '' }
+  const names = [
+    'blankRowVisible', 'bootRangeCap', 'taskState', 'taskGlyph', 'pad2', 'formatMessageClock',
+    'timeFor', 'titleFor', 'readOpenedMap', 'isSessionUnread', 'isNoticeUnread',
+    'wsFlagOf', 'wsFlagClass', 'wsFlagRank', 'wsFlagsOf', 'wsFlagHtml', 'wsRunning', 'wsGlyphOf',
+    'sessionModelLabel', 'readLastMessageMap', 'pruneLastMessageMap', 'noteSessionMessageAt',
+    'lastMessageAtOf', 'lastMessageTimeOf', 'sortAtOf', 'pinRank', 'wsHeadTimeAt', 'renderWorkspaces',
+    'tailTextOf', 'normalizeSelection', 'fieldText',
+  ]
+  const body = names.map((name) => extractFunction(js, name)).join('\n')
+  const make = new Function(
+    'fixture',
+    'container',
+    `
+    const L=${JSON.stringify(L)}
+    const UNREAD_OPEN_KEY=${JSON.stringify(UNREAD_OPEN_KEY)}
+    const UNREAD_RECENCY_MS=${UNREAD_RECENCY_MS}
+    const LAST_MESSAGE_KEY=${JSON.stringify(LAST_MESSAGE_KEY)}
+    const LAST_MESSAGE_MAX=${LAST_MESSAGE_MAX}
+    const BLANK_ROW_VISIBLE_MS=${BLANK_ROW_VISIBLE_MS}
+    const LIST_ROWS_MAX=${LIST_ROWS_MAX}
+    const WS_FLAGS_MAX=${WS_FLAGS_MAX}
+    const RECENT_WINDOW_MS=${RECENT_WINDOW_MS}
+    const MORE_ROWS=${MORE_ROWS}
+    const workspaces=fixture.workspaces, sessionSummaries=fixture.sessionSummaries
+    // hiddenWsListed=false = 「这一页没有隐藏工作区」。页面的早退条件是
+    // hiddenWsListed && 隐藏成员为空 ⇒ 字段在场但为空时直接返回工作区、根本不建桶。
+    // 沙箱若把字段设成「在场且为空」，桶就永远算不出来，renderWorkspaces 的过滤
+    // 也就无从被测到——这里要的是「桶真被算出来，再被滤掉」。
+    const hiddenWsListed=false, hiddenWsSessionIds=fixture.hiddenWsSessionIds
+    const archivedSessionIds=fixture.archivedSessionIds
+    const expandedWsIds=new Set(fixture.expanded), revealedLists=new Map()
+    const pinnedSessionIds=[], activeSession=null
+    const pinBusy=new Set()
+    let openedAtLedgerReady=true
+    const $=()=>container
+    const tailCache=new Map(),tailArmedAt={},tailPending=new Set()
+    function requestVisibleTails(){}
+    function requestTailBootRound(){}
+    function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+    const store={}
+    const localStorage={getItem:(key)=>store[key]||'{}',setItem:(key,value)=>{store[key]=String(value)}}
+    ${extractFunction(js, 'unclaimedSessionIds')}
+    ${extractFunction(js, 'ungroupedCards')}
+    ${body}
+    return { paint(){ renderWorkspaces(); return container.innerHTML } }
+  `,
+  )
+  return make({ workspaces, sessionSummaries, hiddenWsSessionIds, archivedSessionIds, expanded }, host).paint()
+}
+
+test('an unclaimed session is still the bucket’s row set, and the claimed ones stay where they are', () => {
   const cards = ungroupedCards({
     workspaces: [{ workspaceId: WORKSPACE, title: 'defws', sessionIds: ['a'] }],
     sessionSummaries: summaries(['a', 'orphan1', 'orphan2']),
   })
 
-  assert.equal(hasUngrouped(cards), true, 'the heading the desktop has must exist here too')
+  assert.equal(hasUngrouped(cards), true, 'the attribution stays computed: the bridge counts rows with this same function')
   const bucket = lastCard(cards)
   assert.equal(bucket.ungrouped, true)
   assert.deepEqual(bucket.sessionIds, ['orphan1', 'orphan2'], 'exactly the rows no workspace claims')
   assert.deepEqual(cards[0].sessionIds, ['a'], 'and the workspace card is untouched')
-  assert.equal(cards.length, 2, 'the bucket rides beside the workspaces, not inside one')
+  assert.equal(cards.length, 2, 'the bucket still rides beside the workspaces; painting it is decided in renderWorkspaces')
 })
 
 test('the bucket sorts last, the way the desktop paints the leftovers after the workspaces', () => {
@@ -263,11 +357,25 @@ test('the heading is the desktop\u2019s own wording in both locales', () => {
   assert.ok(en.includes('"ungrouped":"Ungrouped"'), 'en: and Ungrouped (group.ungrouped, en dictionary)')
 })
 
-test('the bucket card carries no「+」: there is no workspace behind it to create in', () => {
-  const marker = js.slice(js.indexOf("const wsKey=w.ungrouped"), js.indexOf("const wsKey=w.ungrouped") + 4000)
-  assert.match(marker, /w\.ungrouped\?' is-ungrouped':'/, 'the card is marked, so a stylesheet can tell it apart')
-  assert.match(marker, /w\.ungrouped\?'':'<button class="ws-new"/, 'and it offers no workspace-level action')
-  assert.match(marker, /esc\(w\.ungrouped\?L\.ungrouped:/, 'the title is the bucket label, not a path')
+// 用户 2026-10-30：「隐藏就是两个工作区，未分组和DSBOT」——桶里的行不再有卡可落。
+// 这条断言跑的是真 renderWorkspaces + 真 ungroupedCards（不是源码切片）：切片在
+// 分支被删之后只会恒真，测不出页面到底画了什么。
+test('the ungrouped card is not painted at all, so its rows never reach the page', () => {
+  const html = paintPage({
+    workspaces: [{ workspaceId: WORKSPACE, title: 'defws', path: 'F:\\\\defws', sessionIds: ['a'] }],
+    sessionSummaries: summaries(['a', 'orphan1', 'orphan2']),
+    expanded: [WORKSPACE],
+  })
+
+  assert.equal(taskRows(html), 1, 'only the claimed row is painted: with no bucket card its rows have nowhere to land')
+  assert.equal(
+    (html.match(/<article class="ws-card/g) || []).length,
+    1,
+    'exactly one card is painted: the bucket card is not merely unmarked, it is gone',
+  )
+  assert.equal(html.includes('is-ungrouped'), false, 'no card carries the bucket marker any more')
+  assert.equal(html.includes(L.ungrouped), false, 'and the「未分组」heading is gone with it (user 2026-10-30)')
+  assert.ok(html.includes('defws'), 'the workspace card itself still renders, header and all')
 })
 
 test('the landing stores the hidden membership the bridge sends, and whether it was sent at all', () => {
