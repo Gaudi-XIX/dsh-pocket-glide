@@ -15,12 +15,15 @@
 //      （`state.notified` 一旦置真永不补推），所以「延后一拍重试」在这里等于永久丢失。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { startBridge } from './helpers.js'
 
 const REAL_KEY = 'SECRETKET1234567890AB'
 
-function notifyBridgeOptions(sent) {
-  return {
+function notifyBridgeOptions(sent, botStatePath) {
+  const options = {
     settingsStore: {
       load: () => ({ notify: { channel: 'bark', key: REAL_KEY, enabled: true } }),
       save: () => true
@@ -30,6 +33,20 @@ function notifyBridgeOptions(sent) {
       return { ok: true, text: async () => '{}' }
     }
   }
+  if (botStatePath) options.botStatePath = botStatePath
+  return options
+}
+
+/** Write a ds-bot roster that says `sessionId` belongs to `name`. */
+async function writeRoster(sessionId, name) {
+  const dir = await mkdtemp(join(tmpdir(), 'pocket-roster-'))
+  const path = join(dir, 'state.json')
+  await writeFile(
+    path,
+    JSON.stringify({ bots: { helper: { name, segments: [{ sessionId }] } } }),
+    'utf8'
+  )
+  return { path, cleanup: () => rm(dir, { recursive: true, force: true }) }
 }
 
 /**
@@ -50,7 +67,7 @@ async function settle(t, items, clock) {
   await tick() // 91 s of silence ⇒ the judge settles
 }
 
-function startWith(sent, items, clock, respond) {
+function startWith(sent, items, clock, respond, botStatePath) {
   return startBridge({
     harness: 'fake',
     harnessOptions: {
@@ -60,7 +77,7 @@ function startWith(sent, items, clock, respond) {
         return undefined
       }
     },
-    bridgeOptions: { ...notifyBridgeOptions(sent), now: () => clock.at }
+    bridgeOptions: { ...notifyBridgeOptions(sent, botStatePath), now: () => clock.at }
   })
 }
 
@@ -184,5 +201,88 @@ test('an unreadable page is fail-open: the notice goes out rather than being swa
     assert.equal(sent.length, 1, 'judging nothing is not a reason to swallow the notice')
   } finally {
     await t.stop()
+  }
+})
+
+// The two cases below go through the production shape on purpose: the Host row
+// itself carries NO `botName` (lib/projections.js:76-77 — the bridge derives it
+// from ds-bot's roster and writes it onto the copy it hands the page). The
+// earlier cases hand-build the stamp, which is exactly how the dead branch at
+// lib/bridge.js:3084 stayed green — no test ever let `pollNotifyRunning` read a
+// real `session/list` answer. Here the roster file is the only place the name
+// comes from.
+test('a Bot row is recognised from the roster, not from the Host row', async () => {
+  const sent = []
+  const clock = { at: 1_000_000 }
+  const roster = await writeRoster('s1', 'Helper')
+  const items = [
+    // No botName anywhere on this row: it is a Host row, not a page copy.
+    {
+      sessionId: 's1',
+      running: true,
+      updatedAt: clock.at,
+      projections: { asOfSeq: 12, values: { title: 'Bot 接力' } }
+    }
+  ]
+  // Bot-to-Bot traffic: the only user line in the window came from another Bot.
+  const t = await startWith(
+    sent,
+    items,
+    clock,
+    () => ({
+      ok: true,
+      value: {
+        records: [
+          {
+            type: 'event',
+            event: { type: 'user/message', seq: 12, data: { source: { kind: 'bot' }, content: 'ping' } }
+          }
+        ],
+        hasMore: false
+      }
+    }),
+    roster.path
+  )
+  try {
+    await settle(t, items, clock)
+    assert.equal(sent.length, 0, 'the roster says this is a Bot, so its non-reply must not push')
+    assert.ok(
+      t.logs.some(({ message }) => message.includes('notify skipped (bot turn did not reach the user)')),
+      'and the skip says why'
+    )
+  } finally {
+    await t.stop()
+    await roster.cleanup()
+  }
+})
+
+test('the same roster-stamped row still pushes when the operator is in the window', async () => {
+  const sent = []
+  const clock = { at: 1_000_000 }
+  const roster = await writeRoster('s1', 'Helper')
+  const items = [
+    { sessionId: 's1', running: true, updatedAt: clock.at, projections: { asOfSeq: 12, values: { title: 'Bot 接力' } } }
+  ]
+  const t = await startWith(
+    sent,
+    items,
+    clock,
+    () => ({
+      ok: true,
+      value: {
+        records: [
+          { type: 'event', event: { type: 'user/message', seq: 11, data: { source: { kind: 'user' }, content: '在吗' } } }
+        ],
+        hasMore: false
+      }
+    }),
+    roster.path
+  )
+  try {
+    await settle(t, items, clock)
+    assert.equal(sent.length, 1, 'stamping the Bot name must not silence a real reply')
+  } finally {
+    await t.stop()
+    await roster.cleanup()
   }
 })

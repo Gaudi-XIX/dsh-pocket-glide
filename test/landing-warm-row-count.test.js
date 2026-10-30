@@ -73,8 +73,9 @@ function extractFunction(source, name) {
     `${name} is defined ${hits.length} times in the asset (at ${hits.join(', ')}): the extractor would silently measure the FIRST one`,
   )
   const start = hits[0]
-  // 参数列表先走完再数花括号：`unclaimedSessionIds(summaries, workspaces, options = {})`
-  // 的默认值里就有 `{`，直接从 `{` 起数会在签名中间截断，抽出半截函数体。
+  // 参数列表先走完再数花括号：签名是
+  // `unclaimedSessionIds(summaries, workspaces, hidden = [], archived = [])`，
+  // 参数区自己带括号，先定位参数区的结束位置再从那里数函数体的花括号才不会错位。
   let i = source.indexOf('(', start)
   let paren = 0
   for (; i < source.length; i += 1) {
