@@ -1893,6 +1893,10 @@ test('three consecutive relays from one Bot take one line, counted', async () =>
 
 test('a folded relay line opens the conversation with that Bot', async () => {
   const page = await openWith([relayedBy('Pixel', 4, 'request'), relayedBy('Pixel', 6, 'reply')])
+  const msgs = page.node('bpMsgs').innerHTML
+  // 这一行自己就把对端带着走：点开落到哪个会话，全部信息来自这一行，不看别处。
+  assert.match(msgs, /data-exchange="1"[^>]*data-sid="s-pixel"/, 'the folded line carries the peer session id it opens')
+  assert.match(msgs, /data-name="Pixel"/, 'and the name it shows in the part header')
   const exchange = { getAttribute: (name) => ({ 'data-sid': 's-pixel', 'data-name': 'Pixel' })[name] ?? null }
   page.click('bpMsgs', { target: { closest: (selector) => (selector === '[data-exchange]' ? exchange : null) } })
   await page.settle()
