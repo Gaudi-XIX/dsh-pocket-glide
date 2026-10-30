@@ -817,16 +817,19 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null, js = BOT_P
 }
 
 /**
- * 把过渡卡推完。真机上点 BOT 页右上角那一下先起四步卡（70ms 一步），走完再隔
- * 60ms 才真的离开页面——替身里 interval 不自己 fire，所以测试必须显式推。
+ * 把过渡卡推完。真机上点 BOT 页右上角那一下先起四步卡（70ms 一步），走完再停
+ * dwell 才真的离开页面——替身里 timeout 不自己 fire，所以测试必须显式推。
  *
  * 2026-10-27② 起卡片还要等桥答复一份「已载入多少」，等不到 1.6s 兜底就自己走；
  * 替身里那个 timeout 也不自己 fire，所以这里连它一起烧——等价于「桥 1.6 秒没答」。
  * 1.6 这个数字不是随手定的：桥那边等 warmPage 的上限是 `pageCueWaitMs ?? 1500`，
  * 卡先放弃就会把数字写在正在卸载的文档上（2026-10-28）。
+ *
+ * 2026-10-30 Q1：逐行阶梯与停留都改成链式 setTimeout（原先 70ms 那档走 setInterval），
+ * 所以推的是 fireTimers 而不是 fireIntervals——每档只烧毫秒数相等的那些表。
  */
 async function finishSwitch(page) {
-  for (let step = 0; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
+  for (let step = 0; step < page.switchSteps.length; step += 1) page.fireTimers(70)
   page.fireTimers(1600)
   await page.settle()
   // 判据 6D：完成文字落屏之后要停 500ms 才跳转，这条表就是那 0.5 秒。
@@ -842,6 +845,10 @@ test('the way out says how much of the landing is already warm, on the row that 
   await page.settle()
   assert.equal(SHELL.counts, SHELL.steps, 'every step carries one slot for its number')
   page.click('bpHome', { preventDefault() {} })
+  await page.settle()
+  // Q1 起四行由同一份 ladderRun 逐行推：每一行亮起的那一刻才去取自己的读数，
+  // 所以这里先把那四档推出来，再看卡上落的是什么。
+  for (let step = 0; step < page.switchSteps.length; step += 1) page.fireTimers(70)
   await page.settle()
   assert.equal(page.switchCounts[0].textContent, '3 个工作区', 'the first row says how many workspaces the landing holds')
   assert.equal(page.switchCounts[1].textContent, '12 个会话', 'the row that reads the list says how many rows it read')
@@ -863,6 +870,8 @@ test('a cold summary never overwrites the numbers the page already holds with ze
   await page.settle(40)
   page.click('bpHome', { preventDefault() {} })
   await page.settle()
+  for (let step = 0; step < page.switchSteps.length; step += 1) page.fireTimers(70)
+  await page.settle()
   assert.equal(page.switchCounts[1].textContent, '2 个会话', 'the rows this page already read stay on the row that counts them')
   assert.equal(page.switchCounts[2].textContent, '2 条消息', 'and so do the messages it already holds')
   assert.equal(page.switchCounts[3].textContent, '未就绪', 'a bridge that read nothing says so instead of printing zeros as facts')
@@ -875,7 +884,7 @@ test('the card outlasts the bridge’s own wait before giving up on the numbers'
   const page = fakeBrowser({ answer: () => ({}), hang: (method) => method === 'page.cue' })
   await page.settle()
   page.click('bpHome', { preventDefault() {} })
-  for (let step = 0; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
+  for (let step = 0; step < page.switchSteps.length; step += 1) page.fireTimers(70)
   await page.settle()
   page.fireTimers(1200)
   await page.settle()
@@ -2375,7 +2384,7 @@ test('the way out shows every step, and strikes a row only once its reading is s
   assert.equal(page.node('bpSwitchOverlay').hidden, false, 'the card covers the screen while the page is on its way out')
   assert.deepEqual(page.navigations, [], 'and the page has not started leaving')
 
-  page.fireIntervals(70)
+  page.fireTimers(70)
   // 用户 2026-10-27：「每一行都是要完全完成以后才是划横线」——走过不等于读完，
   // 读数没定稿的这一行不划线（旧实现是 i<idx 就划，于是出现「四行全划完、右边还空着」）。
   assert.ok(!page.switchSteps[0].classList.contains('is-done'),
@@ -2383,18 +2392,12 @@ test('the way out shows every step, and strikes a row only once its reading is s
   assert.ok(page.switchSteps[1].classList.contains('is-active'), 'and the one it reached is is-active')
   assert.deepEqual(page.navigations, [], 'still animating, so still here')
 
-  for (let step = 1; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
-  assert.deepEqual(page.navigations, [],
-    'the leave waits for the last step and its pause — this is the moment the stand-in used to skip past')
-
-  page.fireTimers(1600)
+  for (let step = 1; step < page.switchSteps.length; step += 1) page.fireTimers(70)
   await page.settle()
+  // Q1 起末行一有读数就收口：冷摘要写「未就绪」，收口即离开（原来那 60ms 的帧同步
+  // 尾巴没有了）。所以这里钉的是「四档走完、每一行都定了稿，然后才离开」。
   assert.ok(page.switchSteps.every((step) => step.classList.contains('is-done')),
-    'the give-up timer settles every open row, so the card never leaves with an unstruck line')
-  // 判据 6D：这条给的是「跳转那一档」，500ms 也是它；这一路 readyNote 为假，
-  // 直接 depart，不经过那次停留。
-  page.fireTimers(500)
-  await page.settle()
+    'the last row settles every open row, so the card never leaves with an unstruck line')
   assert.equal(cueCount(), 1, 'and only then does it say its one word')
   assert.deepEqual(page.navigations, ['back'], 'with the landing reached the way it came in')
 })
@@ -2407,8 +2410,10 @@ test('the way out dwells half a second after the completion line, on its own tim
   const page = fakeBrowser({ answer: (method) => (method === 'page.cue' ? { rows: 12, workspaces: 3, ready: true } : {}) })
   await page.settle()
   page.click('bpHome', { preventDefault() {} })
-  // 桥的答复在微任务里就到了（真机也是 1.6s 上限内先答），于是这一帧里第四行
-  // 写成「已就绪」、所有行划线，0.5 秒的表从这一刻起算。
+  // 桥的答复在微任务里就到了（真机也是 1.6s 上限内先答）。Q1 起四行由同一份
+  // ladderRun 逐档推：推到第四档时它才取到「已就绪」，落屏之后那 0.5 秒才起算。
+  await page.settle()
+  for (let step = 0; step < page.switchSteps.length; step += 1) page.fireTimers(70)
   await page.settle()
 
   assert.equal(page.switchCounts[3].textContent, '已就绪', 'the completion line is on screen before the dwell starts')
@@ -2427,22 +2432,26 @@ test('the way out does not pretend it read the landing: no dwell on the not-read
   await page.settle()
   page.click('bpHome', { preventDefault() {} })
   await page.settle()
-  for (let step = 0; step < page.switchSteps.length; step += 1) page.fireIntervals(70)
+  for (let step = 0; step < page.switchSteps.length; step += 1) page.fireTimers(70)
 
   assert.equal(page.switchCounts[3].textContent, '未就绪', 'the card says the landing is cold instead of "已就绪"')
-  assert.deepEqual(page.navigations, [], 'still here: nothing was read, so no dwell was earned either')
-
-  // 帧同步那支 60ms 的尾巴照旧放行——fail-closed 的路不该被一次它没挣到的停留拖慢。
-  page.fireTimers(60)
+  // 未就绪这一档的停留是 0ms（ladderRun 的 notReadyDwellMs: 0）：文字落屏就离开，
+  // 一次 500ms 的停留都没挣到，也不该被它拖慢。
+  assert.deepEqual(page.navigations, ['back'], 'the cold branch leaves without the half-second dwell it never earned')
+  // 反证：那一档 500ms 的停留表根本不存在，烧它也不会再走一次。
+  page.fireTimers(500)
   await page.settle()
-  assert.deepEqual(page.navigations, ['back'], 'the cold branch leaves on its old timing')
+  assert.deepEqual(page.navigations, ['back'], 'and no dwell table was left behind for that 500ms to burn')
 })
 
 // 判据 6D 的承重断言：停留必须挂在自己的表上。只断言「500ms 后才走」的话，把
 // `setTimeout(depart, TRANSITION_DWELL_MS)` 删掉、让帧同步顺手多等一会儿，测试照样绿。
 test('the half-second dwell is a timer of its own, not spare time inside the frame sync', () => {
   assert.match(BOT_PAGE_JS, /var TRANSITION_DWELL_MS = 500\b/, 'the dwell is a named constant, not a literal buried in a branch')
-  assert.match(BOT_PAGE_JS, /setTimeout\(depart, TRANSITION_DWELL_MS\)/, 'and it arms a timer of its own, on the way out')
+  // Q1 起这次停留由共用的 ladderRun 起表（链式 setTimeout，时长仍是那个具名常量）：
+  // 卡3 把常量交给它，表在 ladderRun 内部 arm——不再是页面里那一句 setTimeout(depart, …)。
+  assert.match(BOT_PAGE_JS, /dwellMs: TRANSITION_DWELL_MS/, 'the hold is handed to the ladder as the named dwell')
+  assert.match(BOT_PAGE_JS, /dwellTimer=setTimeout\(/, 'and the ladder arms a timer of its own for it')
   // 下面两条是回归守卫（baseline 与 HEAD 都是 0 命中，它们守未来、不证明本批删了什么）：
   // 0.5 秒既不许内联在调用点，也不许折进帧同步自己的表里——那样就变成「帧同步顺手多等一会儿」。
   assert.doesNotMatch(BOT_PAGE_JS, /setTimeout\(depart, 500\)/, 'the 0.5s is not inlined at the call site')
@@ -2784,24 +2793,23 @@ test('the landing card counts the Bots the page already knows, before anything a
     assets: { cssUrl: '/app.css?h=1', jsUrl: '/app.js?h=2' },
   })
   assert.match(html, /var bots=0,chats=0;/, 'counts the distinct Bot names this page already holds')
-  // 2026-10-29（任务卡 §2 A1/A3）：这张卡不再按 70ms 节拍机械推进、也不再等 cue 才写数。
-  // 页面自己已知的计数先进缓冲，行亮起的那一刻直接定稿——所以断言从「cardCount 立刻被调用」
-  // 改成「计数进缓冲」+「激活时写缓冲值」，pre-cue 有读数的要求本身没变。
-  assert.match(html, /if\(bots\)cardCounts\[0\]=bots;/, 'stashes that count so the first row can paint')
-  assert.match(
-    html,
-    /if\(cardCounts\[i\]===undefined\)cardScan\(i\);else cardSetRow\(i,String\(cardCounts\[i\]\)\)/,
-    'the row writes the stashed count the moment it lights, without waiting for the cue'
-  )
+  // Q1 口径 B：页面已知的读数不再预填进任何缓冲，也没有「先写着、激活时覆盖」的第二条路径——
+  // 轮到哪一行，lockRow 就在那一刻现取（pre-cue 有读数的要求本身没变）。
+  assert.doesNotMatch(html, /cardCounts\[0\]=/, 'no stashed count is painted ahead of the row that owns it')
+  assert.doesNotMatch(html, /cardCounts\[i\]/, 'and no second buffer survives to be overwritten later')
+  // 等强度替换（Q1）：原钉 `{host:ov,rows:rows,` 里的 `host` 是 ladderRun 早已不用的死参数
+  // （行由 rows 给），去掉后这条仍然钉同一件事——卡不是自己一套循环，是被共用阶梯驱动的。
+  assert.match(html, /var ladder=ladderRun\(\{rows:rows,/, 'the landing card is driven by the shared ladder')
+  assert.match(html, /lock:lockRow/, 'the row picks up its reading the moment the ladder reaches it')
 })
 
 test('the BOT page counts the chats it already read, before the cue answers', () => {
-  assert.match(BOT_PAGE_JS, /knownRows = Object\.keys\(state\.previews \|\| \{\}\)\.length/, 'counts the previews already in hand')
-  assert.match(
-    BOT_PAGE_JS,
-    /if \(knownRows > 0\) cardCount\(1, knownRows\)/,
-    'writes them into the session step when there is anything to say',
-  )
+  assert.match(BOT_PAGE_JS, /var previewRows = 0/, 'counts the previews already in hand')
+  // 同一份行级规则：这些数只在轮到那一行时被 lock 现取，不预填、不提前写。
+  assert.match(BOT_PAGE_JS, /var ladder = ladderRun\(\{/, 'the way-out card is driven by the shared ladder')
+  assert.match(BOT_PAGE_JS, /lock: lock,/, 'and every row answers for itself when the ladder reaches it')
+  assert.doesNotMatch(BOT_PAGE_JS, /if \(knownRows > 0\) cardCount\(1, knownRows\)/, 'no stashed count is painted ahead of its row')
+  assert.doesNotMatch(BOT_PAGE_JS, /cardCount\(2, knownMessages\)/, 'nor for the message row')
 })
 
 // 判据 2：左上角返回键与 Pocket 一致——悬浮不占位、44×44 圆、Pocket 那条折线图标，

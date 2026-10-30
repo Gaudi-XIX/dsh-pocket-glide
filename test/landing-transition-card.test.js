@@ -155,6 +155,13 @@ test('过渡卡逐行定稿：亮起第 k 行时第 k-1 行已经定稿，划线
   h.start()
   h.click()
   await h.flush()
+  // Q1 起四行由同一份 ladderRun 逐档推（70ms 一档）：推到末行才拿到「已就绪」，
+  // 「已就绪」落屏之后还要停 dwell 才交棒。
+  for (let step = 0; step < ROWS.length; step += 1) h.tick(70)
+  await h.flush()
+  assert.deepEqual(h.navigations, [], '完成文案落屏之后仍在停留，不立刻走')
+  h.tick(500)
+  await h.flush()
 
   assert.ok(h.log.active.length > 0, '点击后至少有一行被点亮')
   for (const seen of h.log.active) {
@@ -166,30 +173,46 @@ test('过渡卡逐行定稿：亮起第 k 行时第 k-1 行已经定稿，划线
   assert.deepEqual(h.navigations, ['/bot'])
 })
 
-test('过渡卡第一、二行在 cue 答复之前就有读数（预填不被固定节拍拖走）', async () => {
+test('过渡卡：页面已知的读数在轮到那一行时就落笔，不等 cue 也不被固定节拍拖走', async () => {
   const h = harness({ cue: 'never' })
   h.start()
   h.click()
 
-  // 同步阶段，答复还挂在天上：本页已经握着的行必须已经数出来。
-  assert.equal(h.rows[0].querySelector('.bsc').textContent, '2 个 BOT')
-  assert.equal(h.rows[1].querySelector('.bsc').textContent, '3 个会话')
-  assert.equal(h.rows[0]._final, true)
-  assert.equal(h.rows[1]._final, true)
-  // 第三行还没有数据，所以不能提前点亮它、更不能把它划掉。
-  assert.equal(h.rows[2]._active, true)
+  // 挂载那一帧：四行都先写占位（非末行「0＋单位」、末行保留「准备中」），扫描已经起了。
+  assert.equal(h.rows[0].querySelector('.bsc').textContent, '0 个 BOT')
+  assert.ok(h.rows[0].querySelector('.bsc')._scan, '第一行在等读数时是滚着的')
   assert.equal(h.rows[2]._final, false)
+
+  // 第一档（70ms）：第 0 行按本页已经握着的读数定稿，第 1 行亮起。
+  h.tick(70)
+  assert.equal(h.rows[0].querySelector('.bsc').textContent, '2 个 BOT')
+  assert.equal(h.rows[0]._final, true, '轮到的那一行立刻取本页已知的读数')
+  assert.equal(h.rows[1]._active, true)
+  assert.equal(h.rows[1]._final, false)
+
+  // 第二档：第 1 行定稿；等 cue 的那一行只点亮、不定稿。
+  h.tick(70)
+  assert.equal(h.rows[1].querySelector('.bsc').textContent, '3 个会话')
+  assert.equal(h.rows[1]._final, true)
+  assert.equal(h.rows[2]._active, true)
+  assert.equal(h.rows[2]._final, false, '还在等 cue 的那一行不会被提前定稿')
   assert.deepEqual(h.navigations, [])
 })
 
-test('过渡卡：数据与答复都在手时不推任何固定等待，跑完微任务就交棒', async () => {
+test('过渡卡：数据与答复都在手时不推任何固定等待，逐档推完就交棒', async () => {
   const h = harness()
   h.start()
   h.click()
   await h.flush()
+  for (let step = 0; step < ROWS.length; step += 1) h.tick(70)
+  await h.flush()
+
+  assert.deepEqual(h.navigations, [], '末行落屏之后还有一次 dwell，不是同一帧就走')
+  h.tick(500)
+  await h.flush()
 
   assert.deepEqual(h.navigations, ['/bot'])
-  assert.equal(h.pending(), 0, '交棒时不应留下任何未清理的定时器（固定节拍或到点放行）')
+  assert.equal(h.pending(), 0, '交棒时不应留下任何未清理的定时器（固定节拍、到点放行或扫描）')
 })
 
 test('过渡卡在交棒之前一直是可见的，四行也都在 DOM 里', async () => {
