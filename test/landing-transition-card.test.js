@@ -104,6 +104,9 @@ function harness({ cue = 'ok', value = { bots: 2, rooms: 3, ready: true }, summa
     _href: '',
     get href() { return this._href },
     set href(next) { this._href = next; navigations.push(next) },
+    // Q4 起 Pocket 主页那一跳走 location.replace（替换历史条目而不是压栈）；
+    // 落点与 href 相同，同样记进 navigations，断言强度不变。
+    replace(next) { this._href = next; navigations.push(next) },
   }
   const navigator = { sendBeacon() {} }
   const getComputedStyle = () => ({ getPropertyValue: () => ' #4d6bfe' })

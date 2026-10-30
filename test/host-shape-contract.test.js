@@ -145,6 +145,9 @@ test('botTeamView turns a ds-bot shaped state answer into the phone view', () =>
     model: 'deepseek/x',
     sessionId: 's1',
     waiting: false,
+    // Q2-②：hidden 是宿主 bot 记录里的标记，桥必须下发（「其他 BOT」卡按它折叠）。
+    // 缺省落成 false 而不是 undefined——前端只认严格的 true。
+    hidden: false,
     working: { tool: 'bash' },
   })
   // Paired with a prefetch context the row gains exactly two fields (task card
@@ -163,10 +166,20 @@ test('botTeamView turns a ds-bot shaped state answer into the phone view', () =>
     model: 'deepseek/x',
     sessionId: 's1',
     waiting: false,
+    hidden: false,
     updatedAt: 1730000000000,
     pinned: true,
     working: { tool: 'bash' },
   })
+  // Q2-② 的另一半：宿主标了 hidden 的 bot 必须原样过桥，否则「其他 BOT」卡无从折叠。
+  const marked = stateAnswer()
+  marked.bots[0].hidden = true
+  assert.equal(botTeamView(marked).bots[0].hidden, true,
+    'a bot the Host marked hidden travels as hidden')
+  assert.equal(botTeamView(marked).bots[0].hidden === true, true,
+    'only a strict true marks a bot hidden — a truthy leftover must not')
+  assert.equal(botTeamView(stateAnswer()).bots[0].hidden, false,
+    'an unmarked bot is hidden:false, never undefined')
   assert.deepEqual(plain(view.rooms[0]), {
     id: 'r1',
     name: 'Review',

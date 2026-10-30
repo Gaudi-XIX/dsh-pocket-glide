@@ -465,7 +465,17 @@ const PREVIEW_ROOMS = Number((BOT_PAGE_JS.match(/var PREVIEW_ROOMS = (\d+)/) || 
  * that answers `/api/rpc` from `answer(method, payload)`, and timers that never
  * fire (the page's pollers are not what these tests are about).
  */
-function fakeBrowser({ answer = () => ({}), seed = null, hang = null, js = BOT_PAGE_JS } = {}) {
+function fakeBrowser({
+  answer = () => ({}),
+  seed = null,
+  hang = null,
+  js = BOT_PAGE_JS,
+  // 判据 ③d：顶部状态点与授权胶囊读 /api/status，重启读 /api/host/restart。
+  // 两个都不是 /api/rpc，所以在这里按 url 分流，默认值让既有测试原样通过。
+  status = {},
+  statusFailure = false,
+  restart = { ok: true },
+} = {}) {
   // 会话流的替身。真机上 `new EventSource(url)` 由浏览器给，注入进来测试才发得了帧：
   // 替身不给，生产代码就得多一条「没有 EventSource 就不接流」的判据，那条判据在真
   // 机上的唯一作用是给替身让路（P1-5）。给得上，接流才是真的被测到。
@@ -736,7 +746,20 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null, js = BOT_P
   // 页面给每个 rpc 上了一个放弃用的 timeout、给 toast 一个自隐的，过渡卡走完还要
   // 隔 60ms 才真的离开。记下毫秒数，`fireTimers(ms)` 才能只推某一档。
   const fakeSetTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length }
+  const statusCalls = []
+  const restartCalls = []
   const fetch = (url, options) => {
+    // 顶部四件走的是 Pocket 那几个非 rpc 端点（判据 ③d 要求数据同源复用），
+    // 所以这里按 url 分流；/api/rpc 那套夹具与 calls 断言原样不动。
+    if (url === '/api/status') {
+      statusCalls.push(1)
+      if (statusFailure) return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve(null) })
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(status) })
+    }
+    if (url === '/api/host/restart') {
+      restartCalls.push(JSON.parse(options.body))
+      return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(restart) })
+    }
     const body = JSON.parse(options.body)
     calls.push({ method: body.method, payload: body.payload })
     if (hang && hang(body.method)) {
@@ -779,6 +802,8 @@ function fakeBrowser({ answer = () => ({}), seed = null, hang = null, js = BOT_P
     switchSteps,
     switchCounts,
     calls,
+    statusCalls,
+    restartCalls,
     beacons,
     document,
     location,
@@ -1464,7 +1489,18 @@ test('a message body is drawn as markdown, and an image stays the text it arrive
 // ---------------------------------------------------------------------------
 
 test('the roster paints into the slots it was handed, never over the page itself', async () => {
-  const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? teamWith() : {}) })
+  // 当日固定时刻，用来反算卡头右格期望的「HH:MM」（clockOf 三层时钟，与 Pocket 同构）。
+  const at = (h, m) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.getTime() }
+  const page = fakeBrowser({
+    answer: (method) => {
+      if (method !== 'bot.team') return {}
+      const team = teamWith()
+      team.bots[0].updatedAt = at(9, 5)
+      team.bots.push({ id: 'other-a', name: 'OtherA', role: '成员', sessionId: 's-other', updatedAt: at(11, 20) })
+      team.rooms[0].updatedAt = at(18, 40)
+      return team
+    },
+  })
   await page.settle()
   assert.equal(page.node('bpList').innerHTML, '', 'the scroll box itself is never rewritten — the roster lands in the slots')
   assert.match(page.node('bpMembersList').innerHTML, /data-open="room" data-id="r-flow"/, 'the group row lands in its slot')
@@ -1481,10 +1517,13 @@ test('the roster paints into the slots it was handed, never over the page itself
     ['主 BOT', '其他 BOT', '群聊'], '三区标题就是这三个字')
   assert.doesNotMatch(page.node('bpMembersList').innerHTML, /<h2/,
     '判据 4A③：不许再套 .bp-section 那套标题')
-  // 判据 4A②：卡片头右格写这一区自己有几条——三条数（主 1 / 其他 0 / 群 1）各归各卡。
+  // 判据 Q2-①：卡头右格写的是「这一区最后活动时刻」，不是条数——三张卡各按自己
+  // 那批记录的 updatedAt 求 max，再走本页 clockOf（三层时钟）。这里锁死「右格是时间、
+  // 不是计数」：空分区不输出该格，所以三张卡都放人的那条同时也在锁「三卡同一份规则」。
   assert.deepEqual(
-    (page.node('bpMembersList').innerHTML.match(/class="ws-last-time">(\d+)</g) || []).map((s) => s.replace(/\D+/g, '')),
-    ['1', '0', '1'], 'each card carries its own count')
+    (page.node('bpMembersList').innerHTML.match(/class="ws-last-time">([^<]+)</g) || [])
+      .map((s) => s.replace(/class="ws-last-time">|</g, '')),
+    ['09:05', '11:20', '18:40'], 'each card carries the time of its own last activity, not a count')
   assert.equal(page.node('bpMsgs').hidden, true, 'the chat half survived the paint: the old bug destroyed it')
   assert.equal(page.node('bpMsgs').visible, false, 'list view: the transcript is hidden, so it is not visible')
   // 判据 2①：列表页那行标题仍是 document.title（只有会话页才留空）。
@@ -1578,6 +1617,50 @@ test('tapping a section head folds that card, and the fold is memory-only', asyn
   // 真正的承重断言是上面那条键集 deepEqual。
   assert.doesNotMatch(page.store.get('pocketBotTeam') || '', /collapsed/i,
     '名单缓存里也不带折叠状态')
+})
+
+test('hidden Bots fold behind one row in the other-Bots card, and only there', async () => {
+  // 判据 Q2-②：hidden 只在「其他 BOT」这一栏折叠；主 BOT 卡照显（哪怕主 Bot 自己被标
+  // 隐藏），群聊卡没有这个机制。展开态只存内存，与 collapsedWs 同口径。
+  const team = {
+    bots: [
+      { id: 'm1', name: 'Main', role: '主', sessionId: 's-main', updatedAt: 9, hidden: true },
+      { id: 'o1', name: 'Other1', role: '成员', sessionId: 's-o1', updatedAt: 8 },
+      { id: 'o2', name: 'Other2', role: '成员', sessionId: 's-o2', updatedAt: 7 },
+      { id: 'h1', name: 'Hidden1', role: '成员', sessionId: 's-h1', updatedAt: 6, hidden: true },
+    ],
+    rooms: [{ id: 'r1', name: 'Flow', members: [{ id: 'm1' }], updatedAt: 6 }],
+    mainBotIds: ['m1'],
+    questions: { count: 0 },
+    work: { approvals: [] },
+  }
+  const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? team : {}) })
+  await page.settle()
+  const sectionOf = (title) => (page.node('bpMembersList').innerHTML
+    .split('<section class="ws-card').find((b) => b.includes('>' + title + '<')) || '')
+
+  const other = sectionOf('其他 BOT')
+  assert.match(other, /data-sid="s-o1"/, '第一个普通成员在「其他 BOT」里占行')
+  assert.match(other, /data-sid="s-o2"/, '第二个普通成员也在')
+  assert.doesNotMatch(other, /data-sid="s-h1"/, '隐藏的成员默认不占行')
+  const toggle = other.match(/<button type="button" class="older-row" data-hidden-toggle="1">([^<]*)</)
+  assert.ok(toggle, '卡底补一行展开开关')
+  assert.match(toggle[1], /隐藏/, '开关文案说的是隐藏')
+  assert.match(toggle[1], /1/, '文案带着隐藏的条数')
+
+  // 用户 10:00 原话「应该只在『其他 BOT』这一栏有这个东西。主 BOT 和群应该都没有」。
+  assert.match(sectionOf('主 BOT'), /data-sid="s-main"/, '主 BOT 卡不折叠，隐藏标记不影响它')
+  assert.doesNotMatch(sectionOf('主 BOT'), /older-row/, '主 BOT 卡里没有隐藏折叠开关')
+  assert.doesNotMatch(sectionOf('群聊'), /older-row/, '群聊卡里没有隐藏折叠开关')
+
+  page.click('bpList', { target: { closest: (selector) => (selector === '[data-hidden-toggle]' ? {} : null) } })
+  await page.settle()
+  const opened = sectionOf('其他 BOT')
+  assert.match(opened, /data-sid="s-h1"/, '展开后隐藏的成员按同一份 4C 序插回来')
+  assert.match(opened, /收起隐藏 BOT/, '展开后按钮说的是收起')
+  assert.doesNotMatch(opened, /显示 \d+ 个隐藏 BOT/, '展开后不再说「显示」')
+  assert.deepEqual(Array.from(page.store.keys()), ['pocketBotTeam'],
+    '隐藏展开态没有落进 localStorage')
 })
 
 test('a working bot and a talking group say so on their rows', async () => {
@@ -1794,6 +1877,41 @@ test('the injections the Host puts in a turn stay off the transcript', async () 
   const msgs = page.node('bpMsgs').innerHTML
   assert.ok(!msgs.includes('系统注入的'), 'no system injection became a message, even one whose source.kind is bot-like')
   assert.match(msgs, /<div class="bp-event">· Pixel<\/div>/, 'the Bot that really wrote is still named')
+})
+
+// 判据 5（往来折叠，L140–155）：连续三条同一对端的往来合成一行「与 X 的 N 条往来」，
+// 点开是与对端 Bot 的会话，单条仍显示 `· 名字`。
+
+test('three consecutive relays from one Bot take one line, counted', async () => {
+  const page = await openWith([relayedBy('Pixel', 4, 'request'), relayedBy('Pixel', 6, 'reply'), relayedBy('Pixel', 8, 'request')])
+  const msgs = page.node('bpMsgs').innerHTML
+  assert.equal((msgs.match(/bp-comm/g) || []).length, 1, 'one folded line, not three')
+  assert.match(msgs, /与 Pixel 的 3 条往来/, 'the line says how many messages it stands for')
+  assert.ok(!msgs.includes('<div class="bp-event">· Pixel</div>'), 'the singles are gone — the run replaced them')
+  assert.ok(!msgs.includes('这边的一段正文'), 'the bodies stay folded, as before')
+})
+
+test('a folded relay line opens the conversation with that Bot', async () => {
+  const page = await openWith([relayedBy('Pixel', 4, 'request'), relayedBy('Pixel', 6, 'reply')])
+  const exchange = { getAttribute: (name) => ({ 'data-sid': 's-pixel', 'data-name': 'Pixel' })[name] ?? null }
+  page.click('bpMsgs', { target: { closest: (selector) => (selector === '[data-exchange]' ? exchange : null) } })
+  await page.settle()
+  assert.equal(page.location.hash, '#s=s-pixel&k=bot&t=Pixel', 'the tap lands in the peer Bot part, the desktop openExchange path')
+})
+
+test('a run breaks at another speaker and at anything in between; a lone relay keeps its line', async () => {
+  const page = await openWith([
+    relayedBy('Pixel', 4, 'request'),
+    saidByBot('中间插进来的一句', 5),
+    relayedBy('Pixel', 6, 'reply'),
+    relayedBy('Pixel', 7, 'request'),
+    relayedBy('Curator', 8, 'reply'),
+  ])
+  const msgs = page.node('bpMsgs').innerHTML
+  assert.match(msgs, /<div class="bp-event">· Pixel<\/div>/, 'the run before the message is a lone relay and keeps its line')
+  assert.match(msgs, /与 Pixel 的 2 条往来/, 'seq keeps counting from where the run resumes')
+  assert.ok(!msgs.includes('与 Pixel 的 3 条往来'), 'the assistant row in between ended the run')
+  assert.match(msgs, /<div class="bp-event">· Curator<\/div>/, 'another speaker starts its own line, never folded into the run')
 })
 
 test('a send that fails takes its optimistic row back and says why', async () => {
@@ -2757,14 +2875,16 @@ test('the Pocket page uses PIN-code style transition card with BOT heading when 
   assert.match(html, /data-unit=""[^>]*>准备中</, 'the prepare step starts with its own word')
 })
 
-test('going to the Bot page keeps the landing in the history, so the way back lands on it', () => {
+test('going to the Bot page replaces the landing entry, so the way back leaves instead of bouncing', () => {
   const html = renderMobilePage({
     locale: 'zh',
     boot: null,
     assets: { cssUrl: '/app.css?h=1', jsUrl: '/app.js?h=2' },
   })
-  assert.match(html, /var doNav=function\(\)\{location\.href="\/bot"\}/, 'the hop keeps the landing entry')
-  assert.doesNotMatch(html, /location\.replace\("\/bot"\)/, 'the landing entry is not replaced away')
+  // Q4 (2026-10-30): Pocket 主页与 BOT 主页互为平级主页，主页上返回＝离开。这一跳必须 replace 掉
+  // Pocket 那条历史，BOT 页 leave() 的 history.back() 才不会弹回 Pocket 主页（10-27 曾反向要求 push）。
+  assert.match(html, /var doNav=function\(\)\{location\.replace\("\/bot"\)\}/, 'the hop replaces the landing entry')
+  assert.doesNotMatch(html, /location\.href="\/bot"/, 'the hop does not push a parent entry behind the Bot page')
   assert.match(
     html,
     /window\.addEventListener\("pageshow",function\(\)\{var ov=document\.getElementById\("switchOverlay"\);if\(ov\)ov\.hidden=true\}\)/,
@@ -3207,3 +3327,87 @@ test('REVERSE: with the chunk body emptied the answer being written never reache
   assert.match(actual, /写之前的那句/, 'while the transcript itself is still drawn: the red is not somewhere else')
 })
 
+
+// ---------- 判据 ③d：BOT 顶部与 Pocket 主页 header 逐件对齐 --------------------
+
+test('the BOT header wears the same four fixtures as the Pocket home header', () => {
+  const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  // 左：brand（22px /app-icon + 文字，与 Pocket lib/pages.js:1037 同一形状）。
+  assert.match(html, /<div class="brand"><img src="\/app-icon" alt="" style="width:22px;height:22px;border-radius:5px;object-fit:cover"><span>BOT<\/span><\/div>/,
+    'the left slot is Pocket\u2019s brand: the same icon size and the same word slot')
+  // 右：授权胶囊 / 刷新圆钮 / 重启圆钮 / 状态点 + 文字，四件齐全且全用共享类。
+  assert.match(html, /<span id="bpExpiry" class="head-expiry" hidden><\/span>/, 'the expiry capsule is the shared .head-expiry')
+  assert.match(html, /<button id="bpReload" class="head-icon"/, 'reload is a round .head-icon key, not a text glyph')
+  assert.match(html, /<button id="bpRestart" class="head-icon"/, 'restart is the second round .head-icon key')
+  assert.match(html, /<div id="bpStatus" class="status connecting" role="status"/, 'the dot is the shared .status, born connecting')
+  assert.match(html, /<span id="bpStatusText" class="status-text" aria-hidden="true">/, 'and it speaks through the shared .status-text')
+  // 旧那一行裸标题的尺寸规则必须消失（判据验收：grep 归零）。
+  assert.doesNotMatch(html, /\.bp-bar b\{/, 'the old bare <b> title rule is gone')
+  assert.doesNotMatch(html, /font-size:16px;font-weight:650/, 'and so is its type scale')
+  // ③d 只在有 rpc 的页面上加纸：brand 与右侧四件都不许在会话页占位（Pocket 的
+  // body.chat-open header 同样整条隐藏），刷新键由既有 .hidden 关闭。
+  assert.match(html, /body\.bp-chat \.bp-bar \.brand,body\.bp-chat \.bp-bar \.head-right\{display:none\}/,
+    'the chat view keeps only the floating back key')
+})
+
+test('the header states follow the shared three-state semantics, and the expiry capsule says when', () => {
+  return (async () => {
+    // 固定本地时刻 ⇒ 期望文案不随测试机时区漂。
+    const until = new Date(2026, 10, 30, 9, 5, 0, 0).getTime()
+    const page = fakeBrowser({
+      answer: () => teamWith(),
+      status: { expiresAt: until, hostReachable: false },
+    })
+    await page.settle()
+    const dot = page.node('bpStatus')
+    assert.equal(dot.className, 'status degraded', 'ok + hostReachable:false is the yellow state, same as Pocket')
+    assert.equal(page.node('bpStatusText').textContent, '宿主机不响应', 'and it says why in words, not only in colour')
+    assert.equal(page.node('bpExpiry').hidden, false, 'a payload with expiresAt fills the capsule')
+    assert.equal(page.node('bpExpiry').textContent, '授权至 2026-11-30 09:05', 'the capsule carries the same time format as Pocket')
+
+    const down = fakeBrowser({ answer: () => teamWith(), statusFailure: true })
+    await down.settle()
+    assert.equal(down.node('bpStatus').className, 'status error-state', 'an unpaired or failing status read is the red state')
+    assert.equal(down.node('bpStatusText').textContent, '连接断开', 'and it says disconnected')
+    assert.equal(down.node('bpExpiry').hidden, true, 'no payload means no capsule')
+  })()
+})
+
+test('restart asks first, and only then posts the same request the desktop sheet posts', () => {
+  return (async () => {
+    const page = fakeBrowser({ answer: () => teamWith() })
+    await page.settle()
+    assert.equal(page.node('bpRestartCard').hidden, true, 'the sheet starts closed')
+    page.click('bpRestart')
+    assert.equal(page.node('bpRestartCard').hidden, false, 'the key opens the confirmation sheet')
+    assert.equal(page.node('bpRestartOverlay').hidden, false, 'with the shared overlay behind it')
+    assert.equal(page.restartCalls.length, 0, 'nothing is posted before the confirmation')
+    page.click('bpRestartGo')
+    assert.deepEqual(page.restartCalls, [{ force: false }], 'the confirmed restart posts {force:false}, as Pocket does')
+  })()
+})
+
+// ---------- Q3：切入瞬间的大空白 --------------------------------
+
+test('the roster slot is born the skeleton\u2019s height, so nothing jumps when the skeleton retires', () => {
+  const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+
+  // 判据原文给的两条路，这里两条都走：
+  // ① 骨架脱流——bp-ready 撤掉的只是一个浮层，成员列表的 top 从头到尾就是滚动盒顶部。
+  assert.match(html, /\.bp-skel\{position:absolute;inset:0 0 auto;/,
+    'the skeleton floats above the list instead of pushing it down')
+  assert.match(html, /#bpList\{position:relative\}/,
+    'and the scroll box is the containing block it floats in')
+  // ② 成员列表的最小高度与骨架同高（数字从骨架自己的 CSS 算出来，不另抄一份）。
+  const rowHeight = Number(html.match(/\.bp-skel-row\{height:(\d+)px/)[1])
+  const gap = Number(html.match(/\.bp-skel\{position:absolute;inset:0 0 auto;z-index:0;display:grid;gap:(\d+)px/)[1])
+  const rows = (html.match(/<div class="bp-skel-row"><\/div>/g) || []).length
+  const minHeight = Number(html.match(/#bpMembersList\{min-height:(\d+)px\}/)[1])
+  assert.equal(rows, 4, 'the skeleton keeps its four rows')
+  assert.equal(minHeight, rows * rowHeight + (rows - 1) * gap,
+    'the roster slot is exactly as tall as the skeleton it replaces')
+
+  // 判据明令排除的那条路：给滚动盒设 min-height 恒通过、拦不住子元素上移。
+  assert.doesNotMatch(html, /#bpList\{[^}]*min-height/,
+    'the scroll box is left alone: its own top never moved')
+})
