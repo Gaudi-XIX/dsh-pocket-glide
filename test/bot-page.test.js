@@ -3367,7 +3367,10 @@ test('the header states follow the shared three-state semantics, and the expiry 
     assert.equal(dot.className, 'status degraded', 'ok + hostReachable:false is the yellow state, same as Pocket')
     assert.equal(page.node('bpStatusText').textContent, '宿主机不响应', 'and it says why in words, not only in colour')
     assert.equal(page.node('bpExpiry').hidden, false, 'a payload with expiresAt fills the capsule')
-    assert.equal(page.node('bpExpiry').textContent, '授权至 2026-11-30 09:05', 'the capsule carries the same time format as Pocket')
+    // 胶囊只印「至 MM-DD」（2026-10-31 第二轮）：375 宽放不下完整时刻，而 375 是主流宽。
+    // 完整时刻不丢，挂在 title 上。
+    assert.equal(page.node('bpExpiry').textContent, '至 11-30', 'the capsule prints the day it expires, short enough for 375px')
+    assert.equal(page.node('bpExpiry').title, '授权至 2026-11-30 09:05', 'the full stamp stays on the title, so nothing is lost')
 
     const down = fakeBrowser({ answer: () => teamWith(), statusFailure: true })
     await down.settle()
@@ -3421,19 +3424,27 @@ test('the roster slot is born the skeleton\u2019s height, so nothing jumps when 
 test('the right head group gives way before the bar clips it', () => {
   const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
   const pocketHtml = renderMobilePage({ locale: 'zh', boot: null })
-  // 390×900 DPR2 实测：.head-right 右缘 381.4、.bp-bar 右缘 376，溢出 5.4px 被
-  // .bp-bar 的 overflow:hidden 裁掉，状态文字「已连接」末字只剩一半。
-  // 收口只在本页作用域内做：右组间距 5→4、胶囊内边距 2×7→2×5，省下的 7~9px 让它回到条内。
+  // 真宿主五档复验（320/360/375/390/414）：390 收口后只有 375 溢出——可用 343，内容
+  // 353.3，末字「接」被 .bp-bar 的 overflow:hidden 裁掉 8.4px。375 是 iPhone SE2/8/13 mini
+  // 的逻辑宽，且用户要求授权信息显式，不能靠隐藏胶囊绕开。第二轮三处收口都只在本页作用域。
+  assert.match(html, /\.bp-bar\{[^}]*gap:4px/,
+    'the bar packs its three blocks tighter (8→4), which is the other half of the missing pixels')
+  assert.match(html, /\.bp-bar \.bp-hint\{[^}]*padding:0;/,
+    'the spacer stops paying 4px of padding it has no text for')
   assert.match(html, /\.bp-bar \.head-right\{flex:none;display:flex;align-items:center;gap:4px;pointer-events:auto\}/,
-    'the right group packs tighter, which is what buys the missing pixels')
+    'the right group packs tighter too')
   assert.match(html, /\.bp-bar \.head-expiry\{padding:2px 5px\}/,
     'and the capsule pays 4px of its own padding, scoped to the Bot bar only')
   // 共享规则不被裸改：Pocket 页那份 .head-expiry 仍是 app.css 的 padding:2px 7px。
   assert.match(pocketHtml, /\.head-expiry\{[^}]*padding:2px 7px/, 'Pocket keeps the shared capsule untouched')
-  // 360 及以下连胶囊一起退场：那一档 brand + 两个 44px 圆钮 + 状态字已把宽度用完，
-  // 留胶囊就只能裁状态文字，而状态文字是这一页唯一的连接反馈。
-  assert.match(html, /@media \(max-width:360px\)\{\.bp-bar #bpExpiry\{display:none\}\}/,
-    'narrower screens drop the capsule instead of clipping the status text')
+  // 胶囊整颗退场只留 340 及以下；360 现在放得下，而要件②要求 ≥375 不许隐藏，360 跟着留。
+  assert.match(html, /@media \(max-width:340px\)\{\.bp-bar #bpExpiry\{display:none\}\}/,
+    'narrower than 340 drops the capsule instead of clipping the status text')
+  assert.doesNotMatch(html, /@media \(max-width:360px\)\{\.bp-bar #bpExpiry\{display:none\}\}/,
+    '360 must keep the capsule: 375 is a mainstream width and the authorisation has to stay visible')
+  // 状态文字不许被压成省略号：共享 .status-text 是 flex:none，BOT 侧不覆盖它。
+  assert.doesNotMatch(html, /\.bp-bar \.status-text\{/,
+    'the status text keeps the shared flex:none, so it can never be the thing that shrinks')
 })
 
 test('the Bot list clears the corner button the way the Pocket home does', () => {
