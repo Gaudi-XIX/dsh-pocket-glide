@@ -3415,3 +3415,65 @@ test('the roster slot is born the skeleton\u2019s height, so nothing jumps when 
   assert.doesNotMatch(html, /#bpList\{[^}]*min-height/,
     'the scroll box is left alone: its own top never moved')
 })
+
+// ---------- 2026-10-31 复验：顶栏收口 / 列表底留白 / 闲置行绿勾 ----------
+
+test('the right head group gives way before the bar clips it', () => {
+  const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  const pocketHtml = renderMobilePage({ locale: 'zh', boot: null })
+  // 390×900 DPR2 实测：.head-right 右缘 381.4、.bp-bar 右缘 376，溢出 5.4px 被
+  // .bp-bar 的 overflow:hidden 裁掉，状态文字「已连接」末字只剩一半。
+  // 收口只在本页作用域内做：右组间距 5→4、胶囊内边距 2×7→2×5，省下的 7~9px 让它回到条内。
+  assert.match(html, /\.bp-bar \.head-right\{flex:none;display:flex;align-items:center;gap:4px;pointer-events:auto\}/,
+    'the right group packs tighter, which is what buys the missing pixels')
+  assert.match(html, /\.bp-bar \.head-expiry\{padding:2px 5px\}/,
+    'and the capsule pays 4px of its own padding, scoped to the Bot bar only')
+  // 共享规则不被裸改：Pocket 页那份 .head-expiry 仍是 app.css 的 padding:2px 7px。
+  assert.match(pocketHtml, /\.head-expiry\{[^}]*padding:2px 7px/, 'Pocket keeps the shared capsule untouched')
+  // 360 及以下连胶囊一起退场：那一档 brand + 两个 44px 圆钮 + 状态字已把宽度用完，
+  // 留胶囊就只能裁状态文字，而状态文字是这一页唯一的连接反馈。
+  assert.match(html, /@media \(max-width:360px\)\{\.bp-bar #bpExpiry\{display:none\}\}/,
+    'narrower screens drop the capsule instead of clipping the status text')
+})
+
+test('the Bot list clears the corner button the way the Pocket home does', () => {
+  const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+  const pocketHtml = renderMobilePage({ locale: 'zh', boot: null })
+  // 390×900 实测：FAB 52×52 顶边 830，滚到底末卡 bottom 881.5 ⇒ 压住 51.5px。
+  // 数字取 Pocket 主页那 74px（判据要求 ≥70 且 74±4），不另造一个值让两页各留各的。
+  const pad = Number((html.match(/#bpList\{padding-bottom:(\d+)px\}/) || [])[1])
+  assert.ok(pad >= 70 && pad <= 78, 'the list reserves the Pocket 74px (70..78), got ' + pad)
+  assert.match(pocketHtml, /\.workspaces\{[^}]*padding:2px 0 74px/, 'which is the same number the Pocket home uses')
+  // 会话页那一支不动：它已经由 composer 让位（末条消息 bottom 805 < composer top 830）。
+  assert.doesNotMatch(html, /#bpMsgs\{[^}]*padding-bottom:\s*74px/, 'the transcript keeps its own bottom')
+  assert.match(html, /\.bp-scroll\{[^}]*padding-bottom:10px/, 'and the scroll box itself is untouched')
+})
+
+test('an idle row is marked is-done, so its status mark keeps the Pocket green', async () => {
+  const pocketHtml = renderMobilePage({ locale: 'zh', boot: null })
+  // 绿是共享源给的那条规则；BOT 侧只负责把类名挂对，不复制色值。
+  assert.match(pocketHtml, /\.task-row\.is-done \.task-status\{color:#35a867\}/, 'the shared source paints the done mark green')
+  const team = teamWith()
+  team.bots.push({ id: 'scout', name: 'Scout', role: '观察员', sessionId: 's-scout' })
+  const draw = async () => {
+    const page = fakeBrowser({ answer: (method) => (method === 'bot.team' ? team : {}) })
+    await page.settle()
+    return page.node('bpMembersList').innerHTML
+  }
+  // ① 闲：既没在干活也没有待答 ⇒ is-done（改前这一行三个类全无，图标落回 --ink 的白）。
+  const idle = await draw()
+  assert.match(idle, /class="task-row is-done" data-open="bot" data-id="scout"/,
+    'a member that is neither busy nor waiting is done, which is what turns its mark green')
+  // ② 三态互斥：每个 Bot 行只落一个状态类，不能出现 is-running + is-done 并存。
+  // 群聊行（data-open="room"）是另一类行，它的行首是「群」字 chip、没有状态图标，不在本条判据内。
+  for (const cls of [...idle.matchAll(/<button class="(task-row[^"]*)" data-open="bot"/g)].map((m) => m[1])) {
+    const hits = ['is-running', 'is-awaiting', 'is-done'].filter((s) => cls.split(' ').includes(s))
+    assert.equal(hits.length, 1, 'exactly one state class per row, got: ' + cls)
+  }
+  // ③ 忙 / 等答这两态视觉不变：类名与改前逐字相同。
+  team.bots[1].working = { tool: 'bash' }
+  assert.match(await draw(), /class="task-row is-running" data-open="bot" data-id="scout"/, 'busy is still is-running alone')
+  team.bots[1].working = false
+  team.bots[1].waiting = true
+  assert.match(await draw(), /class="task-row is-awaiting" data-open="bot" data-id="scout"/, 'waiting is still is-awaiting alone')
+})
