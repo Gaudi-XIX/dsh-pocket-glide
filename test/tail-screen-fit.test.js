@@ -16,7 +16,7 @@
 // read as free and stack thirty of them onto one "screen".
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fitTailToScreen } from '../lib/bridge.js'
+import { fitTailToScreen, tailRecordColumns } from '../lib/bridge.js'
 
 const BUDGET = 1400
 
@@ -141,3 +141,40 @@ test('the default budget is one screen, and a real fat reply still lands whole',
   assert.equal(window.length, 2, 'the prompt and its answer travel together')
   assert.equal(window[1].data.message.content[0].text.length, 400 * 2 + 1 + 2000, 'and the answer is whole')
 })
+
+test('one long turn cannot carry its whole event stream past the budget', () => {
+  // The live shape (session-a90765, turn 141): 124 records in ONE turn with a
+  // single user/message, at index 0, and the answer last. The old rule kept
+  // everything from that prompt to the anchor, so the window was the whole turn
+  // (~3 000 columns against a 1 400 budget) — this is where the 1.38 MB boot
+  // document came from. Only the answer and the prompt it answers are exempt;
+  // the process records in between pay from the budget like any other row.
+  const processTypes = [
+    'request/header',
+    'developer/message',
+    'step/start',
+    'assistant/message',
+    'tool/call',
+    'tool/result',
+    'job/registered',
+    'job/settled',
+    'step/end'
+  ]
+  const page = [record(1, 'user/message', '第 141 回合：把这一轮的结论整理一下')]
+  for (let seq = 2; seq <= 123; seq += 1) page.push(record(seq, processTypes[seq % processTypes.length], ''))
+  page.push(record(124, 'assistant/message', 'done'))
+
+  const window = fitTailToScreen(page, BUDGET)
+
+  assert.equal(window[window.length - 1].seq, 124, 'the answer is still the anchor')
+  assert.equal(window[0].seq, 1, 'and the prompt it answers still travels with it')
+  const extra = window.slice(1, -1).reduce((total, entry) => total + tailRecordColumns(entry), 0)
+  assert.ok(extra <= BUDGET, `the rest of the turn stays inside the budget, got ${extra}`)
+  assert.ok(window.length < 70, `the window is a screen, not the turn: ${window.length} of 124 records`)
+  assert.deepEqual(
+    seqsOf(window),
+    seqsOf(window).slice().sort((a, b) => a - b),
+    'what survives is ordered oldest first'
+  )
+})
+
