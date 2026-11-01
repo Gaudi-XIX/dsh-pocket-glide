@@ -6,6 +6,7 @@
 // cache/compression dials that once blanked the page.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { gunzipSync, brotliDecompressSync } from 'node:zlib'
 import { LanMobileBridge } from '../lib/bridge.js'
 
 function makeBridge(overrides = {}) {
@@ -42,21 +43,57 @@ async function render(bridge, url = '/?warm=123', request = null) {
   return { markup, response }
 }
 
-const candidate = [{ sessionId: 's1', updatedAt: 5, running: false }]
+const candidate = [{ sessionId: 's1', updatedAt: 5, running: false, projections: { asOfSeq: 5 } }]
+
+// R11-1a: the page a row opens with now rides the document, so 「文档里不许有
+// events」这条禁令换成有界断言——分片数 ≤ 预览范围（10 个会话），每片 ≤ 30 条，
+// 整个载荷 ≤ 一个写死的字节上界。URL 里的图片、更长的历史都不许混进来。
+const PREVIEW_SESSIONS_CAP = 10
+const PREVIEW_MESSAGES_CAP = 30
+const BOOT_PAYLOAD_CAP_BYTES = 40_000
+
+function bootPayloadJson(markup) {
+  const hit = /window\.__POCKET_BOOT__=(.+?)<\/script>/.exec(markup)
+  assert.ok(hit, 'the document carries a boot payload')
+  return hit[1]
+}
+
+function assertBoundedTranscript(markup) {
+  const json = bootPayloadJson(markup)
+  const shards = json.match(/"events":\[/g) ?? []
+  assert.ok(shards.length <= PREVIEW_SESSIONS_CAP, `at most ${PREVIEW_SESSIONS_CAP} preview pages ride the document, saw ${shards.length}`)
+  const payload = JSON.parse(json)
+  const tails = Object.values(payload.tails ?? {})
+  assert.ok(tails.length <= PREVIEW_SESSIONS_CAP, `at most ${PREVIEW_SESSIONS_CAP} tail entries, saw ${tails.length}`)
+  for (const entry of tails) {
+    const count = Array.isArray(entry?.events) ? entry.events.length : 0
+    assert.ok(count <= PREVIEW_MESSAGES_CAP, `one preview page carries at most ${PREVIEW_MESSAGES_CAP} events, saw ${count}`)
+  }
+  const bytes = Buffer.byteLength(json, 'utf8')
+  assert.ok(bytes <= BOOT_PAYLOAD_CAP_BYTES, `the boot payload stays bounded, saw ${bytes} bytes`)
+  return { payload, bytes }
+}
 
 test('the landing is always the workspace list, complete from the first byte', async () => {
+  const readSessions = []
   const bridge = makeBridge({
     items: candidate,
-    invokeHarness: async () => {
-      throw new Error('the document must not read the transcript')
-    },
+    invokeHarness: async () => ({ ok: true, value: { records: Array.from({ length: 30 }, (_, index) => ({ seq: index + 1 })), hasMore: false } }),
   })
+  const readHistory = bridge.readSessionHistory.bind(bridge)
+  bridge.readSessionHistory = async (fields) => {
+    readSessions.push(fields.sessionId)
+    return readHistory(fields)
+  }
   const { markup, response } = await render(bridge)
 
   assert.doesNotMatch(markup, /class="[^"]*chat-open/, 'no automatic conversation page any more')
   assert.match(markup, /id="sessionsView" class="view active"/, 'the list is the first paint')
   assert.equal(response.headers['x-pocket-cache'], 'app')
-  assert.doesNotMatch(markup, /"events":\[/, 'the transcript must not be embedded in the document')
+  const { payload } = assertBoundedTranscript(markup)
+  assert.ok(readSessions.length > 0, 'the first row to open is pre-read from the same page the RPC would serve')
+  assert.deepEqual([...new Set(readSessions)], ['s1'], 'and only the row the document ships is read while it is built')
+  assert.ok(Array.isArray(payload.tails?.s1?.events) && payload.tails.s1.events.length > 0, 'that page is what rides the document')
   const log = bridge.logs.join('\n')
   assert.match(log, /bytes=\d+/)
   assert.match(log, /boot=embedded/, 'the boot payload still rides the document')
@@ -150,15 +187,18 @@ test('the app document is never cacheable', async () => {
   assert.equal(response.headers['cache-control'], 'no-store')
 })
 
-test('the mobile document is never compressed at the origin', () => {
-  // 2026-10-01 regression: serving this document with content-encoding: gzip made
-  // the phone render the compressed bytes as text (the header was dropped
-  // somewhere along the tunnel / browser path while the body stayed compressed).
-  // The origin must always send it plain; wire compression belongs to the edge.
+// R11-2: the document is re-downloaded on every cold navigation (no-store), so it
+// negotiates compression like the assets do — and the guard from 2026-10-01 stays:
+// a client that offered no Accept-Encoding must get the plain bytes, and a client
+// that did must get a body that inflates back to exactly that document. A header
+// without the matching body (or the reverse) is what blanked the page that day.
+test('the mobile document compresses on the wire, and only when the client asked', async () => {
   const bridge = makeBridge({})
-  const body = `<html>${'x'.repeat(4096)}</html>`
-  const response = {
+  bridge._docCompressed = new Map()
+  const body = `<html>${'x'.repeat(6000)}</html>`
+  const makeResponse = () => ({
     destroyed: false,
+    statusCode: 0,
     headers: {},
     setHeader(name, value) {
       this.headers[name] = value
@@ -167,12 +207,24 @@ test('the mobile document is never compressed at the origin', () => {
     end(chunk) {
       this.chunks.push(Buffer.from(chunk))
     },
-  }
+  })
 
-  LanMobileBridge.prototype.html.call(bridge, response, body)
+  const plain = makeResponse()
+  await LanMobileBridge.prototype.sendHtml.call(bridge, { headers: {} }, plain, body)
+  assert.equal(plain.headers['content-encoding'], undefined, 'no Accept-Encoding means identity')
+  assert.equal(plain.markup, body, 'and the body is the document, unread as bytes here')
 
-  assert.equal(response.headers['content-encoding'], undefined)
-  assert.equal(Buffer.concat(response.chunks).toString('utf8'), body)
+  const gz = makeResponse()
+  await LanMobileBridge.prototype.sendHtml.call(bridge, { headers: { 'accept-encoding': 'gzip, deflate' } }, gz, body)
+  assert.equal(gz.headers['content-encoding'], 'gzip')
+  assert.equal(gz.headers['vary'], 'accept-encoding')
+  assert.equal(Number(gz.headers['content-length']), gz.chunks[0].length)
+  assert.equal(gunzipSync(Buffer.concat(gz.chunks)).toString('utf8'), body, 'the body inflates back to the document')
+
+  const br = makeResponse()
+  await LanMobileBridge.prototype.sendHtml.call(bridge, { headers: { 'accept-encoding': 'br, gzip' } }, br, body)
+  assert.equal(br.headers['content-encoding'], 'br', 'br wins when offered')
+  assert.equal(brotliDecompressSync(Buffer.concat(br.chunks)).toString('utf8'), body)
 })
 
 test('the boot payload tells the handoff where the shell lives', async () => {
@@ -234,6 +286,38 @@ test('an empty session list ships an empty boot list and no focus', async () => 
 
   assert.equal('focus' in payload, false, 'no focus field ships at all')
   assert.deepEqual(payload.sess.items, [])
+})
+
+// R11-1c: with more rows than the preview range, only the newest ten sessions get a
+// page in the document — the rest open through the ordinary RPC, exactly as before.
+test('the preview range rides the document, and it is bounded', async () => {
+  const items = Array.from({ length: 12 }, (_, index) => ({
+    sessionId: `s${index + 1}`,
+    updatedAt: index + 1,
+    running: false,
+    projections: { asOfSeq: 5 },
+  }))
+  const readSessions = []
+  const bridge = makeBridge({
+    items,
+    invokeHarness: async (endpoint, args) => {
+      const max = Number(args?.request?.maxMessages ?? PREVIEW_MESSAGES_CAP)
+      return { ok: true, value: { records: Array.from({ length: Math.min(max, 40) }, (_, index) => ({ seq: index + 1 })), hasMore: true } }
+    },
+  })
+  const readHistory = bridge.readSessionHistory.bind(bridge)
+  bridge.readSessionHistory = async (fields) => {
+    readSessions.push(fields.sessionId)
+    return readHistory(fields)
+  }
+  const payload = await bridge.buildMobileBoot()
+
+  const shipped = Object.keys(payload.tails ?? {})
+  assert.equal(shipped.length, PREVIEW_SESSIONS_CAP, 'the newest ten visible rows ship a page, no more')
+  assert.equal(new Set(readSessions).size, PREVIEW_SESSIONS_CAP, 'and no other session is read')
+  for (const entry of Object.values(payload.tails)) {
+    assert.ok(entry.events.length <= PREVIEW_MESSAGES_CAP, `each preview page carries at most ${PREVIEW_MESSAGES_CAP} events`)
+  }
 })
 
 test('buildMobileBoot includes tails for visible rows', async () => {

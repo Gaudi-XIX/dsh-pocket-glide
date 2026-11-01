@@ -273,36 +273,59 @@ test('AC3.5 the h parameter is read in exactly one place, inside the asset branc
 })
 
 // ---------------------------------------------------------------------------
-// T4 — the 2026-10-01 shape: the document is never compressed, over HTTP
+// T4 — the document now negotiates compression on the wire (R11-2 / R12-1)
+//
+// The 2026-10-01 incidents were 「a header and a body that disagree」, not gzip
+// itself (test/asset-precompression.test.js used to pin 「never compressed」
+// from that reading). Since 2026-10-25 /app.js has shipped through the same
+// negotiation without a repeat, so the document route joins it — and the lock
+// gets stricter rather than weaker: identity must still exist, no-store stays,
+// and the compressed body must inflate back to exactly the identity document.
 // ---------------------------------------------------------------------------
 
-test('AC4.1 over a real socket the document is plain and uncacheable', async () => {
+test('AC4.1 over a real socket the document is compressed for clients that ask, and inflates back', async () => {
   const compressed = await httpFetch(`${shared.base}/`, { headers: { cookie: shared.cookie, 'accept-encoding': 'br, gzip' } })
   assert.equal(compressed.status, 200)
-  assert.equal(compressed.headers.get('cache-control'), 'no-store')
-  assert.equal(compressed.headers.get('content-encoding'), null)
-  const withHeader = (await bodyBytes(compressed)).toString('utf8')
-  assert.match(withHeader, /<!doctype html/i, 'the body must still be the document itself')
+  const encoding = compressed.headers.get('content-encoding')
+  assert.ok(encoding === 'br' || encoding === 'gzip', `asking for br/gzip must get one of them, saw ${String(encoding)}`)
+  assert.equal(compressed.headers.get('cache-control'), 'no-store', 'compression must not buy a cache')
+  assert.match(String(compressed.headers.get('vary') ?? ''), /accept-encoding/i, 'the negotiable header is declared')
 
-  const plain = await httpFetch(`${shared.base}/`, { headers: { cookie: shared.cookie } })
-  assert.equal(plain.headers.get('content-encoding'), null)
-  const withoutHeader = (await bodyBytes(plain)).toString('utf8')
+  const identity = await httpFetch(`${shared.base}/`, { headers: { cookie: shared.cookie, 'accept-encoding': 'identity' } })
+  assert.equal(identity.headers.get('content-encoding'), null, 'a client that refuses compression stays plain')
+  const plainBody = (await bodyBytes(identity)).toString('utf8')
+  assert.match(plainBody, /<!doctype html/i)
+
+  const wire = Buffer.from(await bodyBytes(compressed))
+  const inflated = (encoding === 'br' ? zlib.brotliDecompressSync(wire) : zlib.gunzipSync(wire)).toString('utf8')
 
   // The document is not byte-stable across requests by design: every render gets
   // a fresh CSP nonce. So compare every byte outside the nonce values, and prove
   // the normalisation is real by finding nonces to normalise.
   const noncePattern = /nonce="[^"]*"/g
-  assert.ok(withHeader.match(noncePattern)?.length, 'the document carries a per-request nonce')
-  assert.equal(withHeader.replace(noncePattern, 'nonce=""'), withoutHeader.replace(noncePattern, 'nonce=""'),
-    'asking for compression must not change the document')
+  assert.ok(inflated.match(noncePattern)?.length, 'the document carries a per-request nonce')
+  assert.equal(inflated.replace(noncePattern, 'nonce=""'), plainBody.replace(noncePattern, 'nonce=""'),
+    'the compressed body must inflate back to the document itself')
 })
 
-test('AC4.2 content-encoding lives only in the asset branch, never in html()/text()/json()', () => {
+test('AC4.2 content-encoding lives in the asset branch and in sendHtml(), nowhere else', () => {
   const hits = [...bridgeSource.matchAll(/content-encoding/g)]
-  assert.equal(hits.length, 1, 'the bridge sets content-encoding in exactly one place')
+  // R12-1: this number went 1 → 2, which is a one-step relaxation by count. The
+  // net lock is stricter: both places are pinned by source position, the request
+  // path may not compress synchronously, html()/text()/json() stay at zero, and
+  // the event stream stays out of it (AC4.3 below).
+  assert.equal(hits.length, 2, 'the bridge sets content-encoding in exactly two places')
   const branchStart = bridgeSource.indexOf("url.pathname === '/app.css'")
   const branchEnd = documentRouteAt()
-  assert.ok(hits[0].index > branchStart && hits[0].index < branchEnd, 'and that place is the asset branch')
+  assert.ok(hits[0].index > branchStart && hits[0].index < branchEnd, 'the first is the asset branch')
+
+  const sendAt = bridgeSource.indexOf('\n  async sendHtml(')
+  assert.ok(sendAt > 0, 'sendHtml() must exist')
+  const sendEnd = bridgeSource.indexOf('\n  }\n', sendAt)
+  assert.ok(hits[1].index > sendAt && hits[1].index < sendEnd, 'the second is inside sendHtml()')
+  const sendBody = bridgeSource.slice(sendAt, sendEnd)
+  assert.ok(!sendBody.includes('Sync('), 'the request path must not compress synchronously (R12-3)')
+  assert.ok(!readRepo('lib/session-stream.js').includes('content-encoding'), 'text/event-stream stays uncompressed')
 
   for (const method of ['html', 'text', 'json']) {
     const start = bridgeSource.indexOf(`\n  ${method}(response`)
@@ -324,6 +347,41 @@ test('AC4.3 nothing outside the asset route touches content-encoding', () => {
       `${file} must not set content-encoding`
     )
   }
+})
+
+test('AC4.4 DSH_POCKET_PRECOMPRESS=0 turns both document routes back to identity', async () => {
+  const previous = process.env.DSH_POCKET_PRECOMPRESS
+  process.env.DSH_POCKET_PRECOMPRESS = '0'
+  try {
+    for (const path of ['/', '/bot']) {
+      const res = await httpFetch(`${shared.base}${path}`, { headers: { cookie: shared.cookie, 'accept-encoding': 'br, gzip' } })
+      assert.equal(res.status, 200, `${path} still answers with the switch off`)
+      assert.equal(res.headers.get('content-encoding'), null, `${path} stays plain when precompression is disabled`)
+      assert.match((await bodyBytes(res)).toString('utf8'), /<!doctype html/i, `${path} still sends the document itself`)
+    }
+  } finally {
+    if (previous === undefined) delete process.env.DSH_POCKET_PRECOMPRESS
+    else process.env.DSH_POCKET_PRECOMPRESS = previous
+  }
+})
+
+test('AC4.5 both document routes leave through sendHtml()', () => {
+  const calls = [...bridgeSource.matchAll(/return this\.sendHtml\(/g)]
+  assert.equal(calls.length, 2, 'exactly two document exits, one per document route')
+
+  // Each exit has to sit in the same block that rendered that document — that is
+  // what makes 「一个压一个不压」 impossible: both documents go through the one
+  // negotiator, and neither route can fall back to html() behind its back.
+  const botRenderAt = bridgeSource.indexOf('renderBotPage({')
+  assert.ok(botRenderAt > 0, 'the Bot document is still rendered by renderBotPage()')
+  assert.ok(calls[0].index > botRenderAt, 'the /bot document exits through sendHtml()')
+  assert.match(bridgeSource.slice(botRenderAt, calls[0].index), /botHtml/, 'and it exits the rendered bytes, not a second render')
+  assert.doesNotMatch(bridgeSource, /return this\.html\(response, botHtml/, 'no plain-bytes bypass for the Bot document')
+
+  const landingRenderAt = bridgeSource.indexOf('\n  async renderMobilePage(')
+  assert.ok(landingRenderAt > 0, 'the landing document is still rendered by renderMobilePage()')
+  assert.ok(calls[1].index > landingRenderAt, 'the landing document exits through sendHtml()')
+  assert.match(bridgeSource.slice(landingRenderAt, calls[1].index), /buildMobileBoot\(/, 'and it is the rendered document that goes out')
 })
 
 // ---------------------------------------------------------------------------
