@@ -7,7 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { gunzipSync, brotliDecompressSync } from 'node:zlib'
-import { LanMobileBridge } from '../lib/bridge.js'
+import { BOOT_PAYLOAD_CAP_BYTES, LanMobileBridge } from '../lib/bridge.js'
 
 function makeBridge(overrides = {}) {
   const logs = []
@@ -50,7 +50,6 @@ const candidate = [{ sessionId: 's1', updatedAt: 5, running: false, projections:
 // 整个载荷 ≤ 一个写死的字节上界。URL 里的图片、更长的历史都不许混进来。
 const PREVIEW_SESSIONS_CAP = 10
 const PREVIEW_MESSAGES_CAP = 30
-const BOOT_PAYLOAD_CAP_BYTES = 40_000
 
 function bootPayloadJson(markup) {
   const hit = /window\.__POCKET_BOOT__=(.+?)<\/script>/.exec(markup)
@@ -318,6 +317,47 @@ test('the preview range rides the document, and it is bounded', async () => {
   for (const entry of Object.values(payload.tails)) {
     assert.ok(entry.events.length <= PREVIEW_MESSAGES_CAP, `each preview page carries at most ${PREVIEW_MESSAGES_CAP} events`)
   }
+})
+
+// R12-7a: the byte cap is enforced by the implementation with the SAME constant the
+// assertion reads, so a fat transcript is trimmed (oldest events first) instead of
+// passing here while the live document blows past it.
+test('a fat transcript is trimmed by the implementation, not left to the assertion', async () => {
+  const items = Array.from({ length: PREVIEW_SESSIONS_CAP }, (_, index) => ({
+    sessionId: `s${index + 1}`,
+    updatedAt: index + 1,
+    running: false,
+    projections: { asOfSeq: 5 },
+  }))
+  const fat = 'x'.repeat(900)
+  const bridge = makeBridge({
+    items,
+    invokeHarness: async (endpoint, args) => {
+      const max = Number(args?.request?.maxMessages ?? PREVIEW_MESSAGES_CAP)
+      return {
+        ok: true,
+        value: {
+          records: Array.from({ length: Math.min(max, PREVIEW_MESSAGES_CAP) }, (_, index) => ({
+            seq: index + 1,
+            type: 'assistant/message',
+            text: fat,
+          })),
+          hasMore: true,
+        },
+      }
+    },
+  })
+  const payload = await bridge.buildMobileBoot()
+  const json = JSON.stringify(payload)
+  const bytes = Buffer.byteLength(json, 'utf8')
+  assert.ok(bytes <= BOOT_PAYLOAD_CAP_BYTES, `the payload is trimmed to the cap, saw ${bytes} bytes`)
+
+  const events = Object.values(payload.tails ?? {}).reduce(
+    (sum, entry) => sum + (Array.isArray(entry?.events) ? entry.events.length : 0),
+    0,
+  )
+  assert.ok(events < PREVIEW_SESSIONS_CAP * PREVIEW_MESSAGES_CAP, `the implementation dropped messages, kept ${events}`)
+  assert.ok(payload.stageSummary.messages <= events, 'the card counts what actually shipped')
 })
 
 test('buildMobileBoot includes tails for visible rows', async () => {
