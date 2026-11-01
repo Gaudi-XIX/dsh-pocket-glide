@@ -16,7 +16,7 @@
 // read as free and stack thirty of them onto one "screen".
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fitTailToScreen, tailRecordColumns } from '../lib/bridge.js'
+import { fitTailToScreen, TAIL_MAX_BYTES, TAIL_MAX_RECORDS, tailEntryBytes, tailRecordColumns } from '../lib/bridge.js'
 
 const BUDGET = 1400
 
@@ -100,17 +100,19 @@ test('the window is ordered by seq, and a seq-less row rides at the tail', () =>
   assert.deepEqual(seqsOf(window), [1, 3, undefined], 'the seq-less row cannot be ordered, so it rides last rather than shuffling in')
 })
 
-test('a tool row costs real screen, so a page of empty tool rows cannot fill one', () => {
+test('a page of empty tool rows is stopped by the record ceiling, not by the screen estimate', () => {
   // A stripped tool row carries no prose, so a naive prose-only budget would read
-  // it as free and pack dozens onto one screen. The per-record floor is what stops
-  // that; the floor is asserted indirectly, through how many rows fit.
+  // it as free and pack dozens onto one screen. The per-record floor pays for
+  // each row, and the hard record ceiling (m02485) is the backstop that can never
+  // be wrong: 30 records, no more, no matter how cheap each one looks.
   const page = []
   for (let seq = 1; seq <= 200; seq += 1) page.push(record(seq, 'tool/result', ''))
   const window = fitTailToScreen(page, BUDGET)
   const rows = window.length
 
-  assert.ok(rows < 60, `the floor keeps a page of empty rows under one screen, filled ${rows} rows`)
-  assert.ok(rows * 24 >= BUDGET, 'and it still fills the screen — the floor is what pays for each row')
+  assert.equal(rows, TAIL_MAX_RECORDS, `the hard ceiling holds at ${TAIL_MAX_RECORDS} records, filled ${rows}`)
+  assert.deepEqual(seqsOf(window).slice(-1), [200], 'and the newest row is the one that survives')
+  assert.deepEqual(seqsOf(window), seqsOf(window).slice().sort((a, b) => a - b), 'oldest first')
 })
 
 test('the input page is never mutated', () => {
@@ -170,11 +172,40 @@ test('one long turn cannot carry its whole event stream past the budget', () => 
   assert.equal(window[0].seq, 1, 'and the prompt it answers still travels with it')
   const extra = window.slice(1, -1).reduce((total, entry) => total + tailRecordColumns(entry), 0)
   assert.ok(extra <= BUDGET, `the rest of the turn stays inside the budget, got ${extra}`)
-  assert.ok(window.length < 70, `the window is a screen, not the turn: ${window.length} of 124 records`)
+  assert.ok(window.length <= TAIL_MAX_RECORDS, `the hard record ceiling holds: ${window.length} records`)
+  assert.equal(window.length, TAIL_MAX_RECORDS, 'and it is what stops this turn: the estimate alone allowed more')
+  const bytes = window.reduce((total, entry) => total + tailEntryBytes(entry), 0)
+  assert.ok(bytes <= TAIL_MAX_BYTES, `the hard byte ceiling holds too, got ${bytes}`)
   assert.deepEqual(
     seqsOf(window),
     seqsOf(window).slice().sort((a, b) => a - b),
     'what survives is ordered oldest first'
   )
+})
+
+test('the byte ceiling binds before the record ceiling when rows are heavy but quiet', () => {
+  // A tool result ships as structured data, not prose: the column estimate reads
+  // it as one floor's worth (~24 columns) while its JSON weighs ~2 KB. The byte
+  // gate is what stops a page of those from filling the tunnel.
+  const heavy = (seq) => ({
+    seq,
+    type: 'tool/result',
+    data: {
+      message: {
+        content: [{ type: 'tool-result', toolCallId: 'c' + seq, content: [{ type: 'text', text: 'z'.repeat(2000) }] }]
+      }
+    }
+  })
+  const page = [record(1, 'user/message', '整理一下工具输出')]
+  for (let seq = 2; seq <= 123; seq += 1) page.push(heavy(seq))
+  page.push(record(124, 'assistant/message', 'done'))
+
+  const window = fitTailToScreen(page, BUDGET)
+  const bytes = window.reduce((total, entry) => total + tailEntryBytes(entry), 0)
+
+  assert.ok(bytes <= TAIL_MAX_BYTES, `the JSON payload stays under the byte ceiling, got ${bytes}`)
+  assert.ok(window.length < TAIL_MAX_RECORDS, `the byte ceiling binds before the record ceiling: ${window.length} records`)
+  assert.equal(window[window.length - 1].seq, 124, 'the answer survives')
+  assert.equal(window[0].seq, 1, 'and so does its prompt')
 })
 
