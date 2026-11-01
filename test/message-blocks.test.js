@@ -59,14 +59,29 @@ const TAIL_WEIGHTS = {
  */
 const PROCESS_WEIGHTS = { processRows: 764 }
 
-const BLOCK_WEIGHTS = { ...CORE_WEIGHTS, ...TAIL_WEIGHTS, ...PROCESS_WEIGHTS }
+/**
+ * 会话分段那一份（用户 2026-11-01 第二次打回）：一个 turn 展开成**多条**消息——
+ * 过程卡不画时间、正文气泡画时间——这条规则只此一份，所以把落地页的
+ * visibleMessages 连同它读的四个小函数与 renderMessage 一起切过来。BOT 页的
+ * readPage 只做「rendered → 行」的映射，不重写聚合。
+ */
+const SEGMENT_WEIGHTS = {
+  visibleMessages: 8222,
+  renderMessage: 1089,
+  orderUserBubblesByTime: 776,
+  turnKeyOf: 137,
+  eventSeq: 110,
+  stepKey: 59,
+}
+
+const BLOCK_WEIGHTS = { ...CORE_WEIGHTS, ...TAIL_WEIGHTS, ...PROCESS_WEIGHTS, ...SEGMENT_WEIGHTS }
 const CORE_TOTAL = 13486
-const BLOCK_TOTAL = 15936
+const BLOCK_TOTAL = 26329
 const BLOCK_NAMES = Object.keys(BLOCK_WEIGHTS)
 
 /**
  * 判据 §4 的 15 个 L 键（渲染 10 + turn-error 合成 5），加上行尾那 11 个
- * （时间/数字/时长格式 + 用量胶囊文案）：21 个函数裸用的词一个都不能少。
+ * （时间/数字/时长格式 + 用量胶囊文案）：28 个函数裸用的词一个都不能少。
  */
 const LABEL_KEYS = [
   'think', 'fileChip', 'imageGone', 'previewFile', 'running', 'processSep',
@@ -133,7 +148,7 @@ const plain = (value) => JSON.parse(JSON.stringify(value))
 // ① 注入契约
 // ---------------------------------------------------------------------------
 
-test('块渲染器从出货产物切片：22 个函数、逐函数同字节、原 17 个仍合计 13486', () => {
+test('块渲染器从出货产物切片：28 个函数、逐函数同字节、原 17 个仍合计 13486', () => {
   for (const locale of ['zh', 'en']) {
     const script = messageBlocksScript(locale)
     let total = 0
@@ -145,7 +160,7 @@ test('块渲染器从出货产物切片：22 个函数、逐函数同字节、�
       if (name in CORE_WEIGHTS) core += bytes
     }
     assert.equal(core, CORE_TOTAL, `${locale}: 判据 §3 那 17 个函数合计必须 ${CORE_TOTAL} B`)
-    assert.equal(total, BLOCK_TOTAL, `${locale}: 22 个函数合计必须 ${BLOCK_TOTAL} B`)
+    assert.equal(total, BLOCK_TOTAL, `${locale}: 28 个函数合计必须 ${BLOCK_TOTAL} B`)
     // processRows 与 renderBlock 不互相调用（一个是逐块画、一个是回合内折叠），
     // 但两者都是同一份出货实现，所以一起注入、一起按字节钉住。
     assert.equal(script.includes('function processRows('), true, 'processRows 也在同一份注入里')
@@ -742,25 +757,28 @@ test('T10（桥）：applyDescendantRunning 是唯一一份标记实现，桥只
 })
 
 // ---------------------------------------------------------------------------
-// ③ T7 收尾：一轮一条消息（真机 2026-11-01 chat000 三连「已调用工具」＋三条时钟）
+// ③ T7 收尾：按落地页的分段画（用户 2026-11-01 第二次打回）
 //
-// 宿主一轮里写多条 assistant/message，每条只带一个块；BOT 页原先一条记录画一行，
-// 于是同一回合的三次工具调用成了三行、各带一个时间。Pocket 侧 visibleMessages
-// 按 turn 聚合（lib/pages.js:1685）。这一段钉住 BOT 页现在也按 turn 聚合。
+// Pocket 的模型不是「一个回合一条消息」：一个 turn 按 step 展开成**多条**——
+// 过程组先刷成一张卡（工具/思考，不画时间），正文另起一条气泡（画时间），
+// usage 只挂在最后一条正文上。规则只此一份（visibleMessages），BOT 页把它的
+// rendered 数组映射成行，不重新判断分段。这一段钉住映射后的形态。
 // ---------------------------------------------------------------------------
 
-/** 聚合夹具的时点：夹具与断言要读同一组时间，所以留在这里。 */
+/** 分段夹具的时点：夹具与断言读同一组时间。 */
 let TURNS = null
 
 /**
  * 两个回合的真实事件形状：宿主把 turn/step 写在 **event.data** 里（真机
  * 2026-11-01：`554 | assistant/message | 5 | 56`），一个 step = step/start +
  * assistant/message + tool/call + tool/result + step/end。回合 2 有 56/57/58 三个
- * step（57 里两次同类别工具相邻），回合 3 只有一段正文。
+ * step（56 先思考再跑一次 bash，57 连跑两次 grep，58 收尾正文），回合 3 只有
+ * 一段正文。两个回合都以 turn/end 收尾——落地页只给收尾的回合印时间，
+ * streaming 的那条不印钟。
  */
 function turnHistory() {
   const base = Date.now()
-  TURNS = { base, turnTwoLast: base + 13000, turnThree: base + 15000 }
+  TURNS = { base, user: base + 1000, turnTwoLast: base + 13000, turnThree: base + 16000 }
   const record = (seq, turn, step, type, data) => ({
     event: {
       type,
@@ -780,38 +798,43 @@ function turnHistory() {
     hasMore: false,
     events: [
       record(1, null, null, 'user/message', { message: { source: { kind: 'user' }, content: [{ type: 'text', text: '把工具跑一下' }] } }),
-      // 回合 2 / step 56：先思考，再一次 Bash
+      // 回合 2 / step 56：先思考，再一次 bash
       record(2, 2, 56, 'step/start', {}),
       record(3, 2, 56, 'assistant/message', { message: { content: [{ type: 'reasoning', text: '先看一眼目录' }] } }),
       record(4, 2, 56, 'tool/call', { callId: 'c1', name: 'bash', arguments: { command: 'ls' } }),
       record(5, 2, 56, 'tool/result', result('c1')),
       record(6, 2, 56, 'step/end', {}),
-      // 回合 2 / step 57：两次同类别工具，中间没有正文 ⇒ 折成一条过程行
+      // 回合 2 / step 57：两次同类别工具，中间没有正文 ⇒ 同一张过程卡里
       record(7, 2, 57, 'step/start', {}),
       record(8, 2, 57, 'tool/call', { callId: 'c2', name: 'grep', arguments: { pattern: 'x' } }),
       record(9, 2, 57, 'tool/result', result('c2')),
       record(10, 2, 57, 'tool/call', { callId: 'c3', name: 'grep', arguments: { pattern: 'y' } }),
       record(11, 2, 57, 'tool/result', result('c3')),
       record(12, 2, 57, 'step/end', {}),
-      // 回合 2 / step 58：收尾正文 + 累计 usage
-      record(13, 2, 58, 'assistant/message', { message: { content: [{ type: 'text', text: '两条都跑完了' }] }, usage: { totalTokens: 1234 } }),
+      // 回合 2 / step 58：收尾正文 + 累计 usage（落地页 normalizeUsage 只认合法的一份）
+      record(13, 2, 58, 'assistant/message', {
+        message: { content: [{ type: 'text', text: '两条都跑完了' }] },
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      }),
       record(14, 2, 58, 'step/end', {}),
-      record(15, 3, 70, 'assistant/message', { message: { content: [{ type: 'text', text: '第二回合' }] } }),
+      record(15, 2, null, 'turn/end', { reason: { kind: 'completed' } }),
+      record(16, 3, 70, 'assistant/message', { message: { content: [{ type: 'text', text: '第二回合' }] } }),
+      record(17, 3, null, 'turn/end', { reason: { kind: 'completed' } }),
     ],
   }
 }
 
-/** 更早栏里的同一回合两段正文：按 turn 并成一行。 */
-let EARLIER_AT = null
+/** 更早栏里的两条同一回合的正文：落地页一块正文一条气泡，这里也是两条、各带各的时间。 */
+let EARLIER_TIMES = null
 function earlierTurnedAnswer() {
   const at = Date.now()
-  EARLIER_AT = at + 60_000
+  EARLIER_TIMES = [at, at + 60_000]
   return {
     cursor: null,
     items: [
       { kind: 'divider', text: '', time: at },
-      { kind: 'assistant', text: '早前前半句', time: at, turn: 9 },
-      { kind: 'assistant', text: '早前后半句', time: at + 60_000, turn: 9 },
+      { kind: 'assistant', text: '早前前半句', time: EARLIER_TIMES[0], turn: 9 },
+      { kind: 'assistant', text: '早前后半句', time: EARLIER_TIMES[1], turn: 9 },
       { kind: 'event', name: 'Curator', time: at },
     ],
   }
@@ -835,105 +858,89 @@ function clockText(time) {
   return String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0')
 }
 
-test('T7 收尾：同一回合的多条记录合成一条 .bp-msg，行尾只有一个 .bp-tail', async () => {
-  const browser = bootTurnChat()
+/** 一次打开会话后的消息行，按 `<div class="bp-msg message ` 切开。 */
+async function turnedRows(options = {}) {
+  const browser = bootTurnChat(options)
   await browser.flush()
   await browser.openChat('s-repo')
   const html = browser.node('bpMsgs').innerHTML
+  return { browser, html, rows: html.split('<div class="bp-msg message ').slice(1) }
+}
 
-  // user 一行 + 两个回合各一行 = 3 行。回合 2 的思考、两次工具、正文全在同一行里。
-  const rows = html.split('<div class="bp-msg message ')
-  assert.equal(rows.length - 1, 3, '一条记录一行会让这里变成 6 行以上')
-  const turnTwo = rows.find((row) => row.includes('先看一眼目录'))
-  assert.ok(turnTwo, '回合 2 的行必须在')
-  assert.match(turnTwo, /两条都跑完了/, '同一回合的正文也进这一行')
-  // 三次工具调用（Bash、Grep、Grep）在落地页折成两条过程行：同类别相邻的两次
-  // Grep 是一条「已调用工具 ×2」（processRows 的分组规则），不是两条。
-  // 三次工具调用（bash、grep、grep）连成**一条**过程行：同一次连跑的工具在
-  // 落地页折成一句「… ×N」（processRows 分组 + processLineText 合成），
-  // 不是三条各带一行的旧形态。
-  assert.equal((turnTwo.match(/class="process-line"/g) || []).length, 1, '连跑的工具调用合成一条过程行')
-  assert.equal((turnTwo.match(/data-state="done"/g) || []).length, 1, '过程行已被结果回填成 done')
-  assert.equal((turnTwo.match(/class="bp-tail"/g) || []).length, 1, '一条回合只画一个时间')
+test('T7 收尾：一个回合分成过程卡与正文气泡，卡不画时间、气泡画时间', async () => {
+  const { rows } = await turnedRows()
+  // user 一条 + 回合 2 的卡一条 + 回合 2 的正文一条 + 回合 3 的正文一条 = 4 行。
+  // 一条记录画一行会让这里变成 6 行以上、三条时钟三连（真机 chat000 的原样）。
+  assert.equal(rows.length, 4, '分段后的行数')
+  const card = rows.find((row) => row.includes('先看一眼目录'))
+  const answer = rows.find((row) => row.includes('两条都跑完了'))
+  assert.ok(card, '过程卡是独立一行')
+  assert.ok(answer, '正文是另一行')
+  assert.notStrictEqual(card, answer, '卡与正文不是同一行')
+  assert.equal(card.includes('bp-tail'), false, '过程卡不画时间')
+  assert.match(card, /<details class="thinking"/, '思考块在卡里')
+  // bash 一次 + grep 两次：同一次连跑的工具折成一条过程行（processRows 的分组），
+  // 状态已由 tool/result 回填成 done。
+  assert.equal((card.match(/class="process-line"/g) || []).length, 1, '连跑的工具合成一条过程行')
+  assert.equal((card.match(/data-state="done"/g) || []).length, 1, '过程行已被结果回填成 done')
+  assert.equal((answer.match(/class="bp-tail"/g) || []).length, 1, '正文行只有一个时间')
   assert.ok(
-    turnTwo.includes(clockText(TURNS.turnTwoLast)),
-    '时间取该回合最后一条记录的时间'
-  )
-  // 这一回合带 usage，行尾是「胶囊 + 时间」那一格；结构由下面的用量用例逐字钉住。
-  assert.ok(turnTwo.includes('<span class="msg-clock">'), '时间落在 .msg-clock 里（renderMessageTail 的形态）')
-})
-
-test('T7 收尾：相邻两个回合不会被并成一条，后者带自己的时间', async () => {
-  const browser = bootTurnChat()
-  await browser.flush()
-  await browser.openChat('s-repo')
-  const html = browser.node('bpMsgs').innerHTML
-  const rows = html.split('<div class="bp-msg message ')
-  const turnThree = rows.find((row) => row.includes('第二回合'))
-  assert.ok(turnThree, '第二个回合自己一行')
-  assert.equal(turnThree.includes('先看一眼目录'), false, '前一个回合的内容不许并进来')
-  assert.ok(
-    turnThree.includes('<span class="bp-tail">' + clockText(TURNS.turnThree) + '</span>'),
-    '第二个回合的时间是它自己最后一条记录的时间'
+    answer.includes('<span class="msg-clock">') || answer.includes(clockText(TURNS.turnTwoLast)),
+    '时间取该回合最后一条正文记录的时间'
   )
 })
 
-test('T7 收尾：回合带 usage 时行尾先画 .usage-pill 再画时间，仍只一个 .bp-tail', async () => {
-  const browser = bootTurnChat()
-  await browser.flush()
-  await browser.openChat('s-repo')
-  const html = browser.node('bpMsgs').innerHTML
-  const rows = html.split('<div class="bp-msg message ')
-  const turnTwo = rows.find((row) => row.includes('两条都跑完了'))
-  assert.ok(turnTwo, '回合 2 的行必须在')
-  // 与 landing 的 renderMessageTail（lib/pages.js:1828）同一份 markup，只换外层类名。
+test('T7 收尾：相邻两个回合不合并，第二个回合只有自己的内容', async () => {
+  const { rows } = await turnedRows()
+  const second = rows.find((row) => row.includes('第二回合'))
+  assert.ok(second, '第二个回合自己一行')
+  assert.equal(second.includes('先看一眼目录'), false, '前一个回合的内容不许并进来')
+  assert.equal(second.includes('两条都跑完了'), false, '前一个回合的正文也不许并进来')
+  assert.equal((second.match(/class="bp-tail"/g) || []).length, 1, '它自己一个时间')
+  assert.ok(second.includes(clockText(TURNS.turnThree)), '时间是它自己最后一条记录的时间')
+})
+
+test('T7 收尾：usage 只挂在最后一条正文上，胶囊在时间前面', async () => {
+  const { rows } = await turnedRows()
+  const answer = rows.find((row) => row.includes('两条都跑完了'))
+  assert.ok(answer, '回合 2 的正文行必须在')
+  // 与 landing 的 renderMessageTail 同一份 markup，只换外层类名。
   assert.match(
-    turnTwo,
+    answer,
     new RegExp('<span class="bp-tail"><span class="usage-pill" title="[^"]+">[^<]+<\\/span><span class="msg-clock">' + clockText(TURNS.turnTwoLast) + '<\\/span><\\/span>'),
     '用量胶囊在时间前面'
   )
-  assert.equal((turnTwo.match(/class="bp-tail"/g) || []).length, 1)
-  assert.equal((turnTwo.match(/class="usage-pill"/g) || []).length, 1)
-  // 没有 usage 的回合保持原来那层最简形式。
-  const turnThree = rows.find((row) => row.includes('第二回合'))
-  assert.equal(turnThree.includes('usage-pill'), false, '没有 usage 就不出胶囊')
+  assert.equal((answer.match(/class="bp-tail"/g) || []).length, 1)
+  assert.equal((answer.match(/class="usage-pill"/g) || []).length, 1)
+  const empty = rows.find((row) => row.includes('第二回合'))
+  assert.equal(empty.includes('usage-pill'), false, '没有 usage 就不出胶囊')
 })
 
-test('T7 收尾：轮询读回同一回合仍是一行，工具块在行内更新而不是新增一行', async () => {
-  const browser = bootTurnChat()
-  await browser.flush()
-  await browser.openChat('s-repo')
-  const before = browser.node('bpMsgs').innerHTML
-  assert.equal((before.match(/<div class="bp-msg message /g) || []).length, 3)
+test('T7 收尾：轮询读回同一页仍是同样的行，工具状态不会退回 running', async () => {
+  const { browser, rows } = await turnedRows()
+  assert.equal(rows.length, 4)
   browser.fireTimers(5000)
   await browser.flush()
   const after = browser.node('bpMsgs').innerHTML
-  assert.equal((after.match(/<div class="bp-msg message /g) || []).length, 3, '轮询不许把回合拆回多行或重复')
-  assert.equal((after.match(/class="bp-tail"/g) || []).length, 3, 'user 行一个 + 两个回合各一个')
-  assert.equal((after.match(/data-state="done"/g) || []).length, 1, '行内过程行的完成状态保住')
+  assert.equal((after.match(/<div class="bp-msg message /g) || []).length, 4, '轮询不许把回合拆回多行或重复')
+  assert.equal((after.match(/class="bp-tail"/g) || []).length, 3, 'user 一个 + 两条正文各一个，卡没有')
+  assert.equal((after.match(/data-state="done"/g) || []).length, 1, '卡里的过程行仍是 done')
 })
 
-test('T7 收尾：更早的记录里同一回合的多段正文合成一行，时间取最后一段', async () => {
-  const browser = bootTurnChat({ earlier: earlierTurnedAnswer })
-  await browser.flush()
-  await browser.openChat('s-repo')
-  const html = browser.node('bpMsgs').innerHTML
-  assert.equal((html.match(/早前前半句/g) || []).length, 1, '第一段只出现一次')
-  assert.equal((html.match(/早前后半句/g) || []).length, 1)
-  const rows = html.split('<div class="bp-msg message ')
-  const earlierRow = rows.find((row) => row.includes('早前前半句'))
-  assert.ok(earlierRow && earlierRow.includes('早前后半句'), '两段正文在同一行里')
-  assert.equal((earlierRow.match(/class="bp-tail"/g) || []).length, 1, '并成一行后只剩一个时间')
-  assert.ok(
-    earlierRow.includes('<span class="bp-tail">' + clockText(EARLIER_AT) + '</span>'),
-    '时间取该回合最后一段的时间'
-  )
+test('T7 收尾：更早的记录里一块正文一条气泡，各带各的时间', async () => {
+  const { rows } = await turnedRows({ earlier: earlierTurnedAnswer })
+  assert.equal((rows.filter((row) => row.includes('早前前半句')).length), 1, '第一段只出现一次')
+  assert.equal((rows.filter((row) => row.includes('早前后半句')).length), 1)
+  const first = rows.find((row) => row.includes('早前前半句'))
+  const second = rows.find((row) => row.includes('早前后半句'))
+  assert.ok(first && second, '两条各是一行')
+  assert.notStrictEqual(first, second)
+  assert.ok(first.includes(clockText(EARLIER_TIMES[0])), '第一条带自己的时间')
+  assert.ok(second.includes(clockText(EARLIER_TIMES[1])), '第二条带自己的时间')
 })
 
-test('T7 收尾：正在写的那句话只出现一次——token 通道与回合行不会各画一遍', async () => {
-  const browser = bootTurnChat()
-  await browser.flush()
-  await browser.openChat('s-repo')
+test('T7 收尾：正在写的那句话只出现一次——token 通道与记录通道不会各画一遍', async () => {
+  const { browser } = await turnedRows()
   const source = browser.sources[browser.sources.length - 1]
   assert.ok(source, '打开会话时应当订阅会话流')
   source.emit('token', { type: 'start' })
@@ -945,7 +952,7 @@ test('T7 收尾：正在写的那句话只出现一次——token 通道与回�
   source.emit('event', {
     event: {
       type: 'assistant/chunk',
-      seq: 9,
+      seq: 20,
       time: Date.now(),
       data: { turn: 9, chunk: { type: 'text-delta', index: 0, text: '正在写的字' } },
     },
@@ -954,5 +961,4 @@ test('T7 收尾：正在写的那句话只出现一次——token 通道与回�
   html = browser.node('bpMsgs').innerHTML
   assert.equal((html.match(/正在写的字/g) || []).length, 1, '两条通道画的是同一句，屏幕上只留一份')
 })
-
 
