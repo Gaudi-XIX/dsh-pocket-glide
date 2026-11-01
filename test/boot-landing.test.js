@@ -7,7 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { gunzipSync, brotliDecompressSync } from 'node:zlib'
-import { BOOT_PAYLOAD_CAP_BYTES, LanMobileBridge } from '../lib/bridge.js'
+import { BOOT_PAYLOAD_CAP_BYTES, BOOT_PREVIEW_BYTE_CAP, BOOT_PREVIEW_EVENT_CAP, LanMobileBridge } from '../lib/bridge.js'
 
 function makeBridge(overrides = {}) {
   const logs = []
@@ -49,7 +49,7 @@ const candidate = [{ sessionId: 's1', updatedAt: 5, running: false, projections:
 // events」这条禁令换成有界断言——分片数 ≤ 预览范围（10 个会话），每片 ≤ 30 条，
 // 整个载荷 ≤ 一个写死的字节上界。URL 里的图片、更长的历史都不许混进来。
 const PREVIEW_SESSIONS_CAP = 10
-const PREVIEW_MESSAGES_CAP = 30
+const PREVIEW_MESSAGES_CAP = BOOT_PREVIEW_EVENT_CAP
 
 function bootPayloadJson(markup) {
   const hit = /window\.__POCKET_BOOT__=(.+?)<\/script>/.exec(markup)
@@ -67,6 +67,10 @@ function assertBoundedTranscript(markup) {
   for (const entry of tails) {
     const count = Array.isArray(entry?.events) ? entry.events.length : 0
     assert.ok(count <= PREVIEW_MESSAGES_CAP, `one preview page carries at most ${PREVIEW_MESSAGES_CAP} events, saw ${count}`)
+    if (count > 0) {
+      const bytes = Buffer.byteLength(JSON.stringify(entry.events), 'utf8')
+      assert.ok(bytes <= BOOT_PREVIEW_BYTE_CAP, `one preview page stays under ${BOOT_PREVIEW_BYTE_CAP} B, saw ${bytes}`)
+    }
   }
   const bytes = Buffer.byteLength(json, 'utf8')
   assert.ok(bytes <= BOOT_PAYLOAD_CAP_BYTES, `the boot payload stays bounded, saw ${bytes} bytes`)
@@ -351,6 +355,12 @@ test('a fat transcript is trimmed by the implementation, not left to the asserti
   const json = JSON.stringify(payload)
   const bytes = Buffer.byteLength(json, 'utf8')
   assert.ok(bytes <= BOOT_PAYLOAD_CAP_BYTES, `the payload is trimmed to the cap, saw ${bytes} bytes`)
+  for (const entry of Object.values(payload.tails ?? {})) {
+    const events = Array.isArray(entry?.events) ? entry.events : []
+    assert.ok(events.length <= BOOT_PREVIEW_EVENT_CAP, `per-session events stay capped, saw ${events.length}`)
+    const pageBytes = Buffer.byteLength(JSON.stringify(events), 'utf8')
+    assert.ok(pageBytes <= BOOT_PREVIEW_BYTE_CAP, `per-session bytes stay capped, saw ${pageBytes}`)
+  }
 
   const events = Object.values(payload.tails ?? {}).reduce(
     (sum, entry) => sum + (Array.isArray(entry?.events) ? entry.events.length : 0),
