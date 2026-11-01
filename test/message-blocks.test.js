@@ -384,6 +384,8 @@ function historyAnswer() {
       // 只有思考、没有文本的一条：从前整行被丢掉（T7 的第二条缺口）。
       record(5, 'assistant/message', { message: { content: [{ type: 'reasoning', text: '再想一步' }] } }),
       record(6, 'turn/end', { reason: { kind: 'error', error: { message: 'boom' } } }),
+      // 第七类块：交付物（landing 的 deliverables/presented 出口）
+      record(7, 'deliverables/presented', { files: [{ path: '/tmp/out/report.png', description: '结果图' }, { path: '/tmp/out/report.txt' }] }),
     ],
   }
 }
@@ -431,6 +433,7 @@ test('T7：会话页画齐 text / reasoning / tool / image / file / turn-error�
   assert.match(html, /class="attach-file-bytes">2\.0 KB/, 'formatBytes 生效')
   assert.match(html, /<div class="attach-image"><img loading="lazy"[^>]*src="\/api\/session-attachment\?sessionId=s-repo&attachmentId=att-1"/, '图片块用当前会话号拼地址')
   assert.match(html, /<div class="turn-error-bubble">[\s\S]*?<span class="turn-error-title">运行出错<\/span><span class="turn-error-detail">boom<\/span>/, 'turn/end(error) 出收尾气泡')
+  assert.match(html, /<div class="presented-group"><figure class="attach-image presented-image"><img[^>]*data-path="\/tmp\/out\/report\.png"[^>]*src="\/api\/session-file\?sessionId=s-repo&path=%2Ftmp%2Fout%2Freport\.png"[^>]*><figcaption class="presented-desc">结果图<\/figcaption><\/figure><a class="attach-file presented-file" href="[^"]*report\.txt"/, 'presented 块画成 .presented-group（图 + 文件）')
   // 已知差异（判据登记）：bindOpenState 后半段找 #messages，本页容器是 #bpMsgs，不命中。
   assert.equal(html.includes('id="bpTurnStatus"'), false, '这里没有正在干活，就不挂 turn-status')
   assert.equal(browser.classes.has('bp-chat'), true)
