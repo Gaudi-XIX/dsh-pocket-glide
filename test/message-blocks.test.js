@@ -52,9 +52,16 @@ const TAIL_WEIGHTS = {
   formatElapsed: 248,
 }
 
-const BLOCK_WEIGHTS = { ...CORE_WEIGHTS, ...TAIL_WEIGHTS }
+/**
+ * 一个回合里连续的几次工具调用，落地页折成一条「已调用工具 ×N」，分组规则来自
+ * 她自己的 processRows（lib/pages.js 里 renderMessage 的 turnProcess 分支）；
+ * BOT 页复用同一份，不在本页另写一份分组。
+ */
+const PROCESS_WEIGHTS = { processRows: 764 }
+
+const BLOCK_WEIGHTS = { ...CORE_WEIGHTS, ...TAIL_WEIGHTS, ...PROCESS_WEIGHTS }
 const CORE_TOTAL = 13486
-const BLOCK_TOTAL = 15172
+const BLOCK_TOTAL = 15936
 const BLOCK_NAMES = Object.keys(BLOCK_WEIGHTS)
 
 /**
@@ -126,7 +133,7 @@ const plain = (value) => JSON.parse(JSON.stringify(value))
 // ① 注入契约
 // ---------------------------------------------------------------------------
 
-test('块渲染器从出货产物切片：21 个函数、逐函数同字节、原 17 个仍合计 13486', () => {
+test('块渲染器从出货产物切片：22 个函数、逐函数同字节、原 17 个仍合计 13486', () => {
   for (const locale of ['zh', 'en']) {
     const script = messageBlocksScript(locale)
     let total = 0
@@ -138,9 +145,11 @@ test('块渲染器从出货产物切片：21 个函数、逐函数同字节、�
       if (name in CORE_WEIGHTS) core += bytes
     }
     assert.equal(core, CORE_TOTAL, `${locale}: 判据 §3 那 17 个函数合计必须 ${CORE_TOTAL} B`)
-    assert.equal(total, BLOCK_TOTAL, `${locale}: 21 个函数合计必须 ${BLOCK_TOTAL} B`)
-    // processRows 不在调用图里（renderBlock 不调它），注进来就是多一份。
-    assert.equal(script.includes('function processRows('), false, 'processRows 不在闭包里')
+    assert.equal(total, BLOCK_TOTAL, `${locale}: 22 个函数合计必须 ${BLOCK_TOTAL} B`)
+    // processRows 与 renderBlock 不互相调用（一个是逐块画、一个是回合内折叠），
+    // 但两者都是同一份出货实现，所以一起注入、一起按字节钉住。
+    assert.equal(script.includes('function processRows('), true, 'processRows 也在同一份注入里')
+    assert.equal(script.includes('function renderMessageTail('), true, '行尾渲染函数也在同一份注入里')
     // 两张扩展名表是函数裸用的全局，照行从同一份出货文本带出来。
     assert.equal(script.includes("const IMAGE_FILE_EXTS=['png','jpg','jpeg','gif','webp','bmp','avif'];"), true)
     assert.match(script, /const TEXT_FILE_EXTS=\['txt',/)
@@ -744,27 +753,50 @@ test('T10（桥）：applyDescendantRunning 是唯一一份标记实现，桥只
 let TURNS = null
 
 /**
- * 两个回合的真实形状事件流：回合 2 里思考、两次工具调用（各自带结果）、一段正文
- * 与 usage；回合 3 只有一段正文。user 行照旧单独一行。
+ * 两个回合的真实事件形状：宿主把 turn/step 写在 **event.data** 里（真机
+ * 2026-11-01：`554 | assistant/message | 5 | 56`），一个 step = step/start +
+ * assistant/message + tool/call + tool/result + step/end。回合 2 有 56/57/58 三个
+ * step（57 里两次同类别工具相邻），回合 3 只有一段正文。
  */
 function turnHistory() {
   const base = Date.now()
-  TURNS = { base, turnTwoLast: base + 7000, turnThree: base + 8000 }
-  const record = (seq, turn, type, data) => ({
-    event: { type, seq, time: base + seq * 1000, turn, data },
+  TURNS = { base, turnTwoLast: base + 13000, turnThree: base + 15000 }
+  const record = (seq, turn, step, type, data) => ({
+    event: {
+      type,
+      seq,
+      time: base + seq * 1000,
+      data: Object.assign(turn === null ? {} : { turn, step }, data || {}),
+    },
     time: base + seq * 1000,
+  })
+  const result = (callId) => ({
+    message: {
+      toolCallId: callId,
+      content: [{ type: 'tool-result', content: [{ type: 'text', text: 'ok' }] }],
+    },
   })
   return {
     hasMore: false,
     events: [
-      record(1, 1, 'user/message', { message: { source: { kind: 'user' }, content: [{ type: 'text', text: '把工具跑一下' }] } }),
-      record(2, 2, 'assistant/message', { message: { content: [{ type: 'reasoning', text: '先看一眼目录' }] } }),
-      record(3, 2, 'tool/call', { callId: 'c1', name: 'Bash', arguments: { command: 'ls' } }),
-      record(4, 2, 'tool/result', { message: { toolCallId: 'c1', content: [{ type: 'tool-result', content: [{ type: 'text', text: 'ok' }] }] } }),
-      record(5, 2, 'tool/call', { callId: 'c2', name: 'Grep', arguments: { pattern: 'x' } }),
-      record(6, 2, 'tool/result', { message: { toolCallId: 'c2', content: [{ type: 'tool-result', content: [{ type: 'text', text: 'ok' }] }] } }),
-      record(7, 2, 'assistant/message', { message: { content: [{ type: 'text', text: '两条都跑完了' }] }, usage: { totalTokens: 1234 } }),
-      record(8, 3, 'assistant/message', { message: { content: [{ type: 'text', text: '第二回合' }] } }),
+      record(1, null, null, 'user/message', { message: { source: { kind: 'user' }, content: [{ type: 'text', text: '把工具跑一下' }] } }),
+      // 回合 2 / step 56：先思考，再一次 Bash
+      record(2, 2, 56, 'step/start', {}),
+      record(3, 2, 56, 'assistant/message', { message: { content: [{ type: 'reasoning', text: '先看一眼目录' }] } }),
+      record(4, 2, 56, 'tool/call', { callId: 'c1', name: 'bash', arguments: { command: 'ls' } }),
+      record(5, 2, 56, 'tool/result', result('c1')),
+      record(6, 2, 56, 'step/end', {}),
+      // 回合 2 / step 57：两次同类别工具，中间没有正文 ⇒ 折成一条过程行
+      record(7, 2, 57, 'step/start', {}),
+      record(8, 2, 57, 'tool/call', { callId: 'c2', name: 'grep', arguments: { pattern: 'x' } }),
+      record(9, 2, 57, 'tool/result', result('c2')),
+      record(10, 2, 57, 'tool/call', { callId: 'c3', name: 'grep', arguments: { pattern: 'y' } }),
+      record(11, 2, 57, 'tool/result', result('c3')),
+      record(12, 2, 57, 'step/end', {}),
+      // 回合 2 / step 58：收尾正文 + 累计 usage
+      record(13, 2, 58, 'assistant/message', { message: { content: [{ type: 'text', text: '两条都跑完了' }] }, usage: { totalTokens: 1234 } }),
+      record(14, 2, 58, 'step/end', {}),
+      record(15, 3, 70, 'assistant/message', { message: { content: [{ type: 'text', text: '第二回合' }] } }),
     ],
   }
 }
@@ -815,8 +847,13 @@ test('T7 收尾：同一回合的多条记录合成一条 .bp-msg，行尾只有
   const turnTwo = rows.find((row) => row.includes('先看一眼目录'))
   assert.ok(turnTwo, '回合 2 的行必须在')
   assert.match(turnTwo, /两条都跑完了/, '同一回合的正文也进这一行')
-  assert.equal((turnTwo.match(/class="process-line"/g) || []).length, 2, '两次工具调用都在这一行里')
-  assert.equal((turnTwo.match(/data-state="done"/g) || []).length, 2, '两条工具都已被结果回填成 done')
+  // 三次工具调用（Bash、Grep、Grep）在落地页折成两条过程行：同类别相邻的两次
+  // Grep 是一条「已调用工具 ×2」（processRows 的分组规则），不是两条。
+  // 三次工具调用（bash、grep、grep）连成**一条**过程行：同一次连跑的工具在
+  // 落地页折成一句「… ×N」（processRows 分组 + processLineText 合成），
+  // 不是三条各带一行的旧形态。
+  assert.equal((turnTwo.match(/class="process-line"/g) || []).length, 1, '连跑的工具调用合成一条过程行')
+  assert.equal((turnTwo.match(/data-state="done"/g) || []).length, 1, '过程行已被结果回填成 done')
   assert.equal((turnTwo.match(/class="bp-tail"/g) || []).length, 1, '一条回合只画一个时间')
   assert.ok(
     turnTwo.includes(clockText(TURNS.turnTwoLast)),
@@ -873,7 +910,7 @@ test('T7 收尾：轮询读回同一回合仍是一行，工具块在行内更�
   const after = browser.node('bpMsgs').innerHTML
   assert.equal((after.match(/<div class="bp-msg message /g) || []).length, 3, '轮询不许把回合拆回多行或重复')
   assert.equal((after.match(/class="bp-tail"/g) || []).length, 3, 'user 行一个 + 两个回合各一个')
-  assert.equal((after.match(/data-state="done"/g) || []).length, 2, '行内工具块的完成状态保住')
+  assert.equal((after.match(/data-state="done"/g) || []).length, 1, '行内过程行的完成状态保住')
 })
 
 test('T7 收尾：更早的记录里同一回合的多段正文合成一行，时间取最后一段', async () => {
@@ -910,8 +947,7 @@ test('T7 收尾：正在写的那句话只出现一次——token 通道与回�
       type: 'assistant/chunk',
       seq: 9,
       time: Date.now(),
-      turn: 9,
-      data: { chunk: { type: 'text-delta', index: 0, text: '正在写的字' } },
+      data: { turn: 9, chunk: { type: 'text-delta', index: 0, text: '正在写的字' } },
     },
   })
   await browser.flush()
