@@ -202,14 +202,14 @@ test('the incremental insert happens before the run lock is released', () => {
   )
   assert.ok(pull.indexOf('finally{') < insert, 'the insert belongs to the finally, so a throw inside the loop still draws what landed')
 
-  const fallback = pull.indexOf('if(!paintOlder(added,box,next)){skipAnchorOnce=true;paintMessages(next,false)')
+  const fallback = pull.indexOf("if(!paintOlder(added,box,next)){skipAnchorOnce=true;paintMessages($('messages'), next, {sticky: false, sideEffects: true})")
   assert.notEqual(fallback, -1, 'a declined insert must still fall back to a full repaint')
 
   const page = between(js, 'async function fetchOlderPage()', 'async function loadOlder()')
   const guard = page.indexOf('!olderRunBusy')
   assert.notEqual(guard, -1, 'the page fetch consults the run lock before drawing')
   assert.ok(
-    guard < page.indexOf('paintMessages(messages,false)'),
+    guard < page.indexOf("paintMessages($('messages'), messages, {sticky: false, sideEffects: true})"),
     'and the consultation comes first: the per-page paint must sit inside that branch'
   )
 

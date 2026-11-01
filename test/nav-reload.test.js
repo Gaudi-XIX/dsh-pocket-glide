@@ -261,7 +261,7 @@ test('B the instant paint seeds lastHistoryKey with the exact expression applyHi
   const instantKey = instant.match(/JSON\.stringify\((\[[^\]]*\])\)/)[1]
   const applyKey = apply.match(/JSON\.stringify\((\[[^\]]*\])\)/)[1]
   assert.equal(instantKey, applyKey, 'the two key expressions must stay byte-identical or the dedupe silently dies')
-  assert.ok(instant.indexOf('lastHistoryKey=') < instant.indexOf('paintMessages(messages,false)'), 'the key is taken before the paint, like applyHistory does')
+  assert.ok(instant.indexOf('lastHistoryKey=') < instant.indexOf('paintMessages(box, messages.slice(-fit)'), 'the key is taken before the paint, like applyHistory does')
 })
 
 test('B a re-entry that painted from cache does not show the skeleton', () => {

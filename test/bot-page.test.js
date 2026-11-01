@@ -37,11 +37,19 @@ test('the Bot page is its own document: structure, hashed links, never cached', 
     // 脚本也在解析期内联执行——所以这里钉的是「内联载荷 + 内联脚本本体」，
     // 而不是外链 <script src>：外链脚本下载的那段时间里，首帧只能是一张空壳。
     assert.doesNotMatch(html, /<script src=/, 'no external script: it would paint an empty shell first')
-    assert.match(html, /<script>window\.__BOT_BOOT__=/, 'the document carries the roster and previews inline')
-    const inline = html.match(/<script>([\s\S]*?)<\/script>\)?$/m)
-    assert.ok(html.includes('<script>' + BOT_PAGE_JS + '</script>'),
-      'the shipped script is inlined byte for byte, so it runs while the document is still parsing')
-    assert.doesNotMatch(html, /nonce/, 'no nonce plumbing: nothing cross-origin to guard')
+    // R13（2026-11-02）：/bot 文档也带 CSP 的 per-request nonce，内联脚本必须挂同一个 nonce——
+    // 之前没有 nonce，整段内联脚本被浏览器拦掉（实测 headless 里 window.__BOT_BOOT__ 为 undefined）。
+    // 断言因此从「没有 nonce」改成「两段内联脚本都带 nonce，且与响应头里的 CSP 一致」。
+    const csp = res.headers.get('content-security-policy') ?? ''
+    const nonce = (csp.match(/'nonce-([^']+)'/) ?? [])[1]
+    assert.ok(nonce, 'the response authorizes exactly one nonce')
+    assert.match(html, new RegExp('<script nonce="' + nonce + '">window\\.__BOT_BOOT__='),
+      'the document carries the roster and previews inline under the nonce')
+    assert.ok(html.includes('<script nonce="' + nonce + '">' + BOT_PAGE_JS + '</script>'),
+      'the shipped script is inlined byte for byte under the same nonce, so it runs while parsing')
+    assert.equal((html.match(/<script nonce="/g) ?? []).length, 2,
+      'both inline scripts carry the nonce — a bare <script> would be blocked by the CSP')
+    assert.doesNotMatch(html, /<script>/, 'no bare inline script that the CSP would refuse to run')
 
     // 外链必须真的取得到，而且款式来自共享的壳样式表。
     const sheet = await httpFetch(t.base + css[1], { headers: { cookie } })

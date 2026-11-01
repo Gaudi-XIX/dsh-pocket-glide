@@ -26,12 +26,31 @@ const { js } = mobilePageAssets({ locale: 'zh' })
 function extractFunction(source, name) {
   const start = source.indexOf(`function ${name}(`)
   assert.notEqual(start, -1, `${name} must exist in the rendered asset`)
-  let depth = 0
-  for (let i = start; i < source.length; i++) {
+  // R13-2.4：参数表里可能出现默认值对象字面量（paintMessages(box, messages, opts = {})）。
+  // 配对必须从参数表的右括号之后开始，否则 `opts = {}` 的 `}` 会被当成函数体结尾。
+  let i = start + `function ${name}(`.length
+  let paren = 1
+  let quote = ''
+  while (i < source.length) {
     const char = source[i]
-    if (char === '{') depth++
+    if (quote) {
+      if (char === '\\') { i += 2; continue }
+      if (char === quote) quote = ''
+    } else if (char === "'" || char === '"' || char === '`') quote = char
+    else if (char === '(') paren += 1
+    else if (char === ')') {
+      paren -= 1
+      if (paren === 0) break
+    }
+    i += 1
+  }
+  assert.ok(i < source.length, `${name} must have a closed parameter list`)
+  let depth = 0
+  for (; i < source.length; i++) {
+    const char = source[i]
+    if (char === '{') depth += 1
     else if (char === '}') {
-      depth--
+      depth -= 1
       if (depth === 0) return source.slice(start, i + 1)
     }
   }
@@ -186,19 +205,19 @@ test('AC-A7 the older row shows while nothing is painted', () => {
 
 test('AC-A7 painting nothing names the wait instead of a blank page', () => {
   const sandbox = buildPaintSandbox({ activeSession: 's1', sessionBlank: false })
-  sandbox.paintMessages([])
+  sandbox.paintMessages(sandbox.box, [], { sideEffects: true })
   assert.ok(sandbox.box.innerHTML.includes('class="loading"'), 'the skeleton says work is happening')
   assert.ok(sandbox.box.innerHTML.includes('正在同步会话内容…'), 'and names what it is waiting for')
   assert.equal(sandbox.box.innerHTML.includes(L.syncingChat), true, 'the copy is the page label, not a test copy')
   sandbox.setSessionBlank(true)
-  sandbox.paintMessages([])
+  sandbox.paintMessages(sandbox.box, [], { sideEffects: true })
   assert.ok(!sandbox.box.innerHTML.includes('正在同步会话内容…'), 'a session the desktop reports blank is honestly empty')
 })
 
 test('AC-A7 the failed retry block survives an empty repaint', () => {
   const stalled = '<div class="loading-failed">消息没能加载出来<button class="older-row" data-reload="1">重试</button></div>'
   const sandbox = buildPaintSandbox({ activeSession: 's1', sessionBlank: false, innerHTML: stalled })
-  sandbox.paintMessages([])
+  sandbox.paintMessages(sandbox.box, [], { sideEffects: true })
   assert.ok(sandbox.box.innerHTML.includes('data-reload="1"'), 'a stall keeps its button')
   assert.ok(!sandbox.box.innerHTML.includes('正在同步会话内容…'), 'it does not decay back into a bare wait')
 })

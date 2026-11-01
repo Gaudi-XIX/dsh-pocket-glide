@@ -163,9 +163,9 @@ test('a send repaints from the live buffer, not from a stale snapshot', () => {
   // optimistic one. The latch itself is untouched: `readIntent` stays the scroll arg,
   // and a bare `true` in that position is still the regression this test was written for.
   assert.ok(js.includes('const readIntent=typeof followStream===\'undefined\'?true:followStream'), 'the send must latch the reader intent before it mutates state')
-  assert.ok(js.includes('paintMessages(messagesWithOptimistic(currentTranscript(),true),readIntent)'))
-  assert.ok(!js.includes('paintMessages(messagesWithOptimistic(currentTranscript()),true)'), 'a send must not force a scroll to the bottom')
-  assert.ok(!js.includes('paintMessages([...lastDurableMessages,...optimisticPrompts.map('))
+  assert.ok(js.includes("paintMessages($('messages'), messagesWithOptimistic(currentTranscript(),true), {sticky: readIntent, sideEffects: true})"))
+  assert.ok(!js.includes("paintMessages($('messages'), messagesWithOptimistic(currentTranscript()), {sticky: true, sideEffects: true})"), 'a send must not force a scroll to the bottom')
+  assert.ok(!js.includes("paintMessages($('messages'), [...lastDurableMessages,...optimisticPrompts.map("))
 })
 
 test('the transcript offers a tap target for older messages', () => {

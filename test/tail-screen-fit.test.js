@@ -6,19 +6,29 @@
 //      the thing the preload exists to show;
 //   2. the user prompt that produced that reply travels with it, so an answer read
 //      on its own is not contextless;
-//   3. the rest of the window is topped up backwards until one screen of text has
-//      been reached, so a run of one-liners fills a screen instead of shipping a
-//      fixed row count that fills nothing;
+//   3. the rest of the window is topped up backwards until one of the two hard
+//      ceilings is reached (R13-0.1 / R13-1.1) — the screen itself is measured by
+//      the page now, the bridge no longer guesses it;
 //   4. records are selected whole — the fit decides how many travel, never how
 //      much of one travels.
-// The budget is measured in laid-out columns (CJK = 2, everything else = 1) plus a
-// per-record floor, because a tool row now ships a title alone and would otherwise
-// read as free and stack thirty of them onto one "screen".
+// R13 (m02557) replaced the column budget with a greedy suffix bounded by
+// TAIL_MAX_RECORDS / TAIL_MAX_BYTES. `BUDGET` is still passed by every case below
+// because fitTailToScreen's signature is frozen (R13-0.1 G1), but the function
+// body no longer reads it — the tests that used to assert on "one screen of
+// columns" were rewritten to assert on the ceilings.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fitTailToScreen, TAIL_MAX_BYTES, TAIL_MAX_RECORDS, tailEntryBytes, tailRecordColumns } from '../lib/bridge.js'
+import { fitTailToScreen, TAIL_MAX_BYTES, TAIL_MAX_RECORDS, tailEntryBytes } from '../lib/bridge.js'
 
 const BUDGET = 1400
+
+// R13-1.4: the pure arithmetic behind the record ceiling. The shortest record row
+// measured on either side is the BOT turn-status row at 24px (Pocket's lowest was
+// 44px); iPhone 13/14 portrait CSS viewport height measured 844px. 40 records of
+// the shortest rows must still cover one screen, or a screen of quiet rows could
+// never be filled from one tail.
+const TAIL_MIN_ROW_PX = 24
+const SCREEN_MIN_PX = 844
 
 function record(seq, type, text) {
   const entry = { seq, type, data: {} }
@@ -54,22 +64,25 @@ test('a page with only the oversized answer ships just the answer', () => {
   assert.deepEqual(seqsOf(fitTailToScreen(page, BUDGET)), [1])
 })
 
-test('one-liners are topped up until the screen is full, then older rows stop', () => {
-  // 40 one-line turns ≈ 4 300 columns, about three screens.
+test('one-liners are topped up until the record ceiling, then older rows stop', () => {
+  // 60 one-line rows: MORE than the ceiling on purpose (R13-1.8 G2). With only 40
+  // inputs an implementation that never truncates would return all 40 and pass —
+  // the truncation itself would go unverified. With 60, only "keep the newest
+  // TAIL_MAX_RECORDS" (seq 21..60 at 40) passes; no trimming (60 rows) and
+  // trimming the wrong end both fail.
   const page = []
-  for (let seq = 1; seq <= 40; seq += 1) {
+  for (let seq = 1; seq <= 60; seq += 1) {
     page.push(record(seq, seq % 2 ? 'user/message' : 'assistant/message', 'a'.repeat(100)))
   }
   const window = fitTailToScreen(page, BUDGET)
-  const used = seqsOf(window).reduce((total, seq) => total + 124, 0)
 
-  assert.ok(used >= BUDGET, `the window fills at least one screen, used ${used} of ${BUDGET}`)
-  assert.ok(used - 124 < BUDGET, 'and it stops one record later — no record beyond the screen')
+  assert.equal(window.length, TAIL_MAX_RECORDS, 'the window is exactly the record ceiling')
   assert.deepEqual(
     seqsOf(window),
-    [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
-    'the window is a suffix of the page, oldest first'
+    Array.from({ length: TAIL_MAX_RECORDS }, (_, i) => 60 - TAIL_MAX_RECORDS + 1 + i),
+    'it keeps the newest rows and drops from the oldest end'
   )
+  assert.deepEqual(seqsOf(window), seqsOf(window).slice().sort((a, b) => a - b), 'oldest first')
 })
 
 test('records between the answer and its prompt are carried too', () => {
@@ -103,8 +116,8 @@ test('the window is ordered by seq, and a seq-less row rides at the tail', () =>
 test('a page of empty tool rows is stopped by the record ceiling, not by the screen estimate', () => {
   // A stripped tool row carries no prose, so a naive prose-only budget would read
   // it as free and pack dozens onto one screen. The per-record floor pays for
-  // each row, and the hard record ceiling (m02485) is the backstop that can never
-  // be wrong: 30 records, no more, no matter how cheap each one looks.
+  // each row, and the hard record ceiling (R13-1.1) is the backstop that can
+  // never be wrong: 40 records, no more, no matter how cheap each one looks.
   const page = []
   for (let seq = 1; seq <= 200; seq += 1) page.push(record(seq, 'tool/result', ''))
   const window = fitTailToScreen(page, BUDGET)
@@ -131,9 +144,10 @@ test('empty and junk input answer with an empty window', () => {
   assert.deepEqual(fitTailToScreen([null, 3, 'x'], BUDGET), [null, 3, 'x'], 'non-record rows pass through untouched')
 })
 
-test('the default budget is one screen, and a real fat reply still lands whole', () => {
+test('a real fat reply still lands whole', () => {
   // The shape the ruling was written against: one very long answer at the end of
-  // an otherwise quiet session. No budget argument means the shipped default.
+  // an otherwise quiet session. ("The default budget is one screen" was the other
+  // half of the old case; that concept is retired by R13-0 — the page measures.)
   const page = [
     record(1, 'user/message', '整理一下这次的结论'),
     record(2, 'assistant/message', '结论'.repeat(400) + '。' + '下'.repeat(2000))
@@ -170,8 +184,6 @@ test('one long turn cannot carry its whole event stream past the budget', () => 
 
   assert.equal(window[window.length - 1].seq, 124, 'the answer is still the anchor')
   assert.equal(window[0].seq, 1, 'and the prompt it answers still travels with it')
-  const extra = window.slice(1, -1).reduce((total, entry) => total + tailRecordColumns(entry), 0)
-  assert.ok(extra <= BUDGET, `the rest of the turn stays inside the budget, got ${extra}`)
   assert.ok(window.length <= TAIL_MAX_RECORDS, `the hard record ceiling holds: ${window.length} records`)
   assert.equal(window.length, TAIL_MAX_RECORDS, 'and it is what stops this turn: the estimate alone allowed more')
   const bytes = window.reduce((total, entry) => total + tailEntryBytes(entry), 0)
@@ -209,3 +221,12 @@ test('the byte ceiling binds before the record ceiling when rows are heavy but q
   assert.equal(window[0].seq, 1, 'and so does its prompt')
 })
 
+test('the record ceiling is tall enough for one screen of the shortest rows', () => {
+  // Pure arithmetic, no rendering (R13-1.4): the page measures real heights, but
+  // the ceiling itself must be provably able to cover a screen of the smallest
+  // rows. 30 failed this (720 < 844) and is why R13-1.1 raised it to 40.
+  assert.ok(
+    TAIL_MAX_RECORDS * TAIL_MIN_ROW_PX >= SCREEN_MIN_PX,
+    `${TAIL_MAX_RECORDS} records x ${TAIL_MIN_ROW_PX}px = ${TAIL_MAX_RECORDS * TAIL_MIN_ROW_PX}px must cover a ${SCREEN_MIN_PX}px screen`
+  )
+})

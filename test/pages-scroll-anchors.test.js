@@ -23,12 +23,31 @@ const assets = { zh: mobilePageAssets({ locale: 'zh' }), en: mobilePageAssets({ 
 function extractFunction(source, name) {
   const start = source.indexOf(`function ${name}(`)
   assert.notEqual(start, -1, `${name} must exist in the rendered asset`)
-  let depth = 0
-  for (let i = start; i < source.length; i++) {
+  // R13-2.4：参数表里可能出现默认值对象字面量（paintMessages(box, messages, opts = {})）。
+  // 配对必须从参数表的右括号之后开始，否则 `opts = {}` 的 `}` 会被当成函数体结尾。
+  let i = start + `function ${name}(`.length
+  let paren = 1
+  let quote = ''
+  while (i < source.length) {
     const char = source[i]
-    if (char === '{') depth++
+    if (quote) {
+      if (char === '\\') { i += 2; continue }
+      if (char === quote) quote = ''
+    } else if (char === "'" || char === '"' || char === '`') quote = char
+    else if (char === '(') paren += 1
+    else if (char === ')') {
+      paren -= 1
+      if (paren === 0) break
+    }
+    i += 1
+  }
+  assert.ok(i < source.length, `${name} must have a closed parameter list`)
+  let depth = 0
+  for (; i < source.length; i++) {
+    const char = source[i]
+    if (char === '{') depth += 1
     else if (char === '}') {
-      depth--
+      depth -= 1
       if (depth === 0) return source.slice(start, i + 1)
     }
   }
@@ -297,13 +316,13 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
   // following + near bottom → sticks
   box.scrollTop = 4200
   sandbox.follow = true
-  sandbox.paintMessages([{ role: 'user', blocks: [] }], false)
+  sandbox.paintMessages(box, [{ role: 'user', blocks: [] }], { sticky: false, sideEffects: true })
   assert.equal(box.scrollTop, box.scrollHeight, 'following: every paint lands on the bottom')
 
   // unlocked (user scrolled up) → the paint must not steal the position
   box.scrollTop = 1000
   sandbox.follow = false
-  sandbox.paintMessages([{ role: 'user', blocks: [] }], false)
+  sandbox.paintMessages(box, [{ role: 'user', blocks: [] }], { sticky: false, sideEffects: true })
   assert.equal(box.scrollTop, 1000, 'unlocked: repaint keeps the reader where they are')
 
   // explicit stick (send path) while the reader sits far from the bottom:
@@ -312,7 +331,7 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
   // the "br then bt in the same frame" jump signature in the real log.
   box.scrollTop = 1000
   sandbox.follow = true
-  sandbox.paintMessages([{ role: 'user', blocks: [] }], true)
+  sandbox.paintMessages(box, [{ role: 'user', blocks: [] }], { sticky: true, sideEffects: true })
   assert.equal(box.scrollTop, 1000, 'R3: a reader away from the bottom keeps their place even when the caller asks to stick')
   assert.equal(sandbox.follow, false, 'R3: a forced stick does not re-arm a follow the reader left')
 
@@ -320,7 +339,7 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
   // and re-arms — the send path must keep working for a reader who is following.
   box.scrollTop = 5000 - 800
   sandbox.follow = true
-  sandbox.paintMessages([{ role: 'user', blocks: [] }], true)
+  sandbox.paintMessages(box, [{ role: 'user', blocks: [] }], { sticky: true, sideEffects: true })
   assert.equal(box.scrollTop, box.scrollHeight, 'a forced stick at the bottom still lands there')
   assert.equal(sandbox.follow, true, 'a forced stick at the bottom still re-arms the follow')
 
@@ -328,7 +347,7 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
   // longer overrules the unlock (this is the old behaviour's blind spot)
   box.scrollTop = 5000 - 800 - 80 // 80px from the bottom
   sandbox.follow = false
-  sandbox.paintMessages([{ role: 'user', blocks: [] }], false)
+  sandbox.paintMessages(box, [{ role: 'user', blocks: [] }], { sticky: false, sideEffects: true })
   assert.equal(box.scrollTop, 5000 - 880, 'near-bottom alone must not resurrect a following the reader unlocked')
 })
 
@@ -362,7 +381,7 @@ test('paintMessages tags the history tail through the real markHistoryTail', () 
   `)
   const sandbox = make(box)
   const messages = Array.from({ length: 12 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', blocks: [] }))
-  sandbox.paintMessages(messages, false)
+  sandbox.paintMessages(box, messages, { sticky: false, sideEffects: true })
   assert.equal(box.innerHTML.split('H').length - 1, 4, '12 messages → the first 4 carry the history mark')
 })
 
@@ -608,7 +627,7 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   // 读者上滑后每吐一个 token 就被拽回底。两处画之前都先用原始几何量读者位置，离开底部
   // 就当场关掉跟随（br 打点）并让 paintMessages 走 keepAnchor。
   assert.match(js, /const near=typeof isNearBottom==='function'\?isNearBottom\(box\):true;if\(!near&&typeof followStream!=='undefined'&&followStream\)\{followStream=false;/, '2026-10-15 ③五轮：流式换帧前先量读者位置——已离开底部就关掉跟随，不再每 token 拽回底')
-  assert.match(js, /if\(typeof isNearBottom==='function'&&typeof followStream!=='undefined'&&followStream&&!isNearBottom\(box\)\)\{followStream=false;/, '2026-10-15 ③五轮：整段重建那条路同样先量——否则流式全量重绘一帧就把上滑的读者拽回底（bt 现场）')
+  assert.match(js, /if\(effects&&typeof isNearBottom==='function'&&typeof followStream!=='undefined'&&followStream&&!isNearBottom\(box\)\)\{followStream=false;/, '2026-10-15 ③五轮：整段重建那条路同样先量——否则流式全量重绘一帧就把上滑的读者拽回底（bt 现场）')
   assert.match(assets.zh.document, /id="scrollAnchors"/, 'the anchor deck ships in the document')
   assert.match(js, /anchor-fab/, 'the fab styling ships')
   assert.doesNotMatch(assets.zh.css, /(?<!\.cv )\.msg-hist\s*\{content-visibility/, 'CV 只在 .cv 门后（注释里提到该词不算），无门直挂仍判红——遥测实证它让 scrollHeight 在 1828↔4711↔2090 间摆动、浏览器自动滚动锚定把 scrollTop 推到 3980 再掉回 1359（这正是 cvVerdict 夹具的先手）')
@@ -621,7 +640,7 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
   assert.match(assets.zh.css, /\.task-row\.is-unread \.task-status::after/)
   // the stream-watermark paint sandbox extracts paintMessages WITHOUT the new
   // organs — the typeof guards are what keep that file's sandboxes alive
-  assert.match(js, /if\(typeof markHistoryTail==='function'\)markHistoryTail\(messages\)/)
+  assert.match(js, /if\(effects&&typeof markHistoryTail==='function'\)markHistoryTail\(messages\)/)
   assert.match(js, /if\(typeof syncScrollAnchors==='function'\)syncScrollAnchors\(\)/)
   assert.match(js, /if\(typeof followStream!=='undefined'\)followStream=true;/)
 })

@@ -193,7 +193,9 @@ function buildSendSandbox(store = {}, initial = 'hello') {
     function stopPendingSend(){}
     function syncSettingsControls(){}
     function syncPromptUi(){}
-    function paintMessages(list){painted.push(list.length)}
+    // R13-2.4：真实 paintMessages 已改成 (box, messages, opts)；替身兼容两种形状，
+    // 只记「这一页画了几行」，A3b 的断言不变。
+    function paintMessages(first,second){painted.push((Array.isArray(first)?first:second||[]).length)}
     function messagesWithOptimistic(list){return list}
     function clearSentDrafts(){sentCleared+=1}
     function showError(id,error){errors.push({id,error})}

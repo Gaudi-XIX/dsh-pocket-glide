@@ -1135,7 +1135,8 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   不要改大 ASSET_BUDGET_BYTES。
 // 2026-10-24 W2a 先减后调：mobilePageAssets() 出货前把只给读源码的人看的注释剥掉（源码保留，
 //   见 lib/pages.js 的 stripAssetComments），实测 zh 290 687（css 51 493 + js 239 194）/ en 290 594（css 51 493 + js 239 101）——两档各减 100 702 B（zh css 1 736 + js 98 966）。**线是收紧不是抬线**：上一档 391 500 只留 249/351 B 余量（硬底），新档按「最大档 + 8 192 向上取整到千位」取 300 000，余量 8 947 B（zh）/ 9 040 B（en）（中间量 299 512 → 向上取整 300 000；取整必须向上：向下会得 299 000，余量 8 313/8 406 低于 8 000 B 硬底，等于自己砍自己）
-const ASSET_BUDGET_BYTES = 300_000
+// 2026-11-02 R13 端上测量：实测 zh 293 469 / en 293 368，按『最大档 + 8 192 向上取整到千位』抬到 302 000，余量 8 531 / 8 632。下一批改动前必须先瘦身，不许再抬。
+const ASSET_BUDGET_BYTES = 302_000
 // 余量硬底：新档至少要留这么多才允许合。它不是可调参数，是「下一批改动前必须再瘦身」的
 // 触发线——上一档就是因为没有这条，被四批功能吃到只剩 249 B。
 const ASSET_MIN_HEADROOM_BYTES = 8_000
