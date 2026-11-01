@@ -878,6 +878,8 @@ test('T7 收尾：一个回合分成过程卡与正文气泡，卡不画时间�
   assert.ok(answer, '正文是另一行')
   assert.notStrictEqual(card, answer, '卡与正文不是同一行')
   assert.equal(card.includes('bp-tail'), false, '过程卡不画时间')
+  // 真机 probe2 第 1 条：过程卡的 children 里没有 msg-tail，也没有用量胶囊。
+  assert.equal(card.includes('usage-pill'), false, '过程卡也不带 usage')
   assert.match(card, /<details class="thinking"/, '思考块在卡里')
   // bash 一次 + grep 两次：同一次连跑的工具折成一条过程行（processRows 的分组），
   // 状态已由 tool/result 回填成 done。
@@ -960,5 +962,47 @@ test('T7 收尾：正在写的那句话只出现一次——token 通道与记�
   await browser.flush()
   html = browser.node('bpMsgs').innerHTML
   assert.equal((html.match(/正在写的字/g) || []).length, 1, '两条通道画的是同一句，屏幕上只留一份')
+})
+
+/**
+ * 回合里带一张交付卡。真机 probe2（`F:\DSBOT\tmp\flows\t711d\probe2.json`）第 3 条：
+ * `message assistant`，children 只有 `presented-group`，**tail 为空**——交付卡单独
+ * 成一张卡，不并进正文那一条，也没有时间与 usage。落地页的 visibleMessages 本来就
+ * 把 deliverables/presented 单独 push（不带 turn），这里钉住映射后也是这个形态。
+ */
+function presentedTurnHistory() {
+  const base = Date.now()
+  const record = (seq, turn, step, type, data) => ({
+    event: {
+      type,
+      seq,
+      time: base + seq * 1000,
+      data: Object.assign(turn === null ? {} : { turn, step }, data || {}),
+    },
+    time: base + seq * 1000,
+  })
+  return {
+    hasMore: false,
+    events: [
+      record(1, null, null, 'user/message', { message: { source: { kind: 'user' }, content: [{ type: 'text', text: '出图了吗' }] } }),
+      record(2, 4, 80, 'assistant/message', { message: { content: [{ type: 'text', text: '图在这' }] } }),
+      record(3, 4, 80, 'deliverables/presented', { files: [{ path: '/tmp/out/a.png', description: '结果图' }] }),
+      record(4, 4, null, 'turn/end', { reason: { kind: 'completed' } }),
+    ],
+  }
+}
+
+test('T7 收尾：presented 单独成一张卡、不画时间，也不并进正文那一条', async () => {
+  const { rows } = await turnedRows({ history: presentedTurnHistory })
+  // user 一条 + 正文一条 + 交付卡一条 = 3 行：交付卡不是正文卡的附属。
+  assert.equal(rows.length, 3, '交付卡单占一行')
+  const fileRow = rows.find((row) => row.includes('presented-group'))
+  const textRow = rows.find((row) => row.includes('图在这'))
+  assert.ok(fileRow, '交付卡那行在')
+  assert.ok(textRow, '正文那行在')
+  assert.notStrictEqual(fileRow, textRow, '两张卡不是同一行')
+  assert.equal(fileRow.includes('bp-tail'), false, '交付卡不画时间')
+  assert.equal(fileRow.includes('usage-pill'), false, '交付卡也不带 usage')
+  assert.equal((textRow.match(/class="bp-tail"/g) || []).length, 1, '正文那条带自己的时间')
 })
 
