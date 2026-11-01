@@ -5,12 +5,14 @@
 // 所以从前那个「按行去重 workspaceId」的 Set 恒空——数出来的自然是 0，而不是没数。
 //
 // 真值在同页另一份快照里：`workspace/follow` 的 baseline（boot 已经把它给到手机），
-// 形状 `{ items: [{ workspaceId, path, title, sessionIds[] }] }`。于是判据只有一条：
-// 一个工作区「读到了」＝ 它的 `sessionIds` 与这一次的行有交集。
+// 形状 `{ items: [{ workspaceId, path, title, sessionIds[] }] }`。判据 v7 §3/§4 把这一格
+// 钉成「主页画出来的工作区卡数」：页面 `applyBootData` 把快照 items 逐条铺成 `workspaces`，
+// `renderWorkspaces` 一张工作区一张卡（空的也画），所以摘要里的 `workspaces` 就是
+// 过滤掉隐藏工作区后的 items 长度——不是「有行的才算」。
 //
-// 这一档钉四件事：①按快照交集数，不按行上的字段数（变异回去必红）；②Bot 团队那个
-// 工作区永不计入（它在主页上是要藏起来的）；③快照没到就报冷摘要，不编一个像真的 0；
-// ④形状不对的条目跳过而不是抛。
+// 这一档钉五件事：①按快照的卡片数报，不按行上的字段数报（变异回去必红）；②Bot 团队那个
+// 工作区永不计入（它在主页上是要藏起来的）；③快照没到、隐藏工作区未知时报 null，不编一个
+// 像真的 0；④形状不对的条目照样是一张卡（页面也不筛），而且不许抛；⑤7 键形状固定。
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { LanMobileBridge } from '../lib/bridge.js'
@@ -30,7 +32,10 @@ function makeBridge({ rows = [], items = [], hidden = 'w-bot' } = {}) {
   return bridge
 }
 
-test('the landing summary counts workspaces off the workspace snapshot, not off the session rows', () => {
+/** 七键，一个不多一个不少：四张卡只读这同一份形状（criteria v7 §3）。 */
+const LANDING_KEYS = ['ready', 'workspaces', 'sessions', 'messages', 'bots', 'botSessions', 'rooms']
+
+test('the landing summary counts the workspace cards the snapshot will paint, not the rows it read', () => {
   const bridge = makeBridge({
     rows: rowsOf(['s-1', 's-2']),
     items: [
@@ -41,22 +46,23 @@ test('the landing summary counts workspaces off the workspace snapshot, not off 
   })
   const summary = bridge.pageWarmSummary('landing')
   assert.equal(summary.ready, true)
-  assert.equal(summary.rows, 2, 'the row count is still what the list will paint')
-  assert.equal(summary.workspaces, 2,
-    'w-a and w-b hold rows that were read; w-c holds none of them, so it was not read either')
+  assert.deepEqual(Object.keys(summary), LANDING_KEYS, 'one shape for all four cards')
+  assert.equal(summary.sessions, 2, 'the row count is still what the list will paint')
+  assert.equal(summary.workspaces, 3,
+    'w-c holds none of these rows, but the landing still paints one card for it, so the card count is 3')
 })
 
-test('a workspace the rows never mention is not counted, whatever the snapshot holds', () => {
+test('a workspace with no rows yet is still a card, so it is still counted', () => {
   const bridge = makeBridge({
     rows: rowsOf(['s-1']),
     items: [
       { workspaceId: 'w-a', sessionIds: ['s-1'] },
       { workspaceId: 'w-b', sessionIds: [] },
-      { workspaceId: 'w-c', path: 'F:\\defws', title: 'no sessions field' },
+      { workspaceId: 'w-c', path: 'F:\\\\defws', title: 'no sessions field' },
     ],
   })
-  assert.equal(bridge.pageWarmSummary('landing').workspaces, 1,
-    'empty or missing sessionIds cannot vouch for a workspace')
+  assert.equal(bridge.pageWarmSummary('landing').workspaces, 3,
+    'applyBootData turns every item into a card; an empty card is still a card')
 })
 
 test('the Bot team workspace never counts, even when its sessions are among these rows', () => {
@@ -83,8 +89,15 @@ test('a snapshot that has not arrived omits the workspace count instead of inven
   // 2026-10-30 已把那张卡从主页退场（「隐藏就是两个工作区，未分组和DSBOT」）⇒ 主页此刻也画
   // 不出这一行。两侧读同一个 `unclaimedSessionIds`，所以这里与页面一致（判据 1 的 A===B）。
   const summary = bridge.pageWarmSummary('landing')
-  assert.deepEqual(summary, { ready: true, rows: 0, bots: 0, rooms: 0 })
-  assert.equal('workspaces' in summary, false, 'the field is absent, so the card leaves that cell alone')
+  assert.deepEqual(summary, {
+    ready: true,
+    workspaces: null,
+    sessions: 0,
+    messages: null,
+    bots: null,
+    botSessions: null,
+    rooms: null,
+  })
 })
 
 test('an unresolved Bot workspace id also omits the count, since nothing can be excluded yet', () => {
@@ -96,11 +109,18 @@ test('an unresolved Bot workspace id also omits the count, since nothing can be 
     hidden: null,
   })
   const summary = bridge.pageWarmSummary('landing')
-  assert.deepEqual(summary, { ready: true, rows: 1, bots: 0, rooms: 0 })
-  assert.equal('workspaces' in summary, false)
+  assert.deepEqual(summary, {
+    ready: true,
+    workspaces: null,
+    sessions: 1,
+    messages: null,
+    bots: null,
+    botSessions: null,
+    rooms: null,
+  })
 })
 
-test('malformed workspace entries are skipped, never thrown on', () => {
+test('malformed snapshot entries become cards too (the page does not filter them), and never throw', () => {
   const bridge = makeBridge({
     rows: rowsOf(['s-1']),
     items: [
@@ -111,11 +131,22 @@ test('malformed workspace entries are skipped, never thrown on', () => {
       { workspaceId: 'w-c', sessionIds: ['s-1'] },
     ],
   })
-  assert.equal(bridge.pageWarmSummary('landing').workspaces, 1, 'only the well-formed workspace with a matching row counts')
+  let summary
+  assert.doesNotThrow(() => {
+    summary = bridge.pageWarmSummary('landing')
+  }, 'a malformed snapshot is a card count, not an exception')
+  assert.equal(summary.workspaces, 5, 'applyBootData spreads every item into a card, so all five are painted')
 })
 
 test('an empty landing says ready with nothing read, rather than lying about either', () => {
   const bridge = makeBridge({ rows: [], items: [{ workspaceId: 'w-a', sessionIds: ['s-1'] }] })
-  assert.deepEqual(bridge.pageWarmSummary('landing'), { ready: true, rows: 0, workspaces: 0, bots: 0, rooms: 0 },
-    'no rows read means no workspace was read either')
+  assert.deepEqual(bridge.pageWarmSummary('landing'), {
+    ready: true,
+    workspaces: 1,
+    sessions: 0,
+    messages: null,
+    bots: null,
+    botSessions: null,
+    rooms: null,
+  }, 'no rows read yet, but the one workspace card is still painted')
 })

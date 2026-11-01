@@ -12,7 +12,7 @@
 // 文字内容，不是字符串匹配。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderMobileReconnectPage, renderPairingPinPage } from '../lib/pages.js'
+import { countTailMessages, renderMobileReconnectPage, renderPairingPinPage } from '../lib/pages.js'
 
 const html = renderMobileReconnectPage('zh', 'lan', {})
 const script = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
@@ -28,7 +28,7 @@ const grab = (start, end) => {
 const ORGANS =
   grab('let ladderGated=false;', 'const COUNT_UP_MS=') +
   grab('const COUNT_UP_MS=', 'function setCount(') +
-  grab('function setCount(', '\nconst rpc=')
+  grab('function setCount(', 'const rpc=')
 const STAGE_RUNNER = grab('const stageRunner=(setStep)', 'async function verifyPin(')
 // The shipped runner, lifted verbatim: the page calls it as `stageRunner(openRow)`.
 const makeStageRunner = new Function(`${STAGE_RUNNER};return stageRunner;`)()
@@ -164,7 +164,7 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
 
   const run = new Function(
     'document', 'matchMedia', 'requestAnimationFrame', 'setTimeout', 'clearTimeout', 'Date',
-    `${ORGANS};return {countUp,paintCount,releaseCount,setCount,stepCountEl,gateLadder,startRowScan,stopRowScan,countTailMessages}`,
+    `${ORGANS};return {countUp,paintCount,releaseCount,setCount,stepCountEl,gateLadder,startRowScan,stopRowScan,paintStageSums}`,
   )
   const api = run(documentStub, matchMedia, fakeRaf, fakeSetTimeout, fakeClearTimeout, DateShim)
 
@@ -186,12 +186,10 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
     // legs going out together, so an answer that arrives later must not look like a
     // later departure.
     calls.push({ method, at: clock.now })
+    // The shipped rpc() no longer paints a row itself (criteria v7 §3): the card's
+    // numbers come from the boot payload's stageSummary, once, in the boot leg.
     return new Promise((resolve) => {
       fakeSetTimeout(() => {
-        const index = method === 'workspace.list' ? 0 : 1
-        const n = method === 'workspace.list' ? value.workspaces : value.sessions
-        const unit = method === 'workspace.list' ? ' 个工作区' : ' 个会话'
-        api.countUp(api.stepCountEl(index), n, (v) => `${v}${unit}`)
         resolve({ ok: true, value: {} })
       }, delays[method] === undefined ? 0 : delays[method])
     })
@@ -201,7 +199,16 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
     calls.push({ method: 'boot', at: clock.now })
     return new Promise((resolve) => {
       fakeSetTimeout(() => {
-        resolve({ ok: true, json: async () => ({ ws: { items: [] }, sess: { items: [] }, tails }) })
+        resolve({
+          ok: true,
+          json: async () => ({
+            ws: { items: [] },
+            sess: { items: [] },
+            tails,
+            // 判据 v7 §3：冷开页的卡片读这一份（裁决 R7：替身补 stageSummary，断言文本不动）。
+            stageSummary: { ready: true, workspaces: 3, sessions: 2, messages: countTailMessages(tails) },
+          }),
+        })
       }, delays.boot === undefined ? 0 : delays.boot)
     })
   }
@@ -212,14 +219,14 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
   const deps = [
     'document', 'location', 'fetch', 'sessionStorage', 'setTimeout', 'clearTimeout', 'requestAnimationFrame',
     '$', 'ROW_UNIT', 'T', 'ZH', 'stopRowScan', 'releaseCount', 'stageRunner', 'gateLadder',
-    'withRetry', 'rpc', 'withTimeout', 'FETCH_TIMEOUT_MS', 'bgTailsPromise', 'countTailMessages',
-    'countUp', 'stepCountEl', 'setCount', 'shellReady', 'SHELL_ASSETS', 'diag', 'fail',
+    'withRetry', 'rpc', 'withTimeout', 'FETCH_TIMEOUT_MS', 'bgTailsPromise',
+    'paintStageSums', 'countUp', 'stepCountEl', 'setCount', 'shellReady', 'SHELL_ASSETS', 'diag', 'fail',
   ]
   const values = [
     documentStub, location, fetchStub, sessionStorage, fakeSetTimeout, fakeClearTimeout, fakeRaf,
     (id) => elements[id] || null, ROW_UNIT, T, true, api.stopRowScan, api.releaseCount, makeStageRunner, api.gateLadder,
     async (fn) => fn(), (method) => read(method, { workspaces: 3, sessions: 2 }), async (p) => p, 8000, null,
-    api.countTailMessages, api.countUp, api.stepCountEl, api.setCount, Promise.resolve(), {},
+    api.paintStageSums, api.countUp, api.stepCountEl, api.setCount, Promise.resolve(), {},
     () => {}, fail,
   ]
   const runner = new Function(...deps, `${RUN_STAGES}\nreturn runStages;`)

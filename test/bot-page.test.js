@@ -740,6 +740,12 @@ function fakeBrowser({
     },
   }
   const location = { hash: '', href: '', origin: 'http://127.0.0.1:9896', pathname: '/bot', search: '' }
+  // 判据 v7 §2 / 裁决 R5：出口只剩 location.replace('/')——back 提交后本文档就卸载了，
+  // 落点无从校验，所以替身必须提供 replace，并把落点记进同一个历史账本。
+  location.replace = (url) => {
+    historyReplaced.push([url])
+    location.href = url
+  }
   // Timers are collected instead of fired, so a test can choose the moment: the
   // page arms one timeout per rpc (its own give-up) and one per toast.
   const timers = []
@@ -866,7 +872,11 @@ test('the way out says how much of the landing is already warm, on the row that 
   // 用户 2026-10-27②：「中间页也应该有数据的显示（即加载了多少数据的显示）」。
   // 四步卡片快步走完只要 280ms，那时桥还什么都没说；现在它等 bridge 的答复（1.6s
   // 兜底），把「读了多少会话 / 是否就绪」写在自己的那两行上。
-  const page = fakeBrowser({ answer: (method) => (method === 'page.cue' ? { rows: 12, workspaces: 3, ready: true } : {}) })
+  const page = fakeBrowser({
+    answer: (method) => (method === 'page.cue'
+      ? { ready: true, workspaces: 3, sessions: 12, messages: null, bots: null, botSessions: null, rooms: null }
+      : {}),
+  })
   await page.settle()
   assert.equal(SHELL.counts, SHELL.steps, 'every step carries one slot for its number')
   page.click('bpHome', { preventDefault() {} })
@@ -888,7 +898,9 @@ test('a cold summary never overwrites the numbers the page already holds with ze
     answer: (method) => {
       if (method === 'bot.team') return teamWith()
       if (method === 'session.history') return { events: [saidByBot('预读过的一句', 400)], hasMore: false }
-      if (method === 'page.cue') return { ready: false, rows: 0, workspaces: 0 }
+      if (method === 'page.cue') {
+        return { ready: false, workspaces: 0, sessions: 0, messages: 0, bots: null, botSessions: null, rooms: null }
+      }
       return {}
     },
   })
@@ -916,7 +928,9 @@ test('the card outlasts the bridge’s own wait before giving up on the numbers'
   assert.deepEqual(page.navigations, [], '1.2s is inside the bridge’s window; leaving here is what loses the numbers')
   page.fireTimers(1600)
   await page.settle()
-  assert.deepEqual(page.navigations, ['back'], 'its own bound reaching 1.6s is what lets the card go')
+  assert.deepEqual(page.navigations, [], 'the bound that lets the card go replaces this entry with the landing')
+  assert.deepEqual(page.historyReplaced, [['/']], 'and the entry it replaces points at the landing')
+  assert.equal(page.historyReplaced[0][0], '/', 'the landing is exactly /')
 })
 
 test('a chat the roster already read opens with its rows and does not read them again', async () => {
@@ -2473,7 +2487,9 @@ test('the list shows the way home, and taking it says so before leaving', async 
   assert.ok(cue, 'the hop says so while this page is still going, on the request the browser finishes for a dying document')
   assert.equal(cue.payload.page, 'landing',
     'and it names the page it is heading for: the way out lands on the Pocket page')
-  assert.deepEqual(page.navigations, ['back'], 'and the landing is reached by going back, not by a new entry')
+  assert.deepEqual(page.navigations, [], 'the landing is reached by replacing this entry, not by stepping back into it')
+  assert.deepEqual(page.historyReplaced, [['/']], 'and the entry it replaces points at the landing')
+  assert.equal(page.historyReplaced[0][0], '/', 'the landing is exactly /')
 })
 
 test('the last word on the way out rides a keepalive request, because the answer is needed', async () => {
@@ -2521,7 +2537,9 @@ test('the way out shows every step, and strikes a row only once its reading is s
   assert.ok(page.switchSteps.every((step) => step.classList.contains('is-done')),
     'the last row settles every open row, so the card never leaves with an unstruck line')
   assert.equal(cueCount(), 1, 'and only then does it say its one word')
-  assert.deepEqual(page.navigations, ['back'], 'with the landing reached the way it came in')
+  assert.deepEqual(page.navigations, [], 'the landing is reached by replacing this entry')
+  assert.deepEqual(page.historyReplaced, [['/']], 'and the entry it replaces points at the landing')
+  assert.equal(page.historyReplaced[0][0], '/', 'the landing is exactly /')
 })
 
 // 判据 6D：完成文字落屏之后要停 0.5 秒再走（t1 - t0 ∈ [500,1200]ms），而且这 0.5 秒
@@ -2529,7 +2547,11 @@ test('the way out shows every step, and strikes a row only once its reading is s
 // ①「已就绪」落屏那一刻还没开始走；②下一档就是整整 500ms 的停留，不是 60ms 的余量；
 // ③读数没到（fail-closed 写「未就绪」）这条路上不做这次停留，仍按原来的兜底放行。
 test('the way out dwells half a second after the completion line, on its own timer', async () => {
-  const page = fakeBrowser({ answer: (method) => (method === 'page.cue' ? { rows: 12, workspaces: 3, ready: true } : {}) })
+  const page = fakeBrowser({
+    answer: (method) => (method === 'page.cue'
+      ? { ready: true, workspaces: 3, sessions: 12, messages: null, bots: null, botSessions: null, rooms: null }
+      : {}),
+  })
   await page.settle()
   page.click('bpHome', { preventDefault() {} })
   // 桥的答复在微任务里就到了（真机也是 1.6s 上限内先答）。Q1 起四行由同一份
@@ -2546,7 +2568,9 @@ test('the way out dwells half a second after the completion line, on its own tim
   // 让「已就绪」几乎与跳转同帧，用户根本看不到（判据 §2 第 6 条）。
   page.fireTimers(500)
   await page.settle()
-  assert.deepEqual(page.navigations, ['back'], 't1: half a second after t0, and not before')
+  assert.deepEqual(page.navigations, [], 't1: half a second after t0, the way out replaces this entry')
+  assert.deepEqual(page.historyReplaced, [['/']], 'and the entry it replaces points at the landing')
+  assert.equal(page.historyReplaced[0][0], '/', 'the landing is exactly /')
 })
 
 test('the way out does not pretend it read the landing: no dwell on the not-ready branch', async () => {
@@ -2559,14 +2583,18 @@ test('the way out does not pretend it read the landing: no dwell on the not-read
   assert.equal(page.switchCounts[3].textContent, '未就绪', 'the card says the landing is cold instead of "已就绪"')
   // 未就绪这一档的停留是 0ms（ladderRun 的 notReadyDwellMs: 0）：文字落屏就离开，
   // 一次 500ms 的停留都没挣到，也不该被它拖慢。
-  assert.deepEqual(page.navigations, ['back'], 'the cold branch leaves without the half-second dwell it never earned')
+  assert.deepEqual(page.navigations, [], 'the cold branch still leaves by replacing this entry')
+  assert.deepEqual(page.historyReplaced, [['/']], 'and the entry it replaces points at the landing')
+  assert.equal(page.historyReplaced[0][0], '/', 'the landing is exactly /')
   // 反证：那一档 500ms 的停留表根本不存在，烧它也不会再走一次。
   // 说清这条验的是什么：它证明的是 onDone 的幂等守卫（ladder 里 `if(left)return`）
   // 挡住重复交棒，不证明「停留时长」——停留时长由上面 6D 那组的 dwellTimer 断言管。
   // 别把它读成时序证据：这个断言在任何时长的实现下都能绿。
   page.fireTimers(500)
   await page.settle()
-  assert.deepEqual(page.navigations, ['back'], 'and no dwell table was left behind for that 500ms to burn')
+  assert.deepEqual(page.navigations, [], 'and the way out is a replace, not a step back')
+  assert.deepEqual(page.historyReplaced, [['/']], 'and the entry it replaces points at the landing')
+  assert.equal(page.historyReplaced[0][0], '/', 'the landing is exactly /')
 })
 
 // 判据 6D 的承重断言：停留必须挂在自己的表上。只断言「500ms 后才走」的话，把
@@ -2919,7 +2947,11 @@ test('the landing card counts the Bots the page already knows, before anything a
     boot: null,
     assets: { cssUrl: '/app.css?h=1', jsUrl: '/app.js?h=2' },
   })
-  assert.match(html, /var bots=0,chats=0;/, 'counts the distinct Bot names this page already holds')
+  assert.match(html, /var lockRow=function\(i\)\{if\(!cueDone\|\|!cueSummary\)return null;/, 'every cell waits for the bridge cue, and none is pre-filled locally')
+  assert.match(html, /typeof cueSummary\.bots==="number"\?cueSummary\.bots:null/, 'the Bot count is the summary field, not a local tally')
+  assert.match(html, /typeof cueSummary\.botSessions==="number"\?cueSummary\.botSessions:null/, 'and so is the Bot-session count')
+  assert.match(html, /typeof cueSummary\.rooms==="number"\?cueSummary\.rooms:null/, 'and the room count')
+  assert.doesNotMatch(html, /var bots=0,chats=0;/, 'no local counter survives for the landing card')
   // Q1 口径 B：页面已知的读数不再预填进任何缓冲，也没有「先写着、激活时覆盖」的第二条路径——
   // 轮到哪一行，lockRow 就在那一刻现取（pre-cue 有读数的要求本身没变）。
   assert.doesNotMatch(html, /cardCounts\[0\]=/, 'no stashed count is painted ahead of the row that owns it')
@@ -2931,7 +2963,10 @@ test('the landing card counts the Bots the page already knows, before anything a
 })
 
 test('the BOT page counts the chats it already read, before the cue answers', () => {
-  assert.match(BOT_PAGE_JS, /var previewRows = 0/, 'counts the previews already in hand')
+  assert.match(BOT_PAGE_JS, /var knownRows = 0/, 'counts only what this page already read, as a fallback')
+  assert.match(BOT_PAGE_JS, /if \(warm && typeof summary\.sessions === 'number'\) return summary\.sessions/, 'the summary field wins when the bridge answers')
+  assert.match(BOT_PAGE_JS, /if \(warm && typeof summary\.messages === 'number'\) return summary\.messages/, 'and so does the message count')
+  assert.doesNotMatch(BOT_PAGE_JS, /var previewRows = 0/, 'the old pre-cue tally is gone; the fallback is named for what it is')
   // 同一份行级规则：这些数只在轮到那一行时被 lock 现取，不预填、不提前写。
   assert.match(BOT_PAGE_JS, /var ladder = ladderRun\(\{/, 'the way-out card is driven by the shared ladder')
   assert.match(BOT_PAGE_JS, /lock: lock,/, 'and every row answers for itself when the ladder reaches it')

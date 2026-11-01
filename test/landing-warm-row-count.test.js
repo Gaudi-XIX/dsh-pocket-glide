@@ -1,8 +1,8 @@
 // BOT→Pocket 过渡卡「读取会话列表」的数（用户 2026-10-30 第 8 条：
 // 「bot切换到pocket的时候,会话数量显示有误」）。
 //
-// 用户看到的那个数来自 `pageWarmSummary('landing').rows`（BOT 侧 `lib/bot-page.js` 的
-// `printCounts` 把它写进卡片第 1 格）。修之前它读的是 `_sessionListValue` 里那份**未过滤的
+// 用户看到的那个数来自 `pageWarmSummary('landing').sessions`（判据 v7 §3 把这一格钉成
+// `sessions`；裁决 R1 之后 `rows` 别名已退役）。修之前它读的是 `_sessionListValue` 里那份**未过滤的
 // 原件**——Host `session/list` 的全量行（本机注释自认 469 行 / ~195 KB 量级），而主页真正画
 // 出来的只有其中「本工作区 + 置顶或 24 小时内」的那几十行。两侧不同源，量级差一个数量级。
 //
@@ -15,12 +15,13 @@
 //   ① `blankRowVisible`（陈旧空白行）——**已闭合**：它和 `BLANK_ROW_VISIBLE_MS` 都是
 //      `lib/pages.js` 的既有导出（`:201` / `:291`），桥侧 import 后直接调，零复制、不动
 //      `lib/pages.js`。闭合用例见下面「陈旧空白行」与「地板」两条。
-//   ② `lastMessageAtOf`（排序优先读手机 localStorage 的 `lastMessageAt`）——**登记，不可闭合**：
-//      桥是服务端，读不到手机 localStorage。它经 `sortAtOf` 影响 24h 判定边界，是真计数残差。
-//      闭合用例见「跨窗口」一条：`updatedAt` 与 `lastMessageAt` 同侧时两侧一致，差异为 0。
-//   ③ `mergeBotParts`（同一 Bot 多 part 折叠）——**本轮不闭合，登记为下一批单**：折叠逻辑住在
-//      页面投影里，注入要动 `lib/pages.js` 的导出/注入机制（属批次 A 写域）。方向固定为
-//      **A ≥ B**（桥不折叠 → 多算）。留差用例见「多 part」一条，差异逐条可指认。
+//   ② `lastMessageAtOf`（24h 窗口读手机 localStorage 的 `lastMessageAt`）——**本批闭合**：
+//      判据 v7 §3-B / 裁决 R2 之后窗口只用宿主 `updatedAt`（`bootRangeCap` 内联取
+//      `s.updatedAt`，页面不再拿 `sortAtOf` 判窗），localStorage 的 `lastMessageAt` 只留在
+//      `sortAtOf` 里决定行序与行首时钟。两侧的窗口判据因此同源。闭合用例见「跨窗口」一条。
+//   ③ `mergeBotParts`（同一 Bot 多 part 折叠）——**本批闭合**：`mergeBotParts` 提成
+//      `lib/pages.js` 的模块导出、页面用 `.toString()` 注入同一份源码，桥侧 import 后同样折叠
+//      （§3-A / 裁决 R2）。闭合用例见「多 part」一条，A === B。
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -223,7 +224,7 @@ test('A === B: the card and the landing paint the same number of rows, read thre
   ]
   const items = [{ workspaceId: 'w-a', sessionIds: rows.map((row) => row.sessionId) }]
   const three = [1, 2, 3].map(() => {
-    const A = makeBridge({ rows, items }).pageWarmSummary('landing').rows
+    const A = makeBridge({ rows, items }).pageWarmSummary('landing').sessions
     const B = taskRows(paintLanding({ workspaces: items, rows }))
     assert.equal(A, B, 'the card must report exactly the rows the landing paints (A === B, ±0)')
     return { A, B }
@@ -247,8 +248,8 @@ test('the card reports the rows the landing will paint, not the raw list it was 
   })
   const summary = bridge.pageWarmSummary('landing')
   assert.equal(summary.ready, true)
-  assert.equal(summary.rows, 2, '2 rows are inside the 24h window; the other 4 are not painted by default')
-  assert.notEqual(summary.rows, rows.length, 'the raw list length (6) is exactly the number the user saw as wrong')
+  assert.equal(summary.sessions, 2, '2 rows are inside the 24h window; the other 4 are not painted by default')
+  assert.notEqual(summary.sessions, rows.length, 'the raw list length (6) is exactly the number the user saw as wrong')
   assert.equal(summary.workspaces, 1)
 })
 
@@ -259,7 +260,7 @@ test('the count is the same read three times in a row', () => {
     rows: [rowOf('s-1', RECENT), rowOf('s-2', OLD)],
     items: [{ workspaceId: 'w-a', sessionIds: ['s-1', 's-2'] }],
   })
-  const three = [1, 2, 3].map(() => bridge.pageWarmSummary('landing').rows)
+  const three = [1, 2, 3].map(() => bridge.pageWarmSummary('landing').sessions)
   assert.deepEqual(three, [1, 1, 1], 'one of the two rows is inside 24h, and that does not drift')
 })
 
@@ -278,7 +279,7 @@ test('a stale blank row is hidden on both sides, so the difference is 0', () => 
     rowOf('s-new-blank', minute(1), { blank: true }),
   ]
   const items = [{ workspaceId: 'w-a', sessionIds: rows.map((row) => row.sessionId) }]
-  const A = makeBridge({ rows, items }).pageWarmSummary('landing').rows
+  const A = makeBridge({ rows, items }).pageWarmSummary('landing').sessions
   const B = taskRows(paintLanding({ workspaces: items, rows }))
   assert.equal(A, 2, 'the content row plus the one blank row younger than BLANK_ROW_VISIBLE_MS')
   assert.equal(B, 2, 'the landing hides the same stale blank row')
@@ -296,7 +297,7 @@ test('a row the page marked missingSummary is a ghost on both sides, however fre
     rowOf('s-ghost', minute(1), { blank: true, missingSummary: true }),
   ]
   const items = [{ workspaceId: 'w-a', sessionIds: rows.map((row) => row.sessionId) }]
-  const A = makeBridge({ rows, items }).pageWarmSummary('landing').rows
+  const A = makeBridge({ rows, items }).pageWarmSummary('landing').sessions
   const B = taskRows(paintLanding({ workspaces: items, rows }))
   assert.equal(B, 1, 'the landing never paints a missingSummary ghost, even one a minute old')
   assert.equal(A, 1, 'the bridge must not count it either')
@@ -310,55 +311,51 @@ test('a stale blank row does not eat the one-row floor of the window cap', () =>
   // 页面留 0 行——①的「差 0」就不成立了。
   const rows = [rowOf('s-old', day(3)), rowOf('s-ghost', day(2), { blank: true })]
   const items = [{ workspaceId: 'w-a', sessionIds: ['s-old', 's-ghost'] }]
-  const A = makeBridge({ rows, items }).pageWarmSummary('landing').rows
+  const A = makeBridge({ rows, items }).pageWarmSummary('landing').sessions
   const B = taskRows(paintLanding({ workspaces: items, rows }))
   assert.equal(B, 1, 'the landing keeps exactly the one old row the floor allows, and it is not the ghost')
   assert.equal(A, B, 'the floor is computed after the blank filter on both sides')
 })
 
 // ---------------------------------------------------------------------------
-// 残差② 登记：跨 24h 窗口边界
+// 残差② 已闭合：跨 24h 窗口边界
 // ---------------------------------------------------------------------------
 test('rows straddling the 24h window edge are counted the same on both sides', () => {
   // 判据 `:319`：跨窗口这一类的差异必须**已经闭合后为 0**。
-  // 两侧的窗口判据同源：页面 `bootRangeCap`(`lib/pages.js:2274`) 用
-  // `sortAtOf(s) >= now - RECENT_WINDOW_MS`，桥 `bootVisibleRows`(`lib/bridge.js:1009`) 用
-  // `stampOf(id) >= now - BOOT_RECENT_WINDOW_MS`，两个常量都是 86400000。
-  // 残差② `lastMessageAtOf` 只有在「`updatedAt` 在窗外、手机侧的 `lastMessageAt` 在窗内」时才
-  // 会造出差异——那是桥读不到 localStorage 的物理边界，不是本用例的构造。这里所有行都没有
-  // 手机侧 `lastMessageAt`（沙箱的 `lastMessageAt` 表为空），两侧走同一条 `updatedAt` 判据。
+  // 两侧的窗口判据同源：页面 `bootRangeCap` 的 `s.updatedAt >= now - RECENT_WINDOW_MS`（判据
+  // v7 §3-B / 裁决 R2 之后窗口只认宿主 `updatedAt`），桥 `bootVisibleRows` 用
+  // `stampOf(id) >= now - BOOT_RECENT_WINDOW_MS`，两个常量都是 86400000。残差②原来描述的
+  // 「手机侧 lastMessageAt 在窗内、updatedAt 在窗外」这一分叉已随窗口口径统一消失。
   const rows = [
     rowOf('s-in', NOW - DAY_MS + 3_600_000), // 窗内，差 1 小时
     rowOf('s-out', NOW - DAY_MS - 3_600_000), // 窗外，差 1 小时
     rowOf('s-in2', NOW - DAY_MS + 60_000), // 窗内，贴着边
   ]
   const items = [{ workspaceId: 'w-a', sessionIds: rows.map((row) => row.sessionId) }]
-  const A = makeBridge({ rows, items }).pageWarmSummary('landing').rows
+  const A = makeBridge({ rows, items }).pageWarmSummary('landing').sessions
   const B = taskRows(paintLanding({ workspaces: items, rows }))
   assert.equal(A, 2, 'two rows are inside the 24h window and one is outside')
   assert.equal(A, B, 'the window edge is read with the same rule on both sides')
 })
 
 // ---------------------------------------------------------------------------
-// 残差③ 登记：多 part（本轮留差，方向固定 A ≥ B）
+// 残差③ 已闭合：多 part（A === B）
 // ---------------------------------------------------------------------------
-test('several parts of one Bot stay a known difference, and the bridge over-counts (A >= B)', () => {
-  // 判据 `:311-313` + `:319`：只有「多 part」这一类允许本轮留差，方向固定 **A ≥ B**
-  // （桥不折叠 → 多算），且多算的行必须能逐条指出来。
-  // 页面 `mergeBotParts`(`lib/pages.js:1928`) 按 `botName` 折同一 Bot 的多个 part，只留最新一行；
-  // 桥没有这一步。构造：`Helper` 两个 part（各一行）+ 一个普通会话。
+test('several parts of one Bot fold into one row on both sides (A === B)', () => {
+  // 判据 v7 §3-A / 裁决 R2：本批把「桥多算一行」这条残差闭合。页面 `mergeBotParts` 按
+  // `botName` 折同一 Bot 的多个 part，只留最新一行；桥侧读的是同一个模块导出，所以两侧
+  // 折出来的行数必须相等。构造：`Helper` 两个 part（各一行）+ 一个普通会话。
   const rows = [
     rowOf('s-helper-old', minute(40), { projections: { values: { botName: 'Helper', title: 'helper' } } }),
     rowOf('s-helper-new', minute(5), { projections: { values: { botName: 'Helper', title: 'helper' } } }),
     rowOf('s-plain', minute(20), { projections: { values: { title: 'plain' } } }),
   ]
   const items = [{ workspaceId: 'w-a', sessionIds: rows.map((row) => row.sessionId) }]
-  const A = makeBridge({ rows, items }).pageWarmSummary('landing').rows
+  const A = makeBridge({ rows, items }).pageWarmSummary('landing').sessions
   const B = taskRows(paintLanding({ workspaces: items, rows }))
   assert.equal(B, 2, 'the landing folds the two Helper parts into one row: Helper + plain')
-  assert.equal(A, 3, 'the bridge does not fold, so it counts both parts')
-  assert.equal(A - B, 1, 'the difference is exactly the one folded part')
-  assert.ok(A >= B, 'residual ③ has a fixed direction: the bridge over-counts (A >= B), never under-counts')
+  assert.equal(A, 2, 'the bridge reads the same mergeBotParts, so it folds the same way')
+  assert.equal(A - B, 0, 'residual ③ is closed: the folded part is not counted twice')
 })
 
 // ---------------------------------------------------------------------------
@@ -376,7 +373,7 @@ test('sessions of the hidden Bot-team workspace are never part of the number', (
     ],
     hidden: 'w-bot',
   })
-  assert.equal(bridge.pageWarmSummary('landing').rows, 1, 'only the row the landing can paint is counted')
+  assert.equal(bridge.pageWarmSummary('landing').sessions, 1, 'only the row the landing can paint is counted')
 })
 
 test('subagent rows are not counted, even in a workspace that holds nothing else', () => {
@@ -389,7 +386,7 @@ test('subagent rows are not counted, even in a workspace that holds nothing else
       { workspaceId: 'w-c', sessionIds: ['s-sub'] },
     ],
   })
-  assert.equal(bridge.pageWarmSummary('landing').rows, 1)
+  assert.equal(bridge.pageWarmSummary('landing').sessions, 1)
 })
 
 test('a pinned row survives the window, and an unclaimed row is not painted at all', () => {
@@ -401,7 +398,7 @@ test('a pinned row survives the window, and an unclaimed row is not painted at a
   const rows = [rowOf('s-pin', OLD), rowOf('s-old', OLD), rowOf('s-orp', OLD)]
   const items = [{ workspaceId: 'w-a', sessionIds: ['s-pin', 's-old'] }]
   const bridge = makeBridge({ rows, items, pinnedSessionIds: ['s-pin'] })
-  const A = bridge.pageWarmSummary('landing').rows
+  const A = bridge.pageWarmSummary('landing').sessions
   const B = taskRows(paintLanding({ workspaces: items, rows, pinned: ['s-pin'] }))
   assert.equal(A, 1, 'the pinned row; the old unpinned row is behind the window edge and the unclaimed row has no card to land on')
   assert.equal(A, B, 'and the landing paints exactly that one row')
@@ -415,8 +412,8 @@ test('a few hundred live rows are reported in full, not truncated to a round num
     items: [{ workspaceId: 'w-a', sessionIds }],
   })
   const summary = bridge.pageWarmSummary('landing')
-  assert.equal(summary.rows, 250)
-  assert.notEqual(summary.rows, 200, '200 would be a ceiling, and there is none')
+  assert.equal(summary.sessions, 250)
+  assert.notEqual(summary.sessions, 200, '200 would be a ceiling, and there is none')
 })
 
 // ---------------------------------------------------------------------------

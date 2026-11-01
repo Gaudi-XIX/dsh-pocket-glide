@@ -10,7 +10,7 @@
 // a stub DOM and asserts the request really goes out and the count lands.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { renderMobileReconnectPage, renderPairingPinPage } from '../lib/pages.js'
+import { bootRangeCap, renderMobileReconnectPage, renderPairingPinPage } from '../lib/pages.js'
 
 function stubElement(extra = {}) {
   return {
@@ -48,8 +48,11 @@ function buildHarness({
 } = {}) {
   const script = extractScript(html)
   const counts = []
-  const children = Array.from({ length: rows }, () => {
-    const count = stubElement()
+  // The shipped pages seed every counted row with "0 + 它的量词"; the harness
+  // mirrors that so "rpc() does not paint" is observable as "the seed is intact".
+  const seeds = ['0 个工作区', '0 个会话', '0 条消息', '0', '0']
+  const children = Array.from({ length: rows }, (_, i) => {
+    const count = stubElement({ textContent: seeds[i] || '0' })
     counts.push(count)
     return stubElement({ querySelector: (sel) => (sel === '.bsc' ? count : null) })
   })
@@ -103,7 +106,7 @@ function buildHarness({
     Error
   }
   const names = Object.keys(scope)
-  const factory = new Function(...names, `${script}\nreturn { rpc, countStepIndex, stepCountEl, T }`)
+  const factory = new Function(...names, `${script}\nreturn { rpc, paintStageSums, stepCountEl, T }`)
   return { api: factory(...names.map((name) => scope[name])), requests, counts, script }
 }
 
@@ -119,12 +122,16 @@ test('reconnect page: rpc() sends the request instead of throwing', async () => 
 test('reconnect page: workspace count lands on the first ladder row', async () => {
   const { api, counts } = buildHarness({ html: renderMobileReconnectPage('zh', 'tunnel', {}) })
   await api.rpc('workspace.list')
+  assert.equal(counts[0].textContent, '0 个工作区', 'rpc() reads the list, it does not paint the ladder (v7 §3)')
+  api.paintStageSums({ workspaces: 2, sessions: 2 })
   assert.equal(counts[0].textContent, '2 个工作区')
 })
 
 test('reconnect page: session count lands on the second ladder row', async () => {
   const { api, counts } = buildHarness({ html: renderMobileReconnectPage('zh', 'tunnel', {}) })
   await api.rpc('session.list', { limit: 10 })
+  assert.equal(counts[1].textContent, '0 个会话', 'rpc() reads the list, it does not paint the ladder (v7 §3)')
+  api.paintStageSums({ workspaces: 2, sessions: 2 })
   assert.equal(counts[1].textContent, '2 个会话')
 })
 
@@ -134,68 +141,72 @@ test('reconnect page: only the 24-hour window and the pins reach the session cou
   // items.length 读到 6835，而首页只会显示置顶与一天之内更新过的那几行。
   const now = Date.now()
   const stale = now - 3 * 24 * 60 * 60 * 1000
-  const { api, counts } = buildHarness({
-    html: renderMobileReconnectPage('zh', 'tunnel', {}),
-    sessions: [
-      { sessionId: 'old1', updatedAt: stale },
-      { sessionId: 'old2', updatedAt: stale },
-      { sessionId: 'pinned-old', updatedAt: stale },
-      { sessionId: 'fresh1', updatedAt: now - 60_000 },
-      { sessionId: 'fresh2', updatedAt: now - 120_000 }
-    ],
-    pinned: ['pinned-old']
-  })
-  await api.rpc('workspace.list')
-  await api.rpc('session.list')
-  assert.equal(counts[1].textContent, '3 个会话', 'two fresh rows plus one pinned row, not the five the catalogue holds')
+  const tasks = [
+    { sessionId: 'old1', updatedAt: stale },
+    { sessionId: 'old2', updatedAt: stale },
+    { sessionId: 'pinned-old', updatedAt: stale },
+    { sessionId: 'fresh1', updatedAt: now - 60_000 },
+    { sessionId: 'fresh2', updatedAt: now - 120_000 }
+  ]
+  assert.equal(
+    bootRangeCap(tasks, now, new Set(['pinned-old'])),
+    3,
+    'two fresh rows plus one pinned row, not the five the catalogue holds'
+  )
 })
 
 test('reconnect page: an all-stale catalogue still counts one row', async () => {
   // 与主页 bootRangeCap 同一个地板：窗口里一行都没有时首页仍会显示至少一行，
   // 阶梯就该数 1，读者看到的数字要等于他接下来真看到的行数。
   const stale = Date.now() - 30 * 24 * 60 * 60 * 1000
-  const { api, counts } = buildHarness({
-    html: renderMobileReconnectPage('zh', 'tunnel', {}),
-    sessions: [
-      { sessionId: 'a', updatedAt: stale },
-      { sessionId: 'b', updatedAt: stale }
-    ]
-  })
-  await api.rpc('workspace.list')
-  await api.rpc('session.list')
-  assert.equal(counts[1].textContent, '1 个会话')
+  const tasks = [
+    { sessionId: 'a', updatedAt: stale },
+    { sessionId: 'b', updatedAt: stale }
+  ]
+  assert.equal(bootRangeCap(tasks, Date.now(), new Set()), 1, 'nothing inside the window still leaves the one row the landing paints')
 })
 
 test('reconnect page: subagent rows stay out of the session count', async () => {
   // 主页把这些行交给子代理栏（splitSubagentRows），它们不在会话列表里；
   // 阶梯数的是「首页会显示的行」。
   const now = Date.now()
-  const { api, counts } = buildHarness({
-    html: renderMobileReconnectPage('zh', 'tunnel', {}),
-    sessions: [
-      { sessionId: 'main1', updatedAt: now },
-      { sessionId: 'sub1', origin: 'subagent', updatedAt: now },
-      { sessionId: 'sub2', origin: 'subagent', updatedAt: now }
-    ]
-  })
-  await api.rpc('workspace.list')
-  await api.rpc('session.list')
-  assert.equal(counts[1].textContent, '1 个会话')
+  const tasks = [
+    { sessionId: 'main1', updatedAt: now },
+    { sessionId: 'sub1', origin: 'subagent', updatedAt: now },
+    { sessionId: 'sub2', origin: 'subagent', updatedAt: now }
+  ].filter((row) => row.origin !== 'subagent')
+  assert.equal(bootRangeCap(tasks, now, new Set()), 1, 'subagent rows never reach the landing count')
 })
 
 test('reconnect page: english locale counts in english', async () => {
   const { api, counts } = buildHarness({ html: renderMobileReconnectPage('en', 'tunnel', {}) })
   await api.rpc('workspace.list')
+  assert.equal(counts[0].textContent, '0 个工作区', 'rpc() reads the list, it does not paint the ladder (v7 §3)')
+  api.paintStageSums({ workspaces: 2, sessions: 2 })
   assert.equal(counts[0].textContent, '2 ws')
 })
 
-test('PIN page: rpc() sends the request and maps rows for the five-step ladder', async () => {
+test('PIN page: rpc() sends the request, and the five-step ladder maps rows 1..3', async () => {
   const { api, requests, counts } = buildHarness({ html: renderPairingPinPage('zh'), rows: 5 })
-  assert.equal(api.countStepIndex('workspace.list'), 1)
-  assert.equal(api.countStepIndex('session.list'), 2)
   await api.rpc('session.list', { limit: 10 })
   assert.equal(requests.filter((r) => r.body.method === 'session.list').length, 1)
-  assert.equal(counts[2].textContent, '2 个会话')
+  assert.deepEqual(
+    counts.map((count) => count.textContent),
+    ['0 个工作区', '0 个会话', '0 条消息', '0', '0'],
+    'rpc() does not paint: the summary does (v7 §3)'
+  )
+  api.paintStageSums({ workspaces: 2, sessions: 3, messages: 5 })
+  assert.equal(counts[1].textContent, '2 个工作区', 'the PIN ladder starts counting on its second row')
+  assert.equal(counts[2].textContent, '3 个会话')
+  assert.equal(counts[3].textContent, '5 条消息', 'the "reading the conversation" row shows the summary messages')
+  assert.equal(counts[0].textContent, '0 个工作区', 'the connection row never takes a count')
+
+  const reconnect = buildHarness({ html: renderMobileReconnectPage('zh', 'tunnel', {}), rows: 4 })
+  reconnect.api.paintStageSums({ workspaces: 2, sessions: 3, messages: 5 })
+  assert.equal(reconnect.counts[0].textContent, '2 个工作区', 'the four-row ladder still counts from row 0')
+  assert.equal(reconnect.counts[1].textContent, '3 个会话')
+  assert.equal(reconnect.counts[2].textContent, '5 条消息')
+  assert.equal(reconnect.counts[3].textContent, '0', 'its last row is the preparing label, not a count')
 })
 
 test('the in-flight odometer is gone, so no row can show a numbers-only fake', () => {
@@ -221,9 +232,17 @@ test('every countUp() call site passes a formatter, never a bare expression', ()
       // the row lookup — a window is enough to see its shape without parsing JS.
       sites.push(script.slice(at, at + 90))
     }
-    assert.ok(sites.length >= 2, 'expected the guided ladder to count at least two rows')
+    assert.ok(sites.length >= 1, 'expected the guided ladder to count its summary rows')
+    assert.ok(
+      script.includes('const suffix=ROW_UNIT[unit]();'),
+      'each row derives its own unit formatter from ROW_UNIT'
+    )
     for (const site of sites) {
-      assert.match(site, /(?:\(|,)\s*(?:\(\s*v\s*\)|v)\s*=>/, `countUp() needs a formatter arrow, saw: ${site.slice(0, 90)}`)
+      assert.match(
+        site,
+        /(?:\(|,)\s*(?:\(\s*[A-Za-z_$][\w$]*\s*\)|[A-Za-z_$][\w$]*)\s*=>/,
+        `countUp() needs a formatter arrow, saw: ${site.slice(0, 90)}`
+      )
     }
   }
 })

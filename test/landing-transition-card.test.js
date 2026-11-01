@@ -4,7 +4,8 @@
 //
 // 四条口径（来自任务卡 rounds[3].intentSnapshot §2）：
 //   A3  行按数据到达逐行定稿——亮起第 k 行时第 k-1 行必须已定稿，卡上不存在「下面已划线、
-//       上面还空着」；预填的读数在 cue 答复之前就该在第一、二行上。
+//       上面还空着」；数字只有一个来源：桥端 page.cue 的 7 键摘要（判据 v7 §3 / 裁决 R6），
+//       cue 没到之前四行都只滚动、不定稿。
 //   A4  从点击到离开这整段时间，遮罩可见、四行都在 DOM（不许为秒开另开一条跳过卡的分支）。
 //   A5  数据和答复都在手时不推任何固定等待，跑完微任务就交棒。
 //   A6  答复失败（ok:false / fetch reject）fail-closed：卡上写明失败、不写「已就绪」、不跳转。
@@ -45,7 +46,11 @@ function landingHead() {
  * 一个够用的替身：录下每一次 is-active / is-done 的翻转（连带当时前一行的定稿状态）、
  * 用一个假时钟接管 setTimeout/setInterval，location.href 的赋值记成一次导航。
  */
-function harness({ cue = 'ok', value = { bots: 2, rooms: 3, ready: true }, summaries = [{ botName: 'a' }, { botName: 'a' }, { botName: 'b' }] } = {}) {
+function harness({
+    cue = 'ok',
+    value = { ready: true, workspaces: null, sessions: null, messages: null, bots: 2, botSessions: 3, rooms: 3 },
+    summaries = [{ botName: 'a' }, { botName: 'a' }, { botName: 'b' }]
+  } = {}) {
   const navigations = []
   const timers = new Map()
   const log = { active: [], done: [] }
@@ -119,14 +124,17 @@ function harness({ cue = 'ok', value = { bots: 2, rooms: 3, ready: true }, summa
   function clearTimeoutStub(id) { timers.delete(id) }
   function setTimeoutNoop() { return 0 }
 
+  let releaseCue = null
   const fetchStub =
     cue === 'reject'
       ? () => Promise.reject(new Error('offline'))
       : cue === 'never'
         ? () => new Promise(() => {})
-        : cue === 'not-ok'
-          ? () => Promise.resolve({ json: () => Promise.resolve({ ok: false }) })
-          : () => Promise.resolve({ json: () => Promise.resolve({ ok: true, value }) })
+        : cue === 'manual'
+          ? () => new Promise((resolve) => { releaseCue = resolve })
+          : cue === 'not-ok'
+            ? () => Promise.resolve({ json: () => Promise.resolve({ ok: false }) })
+            : () => Promise.resolve({ json: () => Promise.resolve({ ok: true, value }) })
 
   const boot = new Function(
     'window', 'document', 'getComputedStyle', 'fetch', 'navigator', 'location',
@@ -151,6 +159,12 @@ ${landingBootstrap()}`,
       return handlers.click
     },
     click() { handlers.click({ preventDefault() {} }) },
+    answer(summary = value) {
+      if (!releaseCue) throw new Error('no cue request is in flight')
+      const resolve = releaseCue
+      releaseCue = null
+      resolve({ json: () => Promise.resolve({ ok: true, value: summary }) })
+    },
     // 只把微任务跑完，不动假时钟——用来区分「数据到齐就立刻走」和「等到某个定时器才走」。
     async flush() {
       for (let round = 0; round < 4; round += 1) await new Promise((resolve) => setImmediate(resolve))
@@ -191,30 +205,38 @@ test('过渡卡逐行定稿：亮起第 k 行时第 k-1 行已经定稿，划线
   assert.deepEqual(h.navigations, ['/bot'])
 })
 
-test('过渡卡：页面已知的读数在轮到那一行时就落笔，不等 cue 也不被固定节拍拖走', async () => {
-  const h = harness({ cue: 'never' })
+test('过渡卡：cue 未到之前一行都不定稿，到了才按阶梯顺序逐行定稿', async () => {
+  const h = harness({ cue: 'manual' })
   h.start()
   h.click()
 
   // 挂载那一帧：四行都先写占位（非末行「0＋单位」、末行保留「准备中」），扫描已经起了。
   assert.equal(h.rows[0].querySelector('.bsc').textContent, '0 个 BOT')
   assert.ok(h.rows[0].querySelector('.bsc')._scan, '第一行在等读数时是滚着的')
-  assert.equal(h.rows[2]._final, false)
+  assert.equal(h.rows[0]._final, false)
 
-  // 第一档（70ms）：第 0 行按本页已经握着的读数定稿，第 1 行亮起。
-  h.tick(70)
-  assert.equal(h.rows[0].querySelector('.bsc').textContent, '2 个 BOT')
-  assert.equal(h.rows[0]._final, true, '轮到的那一行立刻取本页已知的读数')
-  assert.equal(h.rows[1]._active, true)
-  assert.equal(h.rows[1]._final, false)
-
-  // 第二档：第 1 行定稿；等 cue 的那一行只点亮、不定稿。
-  h.tick(70)
-  assert.equal(h.rows[1].querySelector('.bsc').textContent, '3 个会话')
-  assert.equal(h.rows[1]._final, true)
-  assert.equal(h.rows[2]._active, true)
-  assert.equal(h.rows[2]._final, false, '还在等 cue 的那一行不会被提前定稿')
+  // 阶梯一路走到末行，cue 还没回：四行只滚动、一行都不许定稿（v7 §3 / R6）。
+  for (let step = 0; step < ROWS.length; step += 1) h.tick(70)
+  await h.flush()
+  assert.deepEqual(
+    h.rows.map((row) => row._final),
+    [false, false, false, false],
+    'cue 没到，卡上不许出现任何定稿读数'
+  )
+  assert.match(h.rows[0].querySelector('.bsc').textContent, /^\d+ 个 BOT$/, '仍停在滚动占位读数上')
   assert.deepEqual(h.navigations, [])
+  assert.equal(h.failRow.hidden, true, '还在等 cue，不是失败')
+
+  // cue 落地：已亮起的行按顺序补上摘要里的数，末行写成「已就绪」。
+  h.answer()
+  await h.flush()
+  assert.equal(h.rows[0].querySelector('.bsc').textContent, '2 个 BOT')
+  assert.equal(h.rows[1].querySelector('.bsc').textContent, '3 个会话', '第二格取自摘要的 botSessions')
+  assert.equal(h.rows[2].querySelector('.bsc').textContent, '3 个群')
+  assert.equal(h.rows[3].querySelector('.bsc').textContent, '已就绪')
+  for (let index = 0; index < ROWS.length; index += 1) {
+    assert.equal(h.rows[index]._final, true, `第 ${index} 行在 cue 到达后定稿`)
+  }
 })
 
 test('过渡卡：数据与答复都在手时不推任何固定等待，逐档推完就交棒', async () => {

@@ -12,7 +12,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { renderMobileReconnectPage, renderPairingPinPage } from '../lib/pages.js'
+import { countTailMessages, renderMobileReconnectPage, renderPairingPinPage } from '../lib/pages.js'
 
 const source = readFileSync(new URL('../lib/pages.js', import.meta.url), 'utf8')
 const blockStart = source.indexOf('function sharedStageScript()')
@@ -32,10 +32,10 @@ const ORGANS =
   grab('const COUNT_UP_MS=', 'function setCount(') +
   grab('function setCount(', '\nconst rpc=')
 
-// Build a bootSteps host with `rows` rows, each carrying one .bsc span.
-function makeWorld({ reduced = false } = {}) {
+// Build a bootSteps host with `rowCount` rows, each carrying one .bsc span.
+function makeWorld({ reduced = false, rowCount = 5 } = {}) {
   const seeds = ['0 个工作区', '0 个会话', '0 条消息', '0', '0']
-  const rows = Array.from({ length: 5 }, (_, i) => {
+  const rows = Array.from({ length: rowCount }, (_, i) => {
     const el = { textContent: seeds[i] }
     return { el, querySelector: (sel) => (sel === '.bsc' ? el : null) }
   })
@@ -58,7 +58,7 @@ function makeWorld({ reduced = false } = {}) {
   // walked in a handful of frames instead of real time.
   let now = 0
   const DateShim = { now: () => now }
-  const run = new Function('document', 'matchMedia', 'requestAnimationFrame', 'setTimeout', 'Date', `${ORGANS};return {countUp,paintCount,releaseCount,setCount,stepCountEl,gateLadder,startRowScan,stopRowScan,countTailMessages}`)
+  const run = new Function('document', 'matchMedia', 'requestAnimationFrame', 'setTimeout', 'Date', `${ORGANS};return {countUp,paintCount,releaseCount,setCount,stepCountEl,gateLadder,startRowScan,stopRowScan,paintStageSums}`)
   const api = run(document, matchMedia, requestAnimationFrame, setTimeoutShim, DateShim)
   const pump = (frames = 40) => {
     for (let i = 0; i < frames && (queue.length || timers.length); i += 1) {
@@ -126,7 +126,9 @@ test('both bootstrap pages carry the climbing organs exactly once', () => {
     const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
     assert.equal(count(scripts, 'function countUp('), 1, `${name}: one countUp definition`)
     assert.equal(count(scripts, 'function stepCountEl('), 1, `${name}: one stepCountEl definition`)
-    assert.ok(count(scripts, 'countUp(stepCountEl(') >= 2, `${name}: at least the ws + session counts climb`)
+    assert.equal(count(scripts, 'function paintStageSums('), 1, `${name}: one place paints the summary onto the ladder`)
+    assert.ok(count(scripts, 'paintStageSums(') >= 2, `${name}: that one place is actually wired into the page`)
+    assert.ok(scripts.includes('sum.workspaces') && scripts.includes('sum.sessions') && scripts.includes('sum.messages'), `${name}: all three counted rows come from the summary`)
   }
 })
 
@@ -253,20 +255,33 @@ test('the conversation row counts messages, not preloaded packs', () => {
     // Failed packs carry no conversation at all and must not be counted as one.
     c: { error: 'timeout' },
   }
-  assert.equal(api.countTailMessages(tails), 3)
-  assert.equal(api.countTailMessages({}), 0)
-  assert.equal(api.countTailMessages(null), 0)
-  assert.equal(api.countTailMessages({ a: { events: [] } }), 0)
+  assert.equal(countTailMessages(tails), 3)
+  assert.equal(countTailMessages({}), 0)
+  assert.equal(countTailMessages(null), 0)
+  assert.equal(countTailMessages({ a: { events: [] } }), 0)
   // The shipped pages use this exact helper for that row, and no longer count packs.
   for (const [name, html] of [
     ['reconnect', renderMobileReconnectPage('zh', 'lan', {})],
     ['pairing', renderPairingPinPage('zh', null, {})],
   ]) {
     const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
-    assert.ok(scripts.includes('countTailMessages(parsed.tails)'), `${name}: the conversation row counts messages`)
+    assert.equal(scripts.includes('countTailMessages'), false, `${name}: the page does not count messages itself (v7 §3)`)
     assert.equal(scripts.includes("' 组消息'"), false, `${name}: the pack wording is gone`)
     assert.ok(scripts.includes("' 条消息'"), `${name}: the row says how many messages`)
   }
+  // The row takes its number from the boot payload's stageSummary — one summary,
+  // one field, painted on the row the summary owns: index 3 on the 5-row PIN
+  // ladder, index 2 on the 4-row reconnection ladder (R8-0).
+  const bootPayload = { stageSummary: { ready: true, workspaces: 2, sessions: 3, messages: 5 } }
+  const pin = makeWorld({ reduced: true, rowCount: 5 })
+  pin.api.paintStageSums(bootPayload.stageSummary)
+  assert.equal(pin.text(1), '2 ws', 'the PIN ladder paints workspaces on its second row')
+  assert.equal(pin.text(2), '3 sess', 'and sessions on its third row')
+  assert.equal(pin.text(3), '5 msg', 'its "reading the conversation" row shows stageSummary.messages itself')
+  const reconnect = makeWorld({ reduced: true, rowCount: 4 })
+  reconnect.api.paintStageSums(bootPayload.stageSummary)
+  assert.equal(reconnect.text(0), '2 ws', 'the reconnection ladder still starts counting on row 0')
+  assert.equal(reconnect.text(2), '5 msg', 'and shows stageSummary.messages on row 2')
 })
 
 test('the ladder rows start at 0, ready to crawl from the moment a row opens', () => {
