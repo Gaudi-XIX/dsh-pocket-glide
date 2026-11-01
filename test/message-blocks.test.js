@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs'
 import { BOT_PAGE_JS, renderBotPage } from '../lib/bot-page.js'
 import { mobilePageAssets, messageBlocksScript, messageBlocksLabels } from '../lib/pages.js'
 import { applyDescendantRunning, isRecord } from '../lib/projections.js'
+import { withSessionErrors, noteSessionTurnEnd } from '../lib/session-stream.js'
 
 /** 判据 §3 的注入清单：17 个函数与各自的 UTF-8 字节数，合计 13486。不许增减。 */
 const BLOCK_WEIGHTS = {
@@ -89,6 +90,7 @@ const botTeamView = vm.runInNewContext(`(${sliceFunction(BRIDGE_SOURCE, 'botTeam
 const sessionRowHasError = vm.runInNewContext(`(${sliceFunction(BRIDGE_SOURCE, 'sessionRowHasError')})`, {})
 const botTeamPrefetchContext = vm.runInNewContext(`({${extractMethod(BRIDGE_SOURCE, 'botTeamPrefetchContext')}})`, {
   applyDescendantRunning,
+  withSessionErrors,
   sessionRowHasError,
   Array,
   Map,
@@ -460,6 +462,52 @@ test('T7：没有块的行整格不动（user 行仍是文本渲染）', async (
   )
 })
 
+test('T7（跨轮询）：第一轮画 running，第二轮读回的 done 必须进屏，行数与位置不变', async () => {
+  // 同一条 seq=2 的 assistant 记录被读两次：第一次只有 tool-call（运行中），
+  // 第二次多一条 tool/result（完成）。轮询走 mergeRows，同 seq 若整条丢掉新行，
+  // .process-line 就永远停在 running（判据 T7 缺口 3）。
+  let withResult = false
+  const browser = fakeBrowser({
+    openedAt: { 's-repo': Date.now() },
+    answer: (method) => {
+      if (method === 'bot.team') return teamAnswer()
+      if (method === 'session.history') {
+        const now = Date.now()
+        const record = (seq, type, data) => ({ event: { type, seq, time: now, data }, time: now })
+        const events = [
+          record(1, 'user/message', { message: { source: { kind: 'user' }, content: [{ type: 'text', text: '跑一下' }] } }),
+          record(2, 'assistant/message', {
+            message: { content: [{ type: 'tool-call', id: 'call-9', name: 'Bash', arguments: { command: 'sleep 1' } }] },
+          }),
+        ]
+        if (withResult) {
+          events.push(record(3, 'tool/result', {
+            message: { toolCallId: 'call-9', content: [{ type: 'tool-result', content: [{ type: 'text', text: 'ok' }] }] },
+          }))
+        }
+        return { hasMore: false, events }
+      }
+      if (method === 'bot.earlier') return { cursor: null, items: [] }
+      return {}
+    },
+  })
+  await browser.flush()
+  await browser.openChat('s-repo')
+  const before = browser.node('bpMsgs').innerHTML
+  assert.match(before, /<div class="process-line" data-state="running"/, '第一轮只有 tool-call ⇒ 运行中')
+  assert.equal((before.match(/class="bp-msg message assistant/g) || []).length, 1, '第一轮只有一行助手')
+
+  // 第二轮：5 秒轮询读到同一条记录 + 工具结果。定时器只记录不触发，这里手动推。
+  withResult = true
+  browser.fireTimers(5000)
+  await browser.flush()
+  const after = browser.node('bpMsgs').innerHTML
+  assert.match(after, /<div class="process-line" data-state="done"/, '读回的 done 必须替换掉第一轮的 running')
+  assert.equal(after.includes('data-state="running"'), false, '不许还留着 running')
+  assert.equal((after.match(/class="bp-msg message assistant/g) || []).length, 1, '同 seq 不新增行，位置不变')
+  assert.ok(after.indexOf('跑一下') < after.indexOf('process-line'), '行序不变：用户行仍在助手行之前')
+})
+
 test('T9：更早的记录里每一条消息行与 divider 都带时间', async () => {
   const browser = bootChat()
   await browser.flush()
@@ -599,19 +647,28 @@ test('T8（页）：打开会话后账本记成已读并 debounce 上推给桥',
 
 test('T8/T10（桥）：error 与 descendantRunning 由 prefetch 上下文供，旧调用路径不出现这两个键', () => {
   const items = [
-    { sessionId: 's1', updatedAt: 111, running: false, status: 'error' },
+    { sessionId: 's1', updatedAt: 111, running: false },
     { sessionId: 's2', origin: 'subagent', parentSessionId: 's1', running: true },
     { sessionId: 's3', updatedAt: 222, running: false },
   ]
-  const ctx = botTeamPrefetchContext.call({
+  const bridge = {
     workspaceSnapshot: { pinnedSessionIds: [] },
     _sessionListValue: { result: { ok: true, value: { items } } },
+    now: () => 1_760_000_000_000,
+  }
+  // 生产上原始 session/list 行没有 error 字段（lib/session-stream.js:194-197）：
+  // is-error 只能来自桥自己的 turn/end tally，由 withSessionErrors 叠上去。
+  const quiet = botTeamPrefetchContext.call(bridge)
+  assert.equal(quiet.errorOf('s1'), false, 'tally 里没有记录就不亮')
+  noteSessionTurnEnd(bridge, 's1', {
+    event: { type: 'turn/end', data: { reason: { kind: 'error', error: { message: 'boom' } } } },
   })
+  const ctx = botTeamPrefetchContext.call(bridge)
+  assert.equal(ctx.errorOf('s1'), true, '桥 tally 记到的失败必须让 errorOf 为 true')
+  assert.equal(ctx.errorOf('s3'), false, 'tally 里没有的会话仍是 false')
   assert.equal(ctx.descendantRunningOf('s1'), true, '子孙在跑 ⇒ 父行标 descendantRunning')
   assert.equal(ctx.descendantRunningOf('s3'), false, '没有子孙在跑就是 false')
   assert.equal(ctx.descendantRunningOf('s2'), false, '还在跑的那一行自己的 running 已经是 true，不靠这个标记')
-  assert.equal(ctx.errorOf('s1'), true, 'sessionRowHasError 判据：status=error')
-  assert.equal(ctx.errorOf('s3'), false)
 
   const answer = {
     revision: 1,
@@ -629,10 +686,10 @@ test('T8/T10（桥）：error 与 descendantRunning 由 prefetch 上下文供，
   const legacy = plain(botTeamView(answer, { pinnedIds: new Set(), updatedAtOf: () => 0 }))
   assert.equal('descendantRunning' in legacy.bots[0], false)
   assert.equal('error' in legacy.bots[0], false)
-  // 首次 session/list 还没回来：两张表留空，取值器照旧存在但答 false。
+  // 首次 session/list 还没回来：两张表留空，错误答 false、子孙答 undefined。
   const cold = botTeamPrefetchContext.call({ workspaceSnapshot: { pinnedSessionIds: [] }, _sessionListValue: null })
   assert.equal(cold.errorOf('s1'), false)
-  assert.equal(cold.descendantRunningOf('s1'), false)
+  assert.equal(cold.descendantRunningOf('s1'), undefined, '没读到过的行答 undefined，不是 false')
 })
 
 test('T10（桥）：applyDescendantRunning 是唯一一份标记实现，桥只消费它', () => {
