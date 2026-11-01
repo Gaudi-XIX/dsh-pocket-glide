@@ -30,13 +30,18 @@ test('the Bot page is its own document: structure, hashed links, never cached', 
     assert.match(html, /id="bpBack"/, 'the back button returns to the list')
     assert.match(html, /<title>BOT<\/title>/)
 
-    // 外链与主页同规矩：按内容 hash 取，改一次就换一个地址。
+    // 样式表仍按内容 hash 取，改一次就换一个地址。
     const css = html.match(/<link rel="stylesheet" href="(\/app\.css\?h=[0-9a-f]+)">/)
-    const js = html.match(/<script src="(\/bot\.js\?h=[0-9a-f]+)"><\/script>/)
     assert.ok(css, 'the stylesheet link is content-addressed')
-    assert.ok(js, 'the script link is content-addressed')
-    assert.doesNotMatch(html, /<script>/, 'no inline script: the page rides on the external one')
-    assert.doesNotMatch(html, /nonce/, 'no nonce plumbing: nothing inline to guard')
+    // R10-B（2026-11-01）：首帧不许是骨架。文档把 roster 与每行最新一页内联给页面脚本，
+    // 脚本也在解析期内联执行——所以这里钉的是「内联载荷 + 内联脚本本体」，
+    // 而不是外链 <script src>：外链脚本下载的那段时间里，首帧只能是一张空壳。
+    assert.doesNotMatch(html, /<script src=/, 'no external script: it would paint an empty shell first')
+    assert.match(html, /<script>window\.__BOT_BOOT__=/, 'the document carries the roster and previews inline')
+    const inline = html.match(/<script>([\s\S]*?)<\/script>\)?$/m)
+    assert.ok(html.includes('<script>' + BOT_PAGE_JS + '</script>'),
+      'the shipped script is inlined byte for byte, so it runs while the document is still parsing')
+    assert.doesNotMatch(html, /nonce/, 'no nonce plumbing: nothing cross-origin to guard')
 
     // 外链必须真的取得到，而且款式来自共享的壳样式表。
     const sheet = await httpFetch(t.base + css[1], { headers: { cookie } })
@@ -436,7 +441,7 @@ const SHELL = shellShape()
 const SHELL_IDS = SHELL.ids
 
 /** 预热清单（不是白名单——权威是上面的 `SHELL_IDS`）：先把页面要碰的节点造出来。 */
-const PAGE_IDS = ['bpBack', 'bpHome', 'bpReload', 'bpTitle', 'bpHint', 'bpBar', 'bpList', 'bpSkel', 'bpMembersList', 'bpMsgs', 'bpComposer', 'bpPrompt', 'bpSettings', 'bpSettingsPanel', 'bpSend', 'bpToast', 'bpSwitchOverlay']
+const PAGE_IDS = ['bpBack', 'bpHome', 'bpReload', 'bpTitle', 'bpHint', 'bpBar', 'bpList', 'bpMembersList', 'bpMsgs', 'bpComposer', 'bpPrompt', 'bpSettings', 'bpSettingsPanel', 'bpSend', 'bpToast', 'bpSwitchOverlay']
 
 // 判据 9 的队列断言要跑的是页面上真正发出去的那个 `previewQueue`，所以从
 // `BOT_PAGE_JS` 里把它抠出来在 vm 里求值——同一个函数体、同一份常量，不是另抄一遍。
@@ -3431,27 +3436,32 @@ test('restart asks first, and only then posts the same request the desktop sheet
 
 // ---------- Q3：切入瞬间的大空白 --------------------------------
 
-test('the roster slot is born the skeleton\u2019s height, so nothing jumps when the skeleton retires', () => {
-  const html = renderBotPage({ cssUrl: '/app.css?h=1', jsUrl: '/bot.js?h=2' })
+test('the roster is painted from the document itself, so no skeleton ever appears', () => {
+  const view = {
+    mainBotIds: ['b1'],
+    bots: [{ id: 'b1', name: 'Curator', sessionId: 's1', updatedAt: 2_000 }],
+    rooms: [],
+    questions: { count: 0 },
+    work: { approvals: [] }
+  }
+  const html = renderBotPage({
+    cssUrl: '/app.css?h=1',
+    jsUrl: '/bot.js?h=2',
+    boot: { team: view, previews: { s1: { events: [{ seq: 1, type: 'user/message', turnId: 't1', text: 'hi' }], hasMore: false } } }
+  })
 
-  // 判据原文给的两条路，这里两条都走：
-  // ① 骨架脱流——bp-ready 撤掉的只是一个浮层，成员列表的 top 从头到尾就是滚动盒顶部。
-  assert.match(html, /\.bp-skel\{position:absolute;inset:0 0 auto;/,
-    'the skeleton floats above the list instead of pushing it down')
-  assert.match(html, /#bpList\{position:relative\}/,
-    'and the scroll box is the containing block it floats in')
-  // ② 成员列表的最小高度与骨架同高（数字从骨架自己的 CSS 算出来，不另抄一份）。
-  const rowHeight = Number(html.match(/\.bp-skel-row\{height:(\d+)px/)[1])
-  const gap = Number(html.match(/\.bp-skel\{position:absolute;inset:0 0 auto;z-index:0;display:grid;gap:(\d+)px/)[1])
-  const rows = (html.match(/<div class="bp-skel-row"><\/div>/g) || []).length
-  const minHeight = Number(html.match(/#bpMembersList\{min-height:(\d+)px\}/)[1])
-  assert.equal(rows, 4, 'the skeleton keeps its four rows')
-  assert.equal(minHeight, rows * rowHeight + (rows - 1) * gap,
-    'the roster slot is exactly as tall as the skeleton it replaces')
-
-  // 判据明令排除的那条路：给滚动盒设 min-height 恒通过、拦不住子元素上移。
-  assert.doesNotMatch(html, /#bpList\{[^}]*min-height/,
-    'the scroll box is left alone: its own top never moved')
+  // R10-B：骨架整套退场——文档里不许再有骨架节点、骨架样式或「先浮层后替换」的等高补偿。
+  assert.doesNotMatch(html, /bp-skel/, 'no skeleton classes remain')
+  assert.doesNotMatch(html, /#bpSkel/, 'and no skeleton node')
+  assert.doesNotMatch(html, /#bpMembersList\{min-height:/, 'no height compensator to keep the slot from jumping')
+  // 首帧的来源是文档自己：roster 与预览页内联、脚本内联，所以解析完就是最终画面。
+  assert.match(html, /<script>window\.__BOT_BOOT__=\{"team":\{"mainBotIds":\["b1"\]/,
+    'the roster is in the document before any script runs')
+  assert.ok(html.indexOf('window.__BOT_BOOT__=') < html.indexOf('<script>' + BOT_PAGE_JS),
+    'payload first, then the inline page script that paints it')
+  // 打开会话不再写「读取中…」占位（R10-B2）：那一段已经删掉了。
+  assert.doesNotMatch(html, /\$\('bpMsgs'\)\.innerHTML = '<p class="bp-empty">读取中…/,
+    'the transcript never starts as a placeholder that is replaced a moment later')
 })
 
 // ---------- 2026-10-31 复验：顶栏收口 / 列表底留白 / 闲置行绿勾 ----------
