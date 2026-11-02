@@ -8,8 +8,11 @@
 //       cue 没到之前四行都只滚动、不定稿。
 //   A4  从点击到离开这整段时间，遮罩可见、四行都在 DOM（不许为秒开另开一条跳过卡的分支）。
 //   A5  数据和答复都在手时不推任何固定等待，跑完微任务就交棒。
-//   A6  答复失败（ok:false / fetch reject）fail-closed：卡上写明失败、不写「已就绪」、不跳转。
-//   A7  答复永不到达：2000ms（桥侧 pageCueWaitMs=1500 + 500 余量）后报错，不跳转，之后也不自行放行。
+//   A6  答复失败（ok:false / fetch reject）收卡离场：卡上写明失败、不写「已就绪」，
+//       随即收卡并 replace 到 /bot。原契约是「失败不离开页面」，716 判据 R15-8.1 有意
+//       改写它——本节断言按新契约改写，不是被弱化（逐条清单见交付报告）。
+//   A7  答复永不到达：2000ms（桥侧 pageCueWaitMs=1500 + 500 余量）到点同样收卡离场
+//       （R15-8.1），并且只导航这一次。
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { pocketToBotRows, renderMobilePage } from '../lib/pages.js'
@@ -274,50 +277,77 @@ test('过渡卡在交棒之前一直是可见的，四行也都在 DOM 里', asy
   assert.deepEqual(h.navigations, [], '这一帧还不该跳走')
 })
 
-test('答复失败（fetch reject）时 fail-closed：卡上写明失败、不写已就绪、不跳转', async () => {
+test('答复失败（fetch reject）时收卡离场：卡不再留在屏上，也不写「已就绪」', async () => {
   const h = harness({ cue: 'reject' })
   h.start()
   h.click()
   await h.flush()
 
-  assert.deepEqual(h.navigations, [])
-  assert.equal(h.failRow.hidden, false, '失败行必须显形')
+  assert.deepEqual(h.navigations, ['/bot'], '失败必须离场（R15-8.1）')
+  assert.equal(h.overlay.hidden, true, '失败必须收卡（R15-8.1）')
+  assert.equal(h.failRow.hidden, false, '失败行仍按 R15-4.5 的唯一文案来源写明原因')
   assert.match(h.failRow.textContent, /再试一次/)
   assert.ok(!h.rows[3].querySelector('.bsc').textContent.includes('已就绪'))
 })
 
-test('答复被桥拒绝（ok:false）同样 fail-closed', async () => {
+test('答复被桥拒绝（ok:false）同样收卡离场', async () => {
   const h = harness({ cue: 'not-ok' })
   h.start()
   h.click()
   await h.flush()
 
-  assert.deepEqual(h.navigations, [])
+  assert.deepEqual(h.navigations, ['/bot'], '回包 ok!==true 是失败判定，必须离场（R15-8.1）')
+  assert.equal(h.overlay.hidden, true, '并且收卡（R15-8.1）')
   assert.equal(h.failRow.hidden, false)
   assert.ok(!h.rows[3].querySelector('.bsc').textContent.includes('已就绪'))
 })
 
-test('答复永不到达：2000ms 后报错、不跳转，再等 5s 也不自行放行', async () => {
+test('回包里没有可用摘要（ready:false）同样收卡离场，不在末行干等', async () => {
+  const h = harness({ cue: 'manual' })
+  h.start()
+  h.click()
+  for (let step = 0; step < ROWS.length; step += 1) h.tick(70)
+  await h.flush()
+  assert.deepEqual(h.navigations, [], 'cue 还没回，卡还在等')
+
+  // 答复是冷的（ready 非 true、无一个真数字）：四格都不可能成值。旧实现把它记进
+  // cueSummary，阶梯停在末行等一个永远不会来的值，而看门狗已被清掉——那也是一条滞留路。
+  h.answer({ ready: false, workspaces: null, sessions: null, messages: null, bots: null, botSessions: null, rooms: null })
+  await h.flush()
+
+  assert.deepEqual(h.navigations, ['/bot'], '无可用摘要是失败判定，必须离场（R15-8.1）')
+  assert.equal(h.overlay.hidden, true, '并且收卡（R15-8.1）')
+  assert.ok(!h.rows[0].querySelector('.bsc').textContent, '冷摘要的第一格仍留白，不落 0')
+  assert.ok(!h.rows[3].querySelector('.bsc').textContent.includes('0'), '末格不许出现字符串 0')
+  for (const row of h.rows) {
+    assert.ok(!row.querySelector('.bsc').textContent.includes('未就绪'), '卡上任何一格都不许出现「未就绪」')
+  }
+})
+
+test('答复永不到达：2000ms 到点收卡离场，不在卡上留人', async () => {
   const h = harness({ cue: 'never' })
   h.start()
   h.click()
   await h.flush()
 
   assert.deepEqual(h.navigations, [])
+  assert.equal(h.overlay.hidden, false, '还没到 2000ms，卡还在等——不是提前失败')
   assert.equal(h.failRow.hidden, true, '还没到 2000ms，不该提前报错')
   h.tick(1999)
   assert.equal(h.failRow.hidden, true)
+  assert.deepEqual(h.navigations, [], '到点之前不导航')
   h.tick(1)
   assert.equal(h.failRow.hidden, false, '到 2000ms 必须报错')
   assert.match(h.failRow.textContent, /准备超时/)
-  assert.deepEqual(h.navigations, [])
+  assert.equal(h.overlay.hidden, true, '到点必须收卡（R15-8.1）')
+  assert.deepEqual(h.navigations, ['/bot'], '到点必须离场（R15-8.1）')
 
   h.tick(5000)
-  assert.deepEqual(h.navigations, [], '报错之后不许自行放行')
+  assert.deepEqual(h.navigations, ['/bot'], '离场只发生一次，之后不再重复导航')
   assert.equal(h.failRow.hidden, false)
   assert.ok(!h.rows[3].querySelector('.bsc').textContent.includes('已就绪'))
-  // 判据 V5：这一帧与之后任何一帧都不许出现「未就绪」，末格也不许出现字符串 0——
-  // 收口是留白＋#switchFail 显形，不是拿一个假读数把卡填满（R15-3.2/3.3 删掉了
+  // 判据 V5/R15-8.3：这一帧与之后任何一帧都不许出现「未就绪」，末格也不许出现字符串 0——
+  // 收口是收卡离场＋#switchFail 显形，不是拿一个假读数把卡填满（R15-3.2/3.3 删掉了
   // 「未就绪」那条路：旧实现到点会往末格写它，失败收口还会把 0 补上去）。
   for (const row of h.rows) {
     assert.ok(!row.querySelector('.bsc').textContent.includes('未就绪'), '卡上任何一格都不许出现「未就绪」')
