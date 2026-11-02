@@ -15,7 +15,6 @@ import {
   renderMobileReconnectPage,
   renderPairingPinPage
 } from '../lib/pages.js'
-import { BOT_PAGE_JS } from '../lib/bot-page.js'
 
 // The reconnect handoff and the pairing page used to carry their own copy of the
 // same five stage functions. They now pull one block from `sharedStageScript()`,
@@ -164,16 +163,14 @@ test('PARSE: every inline script of every phone page actually parses', () => {
     }
   }
 
-  // The bot page's script is served on its own route (/bot.js), so it never
-  // reaches the inline-block walk above — yet it is built the same way (a
-  // String.raw template that emits JavaScript) and took the shared markdown
-  // injection on 2026-10-27, so it gets the same parse gate.
-  try {
-    new vm.Script(BOT_PAGE_JS, { filename: 'bot.js' })
-  } catch (error) {
-    assert.fail(`the bot page script does not parse: ${error.message}`)
-  }
+  // The bot page used to ship its own script on a separate route, so it never
+  // reached the inline-block walk above and got its own parse gate here.
+  // That separate gate is now retired: /bot answers a 302 to the landing (Task 1)
+  // and the old BOT page module is gone (Task 3), so there is no standalone bot script to
+  // parse any more. The shell the phone actually runs — the zh/en app.js asset —
+  // is gated by the loop directly above, so "every shipped JS parses" stays intact.
 })
+
 
 // 阶梯的<定义位置>是这份文档能不能跑的前提，不只是字节问题。
 //
@@ -185,7 +182,7 @@ test('PARSE: every inline script of every phone page actually parses', () => {
 // `window.__pocketAppReady=true` 照常置位——遮罩永久停在「正在进入 Pocket」，列表空白。
 //
 // 三条既有测试都看不见它：handoff-boot-dedup 只称字节，landing-transition-card 只把
-// bootstrap 抽出来跑（主脚本被替身掉），bot-page 只对字符串做 match。这条测试钉的是
+// bootstrap 抽出来跑（主脚本被替身掉），旧 BOT 页用例只对字符串做 match。这条测试钉的是
 // 顺序本身：定义必须出现在外链 script 标签之前，且全文只有一份定义。
 test('the ladder is defined before the external app.js that already calls it', () => {
   for (const locale of ['zh', 'en']) {

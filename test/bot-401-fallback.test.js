@@ -1,24 +1,35 @@
-// Q4 配套② · `/bot` 401 兜底（判据：ui-unify-pocket-bot-20261030「第 4 条补充 · Q4 返回键行为」）
+// Q4 配套② · `/bot` 的退场（判据①「BOT 整页取消」，change 2026-11-02-feature-pocket-page-refactor）
 //
-// 背景：Pocket 落地页用 `location.replace('/bot')` 交出自己的历史条目，于是 `/bot`
-// 变成无前序文档可退的最后一跳。若未授权时它只回一行纯文本 401，手机上就彻底
-// 失去回到 Pocket 重新配对的入口。所以只对 `/bot` 这条路回一个带按钮的 401 页，
-// 其余未授权路径的 401 形状（纯文本 `Pair your phone again.`）必须原样不动。
+// 背景：2026-11-02 页面重构后 `/bot` 不再是自己的文档，路由里只留一条 302 指回 `/`
+// （lib/bridge.js:6402-6404）。这条 302 放在授权检查之前（:6406），所以未配对手机与已配对
+// 手机走同一跳，旧「未配对时回带按钮的 401 页」的特判随 BOT 页一并删除。此处钉状态码
+// 302 与 `location` 头，其余未授权路径的 401 形状（纯文本 `Pair your phone again.`）必须原样不动。
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { httpFetch, startBridge } from './helpers.js'
 
-test('an unpaired /bot answers 401 with a page that carries the way back to Pocket', async () => {
+test('an unpaired /bot is a 302 back to the landing page', async () => {
   const app = await startBridge()
   try {
     const res = await httpFetch(`${app.base}/bot`, {
       headers: { 'user-agent': 'PocketUnpaired/1.0' },
     })
-    const body = await res.text()
-    assert.equal(res.status, 401, 'the refusal still is a refusal')
-    assert.match(body, /<button[^>]*id="pocket-back"/, 'the page carries a button')
-    assert.match(body, /location\.replace\('\/'\)/, 'the button goes back to the Pocket root')
-    assert.match(body, /<script nonce="[^"]+"/, 'the inline script rides the per-request nonce')
+    assert.equal(res.status, 302, 'the hop is the redirect itself, not a document')
+    assert.equal(res.headers.get('location'), '/', 'and it lands on the one page that exists now')
+    assert.equal(await res.text(), '', 'the 302 carries no body of its own')
+  } finally {
+    await app.stop()
+  }
+})
+
+test('a paired /bot takes the same 302 hop as an unpaired one', async () => {
+  const app = await startBridge()
+  try {
+    const { base } = app
+    const cookie = await app.pairMobile()
+    const res = await httpFetch(`${base}/bot`, { headers: { cookie } })
+    assert.equal(res.status, 302, 'the redirect sits above the authorization check')
+    assert.equal(res.headers.get('location'), '/', 'so both branches land on /')
   } finally {
     await app.stop()
   }

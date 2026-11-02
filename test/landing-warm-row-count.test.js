@@ -389,19 +389,56 @@ test('subagent rows are not counted, even in a workspace that holds nothing else
   assert.equal(bridge.pageWarmSummary('landing').sessions, 1)
 })
 
-test('a pinned row survives the window, and an unclaimed row is not painted at all', () => {
+test('a pinned row survives the window, and an unclaimed row lands in the restored bucket', () => {
   // 置顶行不论多旧都在视图里（`bootRangeCap` 的 p 项）。
   //
-  // 没有工作区认领的行（「未分组」那一桶）：用户 2026-10-30「隐藏就是两个工作区，未分组和
-  // DSBOT」把那张卡从主页退场后，这些行在主页上一处也不落——桥侧这一格也不再数它们
-  // （两侧读同一个 `unclaimedSessionIds`，判据 2）。所以这里期望 1 行，不是 2 行。
+  // 没有工作区认领的行（「未分组」那一桶）：用户 2026-11-02 判据④「未分组恢复显示」
+  // 把那张卡恢复回来之后，这些行在主页上又有卡可落了。桶卡**同样**套 `bootRangeCap`
+  // （`lib/pages.js:2486` 对每张卡都算 `lg`，桶卡就是一张普通卡）——这里 A===B===2 只是
+  // 因为桶里只有 1 条未归属行、正好等于 cap 下限 1，不是因为桶不套时间窗。
+  // 桥侧这一格读的是同一个 `unclaimedSessionIds`（两侧必须一致，判据 2），
+  // 所以期望 2 行：置顶行 + 未归属行；只有被窗口切掉的那条**已认领**旧行不进数。
   const rows = [rowOf('s-pin', OLD), rowOf('s-old', OLD), rowOf('s-orp', OLD)]
   const items = [{ workspaceId: 'w-a', sessionIds: ['s-pin', 's-old'] }]
   const bridge = makeBridge({ rows, items, pinnedSessionIds: ['s-pin'] })
   const A = bridge.pageWarmSummary('landing').sessions
   const B = taskRows(paintLanding({ workspaces: items, rows, pinned: ['s-pin'] }))
-  assert.equal(A, 1, 'the pinned row; the old unpinned row is behind the window edge and the unclaimed row has no card to land on')
-  assert.equal(A, B, 'and the landing paints exactly that one row')
+  assert.equal(A, 2, 'the pinned row survives, the unclaimed row lands in the restored bucket, and the windowed-out claimed row does not count')
+  assert.equal(A, B, 'and the landing paints exactly the same rows')
+})
+
+test('an unclaimed bucket holding only windowed-out rows is capped on the bridge side too (F-2)', () => {
+  // 未分组桶卡与其他卡一样套 `bootRangeCap`（`lib/pages.js:2486` 对每张卡都算 `lg`，
+  // 下限 1 行）。桥侧 `bootVisibleRows`（`lib/bridge.js:1133`）过去把**未归属**行
+  // 无条件全部保留（末段 `if (!claimed.has(id) || keep.has(id)) out.push(row)`），
+  // 于是桶里 ≥2 条全 OLD 行时：桥数 3、页面只画 cap 下限的 1 行 ⇒ A > B。
+  // 旧用例（上面那条）只摆 1 条未归属行，正好等于下限 1，测不出这个缺口。
+  // 这里摆 3 条全 OLD 的未归属行——断言必须 A===B（真实值是 1，不许放宽成 >= 或 >=1）。
+  // `items` 必须非空且带 sessionIds，否则桥侧 `membershipKnown`（`lib/bridge.js:8829`）为假、
+  // `sessions` 直接报 0（`lib/bridge.js:8861`），A 会变成 0 而测不出未归属桶的截断。
+  const rows = [rowOf('s-u1', OLD), rowOf('s-u2', OLD), rowOf('s-u3', OLD)]
+  const items = [{ workspaceId: 'w-a', sessionIds: ['s-claimed-elsewhere'] }]
+  const bridge = makeBridge({ rows, items })
+  const A = bridge.pageWarmSummary('landing').sessions
+  const B = taskRows(paintLanding({ workspaces: items, rows }))
+  assert.equal(B, 1, 'the bucket paints only its cap floor of one row')
+  assert.equal(A, B, 'the bridge must cap the unclaimed bucket the same way the page does')
+})
+
+test('an unclaimed row inside the window: the bridge counts it and the landing paints it (F-2)', () => {
+  // F-2：`lib/bridge.js` 的 landingSummary 过去把「无工作区归属」的行全滤掉，于是
+  // 窗口内的未归属行桥侧不数、A 少一枚——可页面侧判据④ 恢复未分组卡之后，
+  // 这些行在主页上是**画得出来**的。用 RECENT 行（落在窗口内）才测得到这个缺口：
+  // 用 OLD 行的话它先被窗口切掉，改不改桥侧都是 1===1，测不出 F-2。
+  const rows = [rowOf('s-pin', RECENT), rowOf('s-orp', RECENT)]
+  const items = [{ workspaceId: 'w-a', sessionIds: ['s-pin'] }]
+  const bridge = makeBridge({ rows, items, pinnedSessionIds: ['s-pin'] })
+
+  const B = taskRows(paintLanding({ workspaces: items, rows, pinned: ['s-pin'] }))
+  const A = bridge.pageWarmSummary('landing').sessions
+
+  assert.equal(B, 2, 'the landing paints the claimed pinned row AND the unclaimed row (判据④ 未分组卡已恢复)')
+  assert.equal(A, B, 'and the bridge must count exactly what the landing paints — landingSummary must not drop the unclaimed row (F-2)')
 })
 
 test('a few hundred live rows are reported in full, not truncated to a round number', () => {

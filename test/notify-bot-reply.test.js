@@ -9,8 +9,8 @@
 //   ② Bot 会话只在它这一回合真的回给用户时才推：读 `session/page`，窗口内**存在**
 //      `source.kind==='user'` 的 `user/message` 才推。判据是「存在」不是「最后一条」——
 //      同一回合里注入行（runtime-context / time-context / plugin:memory）可能排在用户行
-//      之后，位置说明不了任何事（`lib/bot-page.js:880-883`：「the decision is the role,
-//      never the kind alone」）。
+//      之后，位置说明不了任何事（`lib/bridge.js:801`：「The decision is the role,
+//      never the kind alone」——BOT 页删除后这条判据归桥侧 pollNotifyRunning 一路）。
 //   ③ 读页失败 fail-open 照推：判不出时不静默吞通知。一次 settle 只 fire 一次
 //      （`state.notified` 一旦置真永不补推），所以「延后一拍重试」在这里等于永久丢失。
 import { test } from 'node:test'

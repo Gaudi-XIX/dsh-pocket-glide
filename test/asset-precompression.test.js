@@ -349,11 +349,13 @@ test('AC4.3 nothing outside the asset route touches content-encoding', () => {
   }
 })
 
-test('AC4.4 DSH_POCKET_PRECOMPRESS=0 turns both document routes back to identity', async () => {
+test('AC4.4 DSH_POCKET_PRECOMPRESS=0 turns the document route back to identity', async () => {
   const previous = process.env.DSH_POCKET_PRECOMPRESS
   process.env.DSH_POCKET_PRECOMPRESS = '0'
   try {
-    for (const path of ['/', '/bot']) {
+    // /bot is a 302 now (Task 1), so it no longer renders or precompresses a
+    // document — only the landing document is left to check.
+    for (const path of ['/']) {
       const res = await httpFetch(`${shared.base}${path}`, { headers: { cookie: shared.cookie, 'accept-encoding': 'br, gzip' } })
       assert.equal(res.status, 200, `${path} still answers with the switch off`)
       assert.equal(res.headers.get('content-encoding'), null, `${path} stays plain when precompression is disabled`)
@@ -365,23 +367,20 @@ test('AC4.4 DSH_POCKET_PRECOMPRESS=0 turns both document routes back to identity
   }
 })
 
-test('AC4.5 both document routes leave through sendHtml()', () => {
+test('AC4.5 the one document route leaves through sendHtml()', () => {
   const calls = [...bridgeSource.matchAll(/return this\.sendHtml\(/g)]
-  assert.equal(calls.length, 2, 'exactly two document exits, one per document route')
+  assert.equal(calls.length, 1, 'exactly one document exit now that /bot is a 302')
 
-  // Each exit has to sit in the same block that rendered that document — that is
-  // what makes 「一个压一个不压」 impossible: both documents go through the one
-  // negotiator, and neither route can fall back to html() behind its back.
-  const botRenderAt = bridgeSource.indexOf('renderBotPage({')
-  assert.ok(botRenderAt > 0, 'the Bot document is still rendered by renderBotPage()')
-  assert.ok(calls[0].index > botRenderAt, 'the /bot document exits through sendHtml()')
-  assert.match(bridgeSource.slice(botRenderAt, calls[0].index), /botHtml/, 'and it exits the rendered bytes, not a second render')
-  assert.doesNotMatch(bridgeSource, /return this\.html\(response, botHtml/, 'no plain-bytes bypass for the Bot document')
-
+  // The exit has to sit in the same block that rendered the landing — that is
+  // what makes 「一个压一个不压」 impossible: the one document goes through the one
+  // negotiator, and no route can fall back to html() behind its back. The old
+  // per-index assertions are gone with the per-route index they depended on; the
+  // bypass ban is now a global index-free assertion over every rendered doc.
   const landingRenderAt = bridgeSource.indexOf('\n  async renderMobilePage(')
   assert.ok(landingRenderAt > 0, 'the landing document is still rendered by renderMobilePage()')
-  assert.ok(calls[1].index > landingRenderAt, 'the landing document exits through sendHtml()')
-  assert.match(bridgeSource.slice(landingRenderAt, calls[1].index), /buildMobileBoot\(/, 'and it is the rendered document that goes out')
+  assert.ok(calls[0].index > landingRenderAt, 'the landing document exits through sendHtml()')
+  assert.match(bridgeSource.slice(landingRenderAt, calls[0].index), /buildMobileBoot\(/, 'and it is the rendered document that goes out')
+  assert.doesNotMatch(bridgeSource, /return this\.html\(response, .*Html/, 'no route bypasses sendHtml with a rendered *Html value')
 })
 
 // ---------------------------------------------------------------------------

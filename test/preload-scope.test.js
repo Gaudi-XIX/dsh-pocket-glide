@@ -1,6 +1,6 @@
 // 预载与预读的作用域（任务卡 2026-10-29 §3 B2/B3/B4，用户原话「最大加载会话数量」）。
 //
-// 两处「提前读」共用一条规则：**全页置顶的全部，加上全页最新的 10 个，去重**。
+// 冷启动预载的作用域规则：**全页置顶的全部，加上全页最新的 10 个，去重**。
 // 这条规则只管「提前读哪几个」，不管屏幕上显示几行——显示侧仍是「置顶 + 24 小时
 // 窗口内」，一行都不许动（B0 守卫在 test/landing-attention.test.js 与
 // test/list-bounds.test.js 里）。
@@ -10,11 +10,18 @@
 //     多出来的置顶被自己「优先」的位置挤掉了；
 //   · Bot 页预读：直接取名单里的前 6 个，置顶与「刚用过的会话」都可能落在外面。
 // 两个都是「该提前读的没读到」，用户点进去还是要等。
+//
+// 2026-11-03（本单 Task 7）：BOT 页整页取消，页面侧的 previewQueue / PREVIEW_BOTS /
+// PREVIEW_ROOMS 随旧 BOT 页模块退场。原 B3/B4 那四条钉的是「BOT 页客户端预热队列」
+// 这一具体机制；它的**作用域不变量**（置顶全部 ∪ 最新 10、去重、隐藏会话不预载）
+// 在统一后的落地页由冷启动桥侧预载承担，也就是本文件保留的 B2 三条
+// （buildMobileBoot → collectSessionTails 喂给 session.tails 的 id 清单）。
+// 落地页的 fillTail/requestVisibleTails 只管「已渲染行」的尾巴内容形态（末条文本/裁剪/
+// 打包缓存，见 test/landing-tails.test.js），不是同一条「取前 N 个」的作用域规则，
+// 故不重复钉，也不新建用例——B2 即 previewQueue 退场后的等价落点。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import vm from 'node:vm'
 import { LanMobileBridge } from '../lib/bridge.js'
-import { BOT_PAGE_JS } from '../lib/bot-page.js'
 
 const DAY = 24 * 60 * 60 * 1000
 const row = (sessionId, updatedAt) => ({ sessionId, updatedAt, blank: false })
@@ -100,72 +107,4 @@ test('B2 隐藏工作区的会话不进预载：过滤排在预载之前', async
 
   assert.equal(bridge.tailRequests.includes('hiddenSess'), false, '藏起来的会话既不显示也不预载，即使被置顶')
   assert.deepEqual(bridge.tailRequests, ['a', 'b'])
-})
-
-// ---- Bot 页预读（B3/B4）----------------------------------------------------
-function extractFunction(source, name) {
-  const start = source.indexOf(`function ${name}(`)
-  assert.notEqual(start, -1, `${name} must exist in the rendered page script`)
-  let depth = 0
-  for (let i = start; i < source.length; i += 1) {
-    const char = source[i]
-    if (char === '{') depth += 1
-    else if (char === '}') {
-      depth -= 1
-      if (depth === 0) return source.slice(start, i + 1)
-    }
-  }
-  assert.fail(`unbalanced braces after ${name}`)
-}
-
-const PREVIEW_BOTS = Number((BOT_PAGE_JS.match(/var PREVIEW_BOTS = (\d+)/) || [])[1])
-const PREVIEW_ROOMS = Number((BOT_PAGE_JS.match(/var PREVIEW_ROOMS = (\d+)/) || [])[1])
-// 惰性求值：先红取证要在改动前的页面上跑这一组，那时 previewQueue 还不存在——顶层
-// 就抛错会把前面 B2 那三条一起吞掉，红的证据就分不清是哪一条在承重了。
-const previewQueue = (team, previews) =>
-  Array.from(
-    vm.runInNewContext(`(${extractFunction(BOT_PAGE_JS, 'previewQueue')})`, {
-      PREVIEW_BOTS,
-      PREVIEW_ROOMS,
-    })(team, previews)
-  )
-
-test('B3 Bot 页预读＝置顶全部 ∪ 最新 10，不再是名单里的前六个', () => {
-  assert.equal(PREVIEW_BOTS, 10, '十个是定值')
-  const bots = []
-  for (let i = 0; i < 12; i += 1) bots.push({ sessionId: `p${i}`, pinned: true, updatedAt: 1000 + i })
-  for (let i = 0; i < 20; i += 1) bots.push({ sessionId: `n${i}`, pinned: false, updatedAt: 5000 + i })
-  const queue = previewQueue({ bots }, {})
-
-  assert.equal(queue.length, 22, '12 个置顶 + 最新 10')
-  for (let i = 0; i < 12; i += 1) assert.ok(queue.includes(`p${i}`), `p${i} 被置顶，必须预读`)
-  assert.equal(queue[0], 'p11', '置顶按时间倒序排在最前')
-  assert.ok(queue.includes('n19'), '最新的一条也被预读')
-  assert.equal(queue.includes('n9'), false, '第 11 条新的不预读')
-})
-
-test('B3 二十条乱序 updatedAt、零置顶：队列就是倒序前十个', () => {
-  const bots = []
-  for (let i = 0; i < 20; i += 1) bots.push({ sessionId: `b${i}`, pinned: false, updatedAt: (i * 13) % 20 })
-  const expected = bots
-    .slice()
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, 10)
-    .map((bot) => bot.sessionId)
-  assert.deepEqual(previewQueue({ bots }, {}), expected)
-})
-
-test('B3 已知缓存的会话不再重复预读', () => {
-  const bots = [{ sessionId: 'a', pinned: true, updatedAt: 5 }, { sessionId: 'b', pinned: false, updatedAt: 4 }]
-  assert.deepEqual(previewQueue({ bots }, { a: { rows: [] } }), ['b'])
-})
-
-test('B4 rooms 不进时间序，也不挤占 Bot 的十个名额', () => {
-  const bots = Array.from({ length: 20 }, (_, i) => ({ sessionId: `n${i}`, pinned: false, updatedAt: 1000 + i }))
-  const rooms = Array.from({ length: 8 }, (_, i) => ({ id: `r${i}` }))
-  const queue = previewQueue({ bots, rooms }, {})
-
-  assert.equal(queue.length, 10 + 6, 'Bot 十个 + 群聊自己的六个')
-  assert.deepEqual(queue.slice(0, 10), bots.slice(-10).reverse().map((bot) => bot.sessionId))
-  assert.deepEqual(queue.slice(10), rooms.slice(0, 6).map((room) => room.id), '群聊按名单顺序，不参与时间排序')
 })

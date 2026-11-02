@@ -41,7 +41,7 @@ function respond(pathname) {
 /**
  * The fake Harness cannot follow-stream workspaces, so the snapshot the mux
  * would normally deliver is stood up by hand — the same seam
- * `test/bot-page.test.js:148` uses. Everything under it stays real.
+ * `test/boot-visible-rows.test.js:44` uses on the landing page. Everything under it stays real.
  * @param {any} bridge
  * @param {any[]} [rows]
  */

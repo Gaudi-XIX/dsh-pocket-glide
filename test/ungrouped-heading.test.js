@@ -151,19 +151,31 @@ function extractFunction(source, name) {
   throw new Error(`unbalanced braces after ${name}`)
 }
 
+// The label table, taken from the rendered shell of the locale under test
+// (house pattern, test/pages-process-render.test.js:36-40). The bucket card's
+// title differs by locale, so it must never be written into the test as a
+// literal: 未分组 for zh, Ungrouped for en.
+function labels(locale) {
+  const line = (locale === 'en' ? jsEn : js).match(/^const L=(\{.*\});/m)
+  assert.ok(line, `${locale}: the label table must render as one JSON line`)
+  return JSON.parse(line[1])
+}
+
 // The page's own function, run against the page's own state names: a fixture that
 // re-implemented the difference here would stay green while the page did nothing.
-function ungroupedCards({ workspaces, sessionSummaries, archivedSessionIds = [], hiddenWsSessionIds = [], hiddenWsListed = false }) {
-  const body = extractFunction(js, 'ungroupedCards')
+function ungroupedCards({ workspaces, sessionSummaries, archivedSessionIds = [], hiddenWsSessionIds = [], hiddenWsListed = false, locale = 'zh' }) {
+  const source = locale === 'en' ? jsEn : js
+  const body = extractFunction(source, 'ungroupedCards')
   const make = new Function(
+    'L',
     'workspaces',
     'sessionSummaries',
     'archivedSessionIds',
     'hiddenWsSessionIds',
     'hiddenWsListed',
-    `${extractFunction(js, 'unclaimedSessionIds')}\n${body};return ungroupedCards()`,
+    `${extractFunction(source, 'unclaimedSessionIds')}\n${body};return ungroupedCards()`,
   )
-  return make(workspaces, sessionSummaries, archivedSessionIds, hiddenWsSessionIds, hiddenWsListed)
+  return make(labels(locale), workspaces, sessionSummaries, archivedSessionIds, hiddenWsSessionIds, hiddenWsListed)
 }
 
 const summaries = (ids) => ids.map((sessionId) => ({ sessionId, updatedAt: 1, blank: false }))
@@ -177,7 +189,7 @@ const hasUngrouped = (cards) => cards.some((card) => card.ungrouped === true)
 // 画不画在 renderWorkspaces 这一层判。沙箱与 test/list-bounds.test.js:167 paintList
 // 同构，唯一差别：那支把 ungroupedCards 换成桩（它只测工作区卡），这里必须用真函数，
 // 否则「桶卡不画」这条判据测的是桩而不是页面。
-const L = JSON.parse(js.match(/^const L=(\{.*\});/m)[1])
+const L = labels('zh')
 function assetNumber(pattern, label) {
   const hit = js.match(pattern)
   assert.ok(hit, `${label} must stay a plain number in the rendered asset`)
@@ -357,25 +369,48 @@ test('the heading is the desktop\u2019s own wording in both locales', () => {
   assert.ok(en.includes('"ungrouped":"Ungrouped"'), 'en: and Ungrouped (group.ungrouped, en dictionary)')
 })
 
-// 用户 2026-10-30：「隐藏就是两个工作区，未分组和DSBOT」——桶里的行不再有卡可落。
+// 用户 2026-11-02 判据④：「未分组恢复显示」——屏蔽对象只剩 F:\DSBOT 一个工作区，
+// 未分组的行重新有卡可落（此前 2026-10-30 曾把整张桶卡退场，本轮反转回来）。
 // 这条断言跑的是真 renderWorkspaces + 真 ungroupedCards（不是源码切片）：切片在
 // 分支被删之后只会恒真，测不出页面到底画了什么。
-test('the ungrouped card is not painted at all, so its rows never reach the page', () => {
+test('the ungrouped card is painted again, and its rows land there', () => {
   const html = paintPage({
     workspaces: [{ workspaceId: WORKSPACE, title: 'defws', path: 'F:\\\\defws', sessionIds: ['a'] }],
     sessionSummaries: summaries(['a', 'orphan1', 'orphan2']),
-    expanded: [WORKSPACE],
+    expanded: [WORKSPACE, ''],
   })
 
-  assert.equal(taskRows(html), 1, 'only the claimed row is painted: with no bucket card its rows have nowhere to land')
   assert.equal(
     (html.match(/<article class="ws-card/g) || []).length,
-    1,
-    'exactly one card is painted: the bucket card is not merely unmarked, it is gone',
+    2,
+    'the workspace card AND the ungrouped bucket card are both painted (判据④ 恢复显示)',
   )
-  assert.equal(html.includes('is-ungrouped'), false, 'no card carries the bucket marker any more')
-  assert.equal(html.includes(L.ungrouped), false, 'and the「未分组」heading is gone with it (user 2026-10-30)')
+  assert.ok(
+    (html.match(/<button class="task-row/g) || []).length >= 2,
+    'the ungrouped rows reach the page again: the bucket card no longer drops them',
+  )
   assert.ok(html.includes('defws'), 'the workspace card itself still renders, header and all')
+})
+
+// 同一条判据的另一半：屏蔽对象收窄到 F:\\DSBOT 一个工作区，它自己的行仍不得
+// 以「未分组」的名义透传出来——隐藏成员的 id 到场时必须把那些行从桶里剔除。
+test('the F:\\DSBOT workspace stays hidden: its rows never leak in as ungrouped', () => {
+  const html = paintPage({
+    workspaces: [{ workspaceId: WORKSPACE, title: 'defws', path: 'F:\\\\defws', sessionIds: ['a'] }],
+    sessionSummaries: summaries(['a', 'orphan1', 'bot1']),
+    expanded: [WORKSPACE, ''],
+    hiddenWsSessionIds: ['bot1'],
+  })
+
+  assert.ok(
+    (html.match(/<article class="ws-card/g) || []).length >= 2,
+    'the bucket card still paints the genuinely unclaimed row alongside the workspace card',
+  )
+  assert.equal(
+    (html.match(/bot1/g) || []).length,
+    0,
+    'the hidden F:\\\\DSBOT row is neither shown nor relabelled as ungrouped',
+  )
 })
 
 test('the landing stores the hidden membership the bridge sends, and whether it was sent at all', () => {

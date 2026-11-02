@@ -155,11 +155,10 @@ const REGISTERED = {
   '/desktop/tunnel/status': { face: 'desktop', why: '同上' },
   '/desktop/tunnel/toggle': { face: 'desktop', why: '同上' },
   '/pair/pending': { face: 'protected', why: '配对轮询，未配对必 401' },
-  // DS Bot 页面（2026-10-24）：独立路由 + 独立脚本，都在 authorized() 之后（未配对 401，见
-  // test/bot-page.test.js）。它不进网格：网格 23 条是既有页面，这两条是新增页面的文档与
-  // 脚本，形状同 `/` 与 `/app.js`（文档 200、脚本按 hash 缓存），登记以声明「不是漏登记」。
-  '/bot': { face: 'protected', why: 'DS Bot 页面文档，在 authorized() 之后，no-store' },
-  '/bot.js': { face: 'protected', why: 'DS Bot 页面脚本，在 authorized() 之后，按内容 hash 寻址' },
+  // `/bot` 现在是导航路径 + 302 落点（Task 1：BOT 内容已并进主页 `/`，`/bot` 一律 302 回 `/`）；
+  // 未配对同样 302，不再是独立文档页。它仍是字面量路由，必须登记，否则 findUnregistered() 判 CRITICAL。
+  // 判据在 test/bot-401-fallback.test.js（未配对 / 已配对均 302）。
+  '/bot': { face: 'protected', why: 'BOT 已并进主页；/bot 一律 302 回 /，无独立文档面（Task 1）' },
   '/api/host/restart': { face: 'write', why: '会重启宿主；门禁绝不碰' },
   '/api/mobile-probe': { face: 'write', why: '手机滚动埋点上报（写日志），未配对必 401，不需要门禁去写一条' },
   '/consent/accept': { face: 'write', why: '会下发 consent cookie，是状态变更' },
