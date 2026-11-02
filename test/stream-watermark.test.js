@@ -150,17 +150,23 @@ test('AC-A6 loadHistory AND applyHistory let history through while empty', () =>
 })
 
 test('AC-A6 an empty buffer pulls the head page without beforeSeq', () => {
+  // R14-4：取一页收敛成共享的 olderPage(id,anchor)；断言随之改钉那份唯一实现。
+  const page = extractFunction(js, 'olderPage')
+  assert.ok(page.includes("rpc('session.history',{sessionId:id,maxMessages:30,"), 'the pull goes out on the shared older-page fetch')
+  assert.ok(page.includes('...(anchor<0?{}:{beforeSeq:anchor})'), 'no anchor means the head page carries no beforeSeq, not that there is nothing to do')
+  assert.ok(page.includes('...(subagentView?{subagent:subagentView}:{})'), 'and the subagent spread collapses when no subagent view is open')
   const older = between('async function fetchOlderPage()', 'async function loadOlder()')
-  assert.ok(older.includes('anchorSeq<0'), 'the anchor-less case is handled, not abandoned')
-  assert.ok(!older.includes('if(anchorSeq<0)return false'), 'no anchor must not mean nothing to do')
-  assert.ok(older.includes("rpc('session.history',{sessionId,maxMessages:30,...(subagentView?{subagent:subagentView}:{})})"), 'the head page carries no beforeSeq (the subagent spread collapses when no subagent view is open)')
-  assert.ok(older.includes('beforeSeq:anchorSeq'), 'and paging from a real anchor still works')
+  assert.ok(older.includes('olderPage(sessionId,anchorSeq)'), 'the page fetch delegates to that one implementation')
+  assert.ok(!older.includes("rpc('session.history'"), 'instead of keeping a second copy of the request shape')
 })
 
 test('AC-A6 the head pull really goes out with no beforeSeq', async () => {
   // extractFunction anchors on the literal `function NAME(`, which for an async
   // function sits *after* the modifier — re-attach it or the body's awaits are a
   // SyntaxError.
+  // R14-4：fetchOlderPage 改调共享的 olderPage()，这个沙箱要跑出真正的取页链，
+  // 就得把那份共享实现一并带进来。
+  const pageSource = extractFunction(js, 'olderPage')
   const source = 'async ' + extractFunction(js, 'fetchOlderPage')
   const make = new Function('box', `
     let olderBusy=false,olderRunBusy=false,olderHasMore=true,olderExhausted=false
@@ -183,6 +189,7 @@ test('AC-A6 the head pull really goes out with no beforeSeq', async () => {
     // estimate for real height); this sandbox paints nothing, so it is a no-op
     function settleOlderShift(){}
     async function rpc(method,payload){calls.push({method,payload});return {events:[],hasMore:false}}
+    ${pageSource}
     ${source}
     return { run: fetchOlderPage, calls, state: () => ({ olderHasMore, olderExhausted }) }
   `)
@@ -203,23 +210,34 @@ test('AC-A7 the older row shows while nothing is painted', () => {
   assert.equal(sandbox.olderButtonHtml(), '', 'once content is painted the exhausted row hides again')
 })
 
-test('AC-A7 painting nothing names the wait instead of a blank page', () => {
+test('AC-A7 painting nothing writes no skeleton, only the real affordance', () => {
+  // R14-4：空容器走「零占位」——能画的东西只来自同一份快照，缺项留白，绝不先塞
+  // 骨架/等待文案。原来这条断言要求 `class="loading"` 骨架 + 「正在同步会话内容…」
+  // 出现；新契约下 paintMessages([]) 的 innerHTML 里不得有任何 skeleton 或 syncing
+  // 文案（更严：从「必须有骨架」反转为「必须没有骨架」）。
   const sandbox = buildPaintSandbox({ activeSession: 's1', sessionBlank: false })
   sandbox.paintMessages(sandbox.box, [], { sideEffects: true })
-  assert.ok(sandbox.box.innerHTML.includes('class="loading"'), 'the skeleton says work is happening')
-  assert.ok(sandbox.box.innerHTML.includes('正在同步会话内容…'), 'and names what it is waiting for')
-  assert.equal(sandbox.box.innerHTML.includes(L.syncingChat), true, 'the copy is the page label, not a test copy')
+  assert.ok(!sandbox.box.innerHTML.includes('class="loading"'), 'no skeleton where there is nothing to paint (R14-4)')
+  assert.ok(!sandbox.box.innerHTML.includes('正在同步会话内容…'), 'and no wait copy either — a blank box stays blank')
+  assert.equal('syncingChat' in L, false, 'R14-1.6 删掉了骨架文案，页标签表里不该再有 syncingChat')
+  assert.equal(js.split('syncingChat').length - 1, 0, 'the page label is never faked in as a placeholder')
+  // 唯一允许出现的，是真实可点的「更早」入口（有 olderHasMore 或首屏未填满时它本就该在）。
+  assert.ok(sandbox.box.innerHTML.includes('data-older="1"'), 'the one thing still present is the real older affordance')
   sandbox.setSessionBlank(true)
   sandbox.paintMessages(sandbox.box, [], { sideEffects: true })
-  assert.ok(!sandbox.box.innerHTML.includes('正在同步会话内容…'), 'a session the desktop reports blank is honestly empty')
+  assert.ok(!sandbox.box.innerHTML.includes('class="loading"'), 'a session the desktop reports blank stays honestly empty')
 })
 
-test('AC-A7 the failed retry block survives an empty repaint', () => {
+test('AC-A7 an empty repaint clears a stale load block rather than masking it', () => {
+  // R14-4：空容器必须真清空，不能留一个「正在等待」或把上一次的失败块当占位。
+  // 旧断言要求 paintMessages([]) 把 stalled 失败块原样留住；新契约下 paintMessages
+  // 整屏重写 innerHTML，空消息即空容器——更严：任何旧块都不得靠重画续命。
   const stalled = '<div class="loading-failed">消息没能加载出来<button class="older-row" data-reload="1">重试</button></div>'
   const sandbox = buildPaintSandbox({ activeSession: 's1', sessionBlank: false, innerHTML: stalled })
   sandbox.paintMessages(sandbox.box, [], { sideEffects: true })
-  assert.ok(sandbox.box.innerHTML.includes('data-reload="1"'), 'a stall keeps its button')
-  assert.ok(!sandbox.box.innerHTML.includes('正在同步会话内容…'), 'it does not decay back into a bare wait')
+  assert.ok(!sandbox.box.innerHTML.includes('data-reload="1"'), 'the stale retry block is not carried by an empty repaint')
+  assert.ok(!sandbox.box.innerHTML.includes('loading-failed'), 'no failed-load styling lingers as a placeholder (R14-4)')
+  assert.ok(!sandbox.box.innerHTML.includes('正在同步会话内容…'), 'and it never decays into a bare wait')
 })
 
 test('AC-A7 the watchdog judges painted content and ends on a tappable retry', () => {
@@ -238,8 +256,6 @@ function buildPaintSandbox(state = {}) {
   const body = [
     'transcriptHasContent',
     'olderButtonHtml',
-    'loadingShell',
-    'transcriptWaitHtml',
     'showTranscriptRetry',
     'paintMessages',
     'esc',
@@ -265,7 +281,7 @@ function buildPaintSandbox(state = {}) {
     function stopTurnStatusTimer(){}
     ${body}
     return {
-      olderButtonHtml, paintMessages, showTranscriptRetry, transcriptHasContent, transcriptWaitHtml,
+      olderButtonHtml, paintMessages, showTranscriptRetry, transcriptHasContent,
       setStream(value){streamEvents=value},
       setSessionBlank(value){sessionBlank=value},
     }

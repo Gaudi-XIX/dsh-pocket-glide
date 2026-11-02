@@ -264,14 +264,22 @@ test('B the instant paint seeds lastHistoryKey with the exact expression applyHi
   assert.ok(instant.indexOf('lastHistoryKey=') < instant.indexOf('paintMessages(box, messages.slice(-fit)'), 'the key is taken before the paint, like applyHistory does')
 })
 
-test('B a re-entry that painted from cache does not show the skeleton', () => {
+test('B a re-entry that did not paint leaves the box empty, never a skeleton', () => {
   const open = sliceTo('async function openSession(id,title', 'function handleHistory')
+  // R14-4.6：判定没变（painted＝像素到底落没落，不是一个分支跑没跑），变的是落地
+  // 表达式——R14 把 entryToken 与地图命中合成一句、painted 单独一句并紧跟「没画就清空」。
+  // 这里钉新的逐字表达式；「空容器」与「无骨架」由下面两条继续钉。
   assert.match(
     open,
-    /const entryToken=\+\+heldAt,painted=paintInstantSession\(\)&&!!\$\('messages'\)\.querySelector\('\.message'\);/,
-    'painted is the real question: did pixels land, not did a branch run',
+    /const painted=paintInstantSession\(\)&&!!\$\('messages'\)\.querySelector\('\.message'\);/,
+    'painted is the real question: did pixels land, not did a branch run (R14-4.6)',
   )
-  assert.match(open, /if\(!painted\)\$\('messages'\)\.innerHTML=loadingShell\(\)/, 'the skeleton only replaces nothing')
+  // R14-4.3：会话打开路径（命中/未命中/补拉/失败）一律不许出现骨架或占位文案，
+  // 「允许 loadingShell() 的场景」为空集。原来这条断言要求
+  // `if(!painted)$('messages').innerHTML=loadingShell()`，现在改成更严的两条：
+  // ① 没画出来就保持空容器；② 整个 openSession 里没有任何 loadingShell 调用点。
+  assert.match(open, /if\(!painted\)\$\('messages'\)\.innerHTML=''/, 'an unpainted open leaves the box empty, not a skeleton')
+  assert.ok(!open.includes('loadingShell()'), 'and no skeleton is written on any path through openSession (R14-4.3)')
 })
 
 // ---------------------------------------------------------------------------

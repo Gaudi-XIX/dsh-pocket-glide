@@ -817,7 +817,7 @@ test('AC-C3 closing the stream disarms the watch, so it cannot repeat', () => {
 })
 
 test('AC-C3 a backgrounded tab holds the clock instead of reporting a false drop', () => {
-  const watching = between('function armStreamStaleWatch(sessionId)', 'function loadingShell()')
+  const watching = between('function armStreamStaleWatch(sessionId)', 'function showTranscriptRetry()')
   assert.ok(watching.includes('if(document.hidden){lastStreamFrameAt=Date.now();return}'), 'hidden means no verdict')
 })
 

@@ -181,19 +181,22 @@ test('the transcript offers a tap target for older messages', () => {
   // 2026-10-21 earlier-parts: the merged earlier conversation feed (bot.earlier)
   // prepends before the older row — an additive axis that leaves the older-pull
   // join untouched.
-  assert.ok(html.includes("box.innerHTML=earlierPartsHtml()+olderButtonHtml()+(messages.length?messages.map(renderMessage).join(''):transcriptWaitHtml(box))+status"))
+  // R14-4：空消息分支从 `transcriptWaitHtml(box)`（会写骨架/等待文案）改成空串
+  // 「零占位」——更严：与「空容器不写任何占位」对齐。
+  assert.ok(html.includes("box.innerHTML=earlierPartsHtml()+olderButtonHtml()+(messages.length?messages.map(renderMessage).join(''):'')+status"))
   assert.ok(html.includes('function renderOlderButton()'), 'the row must be re-synced without a full repaint')
 })
 
 test('short transcripts keep pulling older pages until the viewport is filled', () => {
   const { js } = mobilePageAssets({ locale: 'zh' })
   assert.ok(js.includes('async function ensureTranscriptFilled()'))
-  // 2026-10-02 audit WP-A1 / A-7④: the one combined test conflated "there is
-  // nothing older" with "the screen is already full", so an empty transcript was
-  // never filled. Rewritten from `if(!olderHasMore||box.scrollHeight>box.clientHeight+8)return`
-  // (change 2026-10-02-fix-pocket-audit-remediation) into the two separate reasons
-  // to stop, and the loop condition now mirrors them.
-  assert.ok(js.includes('if(box.scrollHeight>box.clientHeight+8)return'), 'fill only while short')
+  // R14-1.1：充分性＝按端上折叠规则折完的可见行累加高 ≥ clientHeight×1.15
+  // （historyFillsScreen），scrollHeight 不再参与判断。原来这条断言要求
+  // `if(box.scrollHeight>box.clientHeight+8)return`，现在改成更严：那个 scrollHeight
+  // 早退已不存在，转由 historyFillsScreen() 判「已填满」。
+  assert.ok(!js.includes('if(box.scrollHeight>box.clientHeight+8)return'), 'the scrollHeight sufficiency test is gone (R14-1.1)')
+  assert.ok(js.includes('if(historyFillsScreen())return'), 'fill stops once the viewport is actually full')
+  assert.ok(js.includes('if(historyFillsScreen())break'), 'and the loop breaks on the same test')
   assert.ok(js.includes('if(!olderHasMore&&transcriptHasContent())return'), 'stop only when nothing is missing')
   assert.ok(!js.includes('if(!olderHasMore||box.scrollHeight>box.clientHeight+8)return'), 'the combined early return is gone')
   assert.ok(js.includes('while(activeSession&&(olderHasMore||!transcriptHasContent())'), 'an empty buffer keeps filling')
@@ -210,9 +213,11 @@ test('short transcripts keep pulling older pages until the viewport is filled', 
   assert.ok(!js.includes('maxMessages:60'), 'the record page size is not raised to fake a screenful')
 })
 
-test('a blank skeleton is retried instead of being left on screen', () => {
+test('an empty box is retried on content, never on a skeleton', () => {
+  // R14-4：会话打开路径禁止任何骨架/占位。watchdog 的停摆判据只能看「真画了消息」
+  // 或「桌面报空」，绝不能再看 `.loading` 骨架（旧契约才会先塞骨架）。
   const { js } = mobilePageAssets({ locale: 'zh' })
-  assert.ok(js.includes('function armSkeletonWatchdog('), 'the skeleton needs a watchdog')
+  assert.ok(js.includes('function armSkeletonWatchdog('), 'the retry watchdog still exists')
   // 2026-10-02 audit WP-A1 / A-7①: a painted transcript, not a skeleton still on
   // screen, is what tells the watchdog to stop — a failed load replaces the
   // skeleton with its own block, so the old anchor disarmed the retries exactly
@@ -221,7 +226,7 @@ test('a blank skeleton is retried instead of being left on screen', () => {
   // (change 2026-10-02-fix-pocket-audit-remediation); a session the desktop
   // reports as blank needs no content, so it is not retried into a false failure.
   assert.ok(js.includes("if($('messages').querySelector('.message:not(.earlier-msg)')||sessionBlank)return"), 'the watchdog stops once content paints')
-  assert.ok(!js.includes("if(!$('messages').querySelector('.loading'))return"), 'the skeleton is no longer the stop signal')
+  assert.ok(!js.includes("if(!$('messages').querySelector('.loading'))return"), 'the skeleton is no longer the stop signal (R14-4)')
   assert.ok(js.includes('if(attempt>=3){showTranscriptRetry();return}'), 'three silent retries end in a tappable retry')
   assert.ok(js.includes('armSkeletonWatchdog(id)'), 'openSession must arm it')
   assert.ok(js.includes('clearSkeletonWatchdog()'), 'leaving the session must disarm it')
@@ -448,22 +453,20 @@ test('handleHistory collapses only the identical entry — a back into a DIFFERE
 // 2026-10-02 live report: reconnecting to an already-paired phone lands on a chat
 // whose transcript arrives one tunnel round trip later (the desktop deliberately
 // keeps it out of the document), and three bare skeleton bars read as a freeze.
-test('the transcript wait names itself instead of showing bare grey bars', () => {
+test('R14-4 the transcript wait skeleton is gone from the shipped page', () => {
+  // R14-4：会话打开路径（命中/未命中/补拉/失败）一律不许出现骨架或占位文案，
+  // 「允许 loadingShell() 的场景」为空集。原来这条断言要求 loadingShell() 必须存在
+  // 且计数正确；契约反转后它变成缺席断言——比原来更严：从「必须有一份」变成
+  // 「一份都不许回来，任何路径都不许」。
   const { js, css } = mobilePageAssets({ locale: 'zh' })
-  assert.ok(js.includes('function loadingShell()'), 'the waiting state needs one source')
-  assert.ok(js.includes('\'<p class="loading-hint">\'+L.syncingChat+\'</p>'), 'the hint is part of it')
-  assert.ok(js.includes('syncingChat'), 'the copy is localized like the rest of the page')
-  assert.ok(js.includes('正在同步会话内容…'), 'the zh copy matches the pairing steps verbatim')
-  assert.equal(
-    js.split('loadingShell()').length - 1,
-    // 2026-10-02 audit WP-A1 / A-7②: raised from 3. An empty repaint needs the
-    // same named wait as the first paint, so transcriptWaitHtml() joined the two
-    // existing call sites (change 2026-10-02-fix-pocket-audit-remediation).
-    4,
-    'the helper and its three call sites (first paint, failed-load retry, empty repaint)',
-  )
+  assert.equal(js.split('loadingShell').length - 1, 0, 'loadingShell must not come back on any open path (R14-4.3)')
+  assert.equal(js.split('transcriptWaitHtml').length - 1, 0, 'transcriptWaitHtml must not come back either (R14-4)')
+  assert.equal(js.split('syncingChat').length - 1, 0, 'and the wait copy is gone from the label table')
+  assert.ok(!js.includes('正在同步会话内容…'), 'the zh copy is retired with the label')
+  assert.ok(!js.includes('<p class="loading-hint">'), 'no hint markup survives')
   assert.ok(!js.includes('$(\'messages\').innerHTML=\'<div class="loading">'), 'no anonymous skeleton block survives')
-  assert.ok(css.includes('.loading-hint{'), 'the hint needs its own style')
+  assert.ok(!css.includes('.loading-hint{'), 'the hint style is retired with its markup')
+  assert.ok(css.includes('.loading-failed{'), 'the failed-load block is not a skeleton and keeps its style')
 })
 // ============================================================================
 // WP-A3 (change 2026-10-02-fix-pocket-audit-remediation): M6 the thinking
@@ -947,6 +950,10 @@ function buildPullSandbox(opts) {
 
 function buildPageFetchSandbox(opts) {
   const js = mobilePageAssets({ locale: 'zh' }).js
+  // R14-4 把「取一页」收敛成共享的 olderPage()，fetchOlderPage 只负责合并与重画。
+  // 沙箱要跑真 fetchOlderPage，就必须把那份共享实现一并带进来，否则它抛
+  // ReferenceError 被 catch 吞掉，测试只会看到「没取到」而不是一条可读的断言失败。
+  const pageSource = extractFunction(js, 'olderPage')
   const source = 'async ' + extractFunction(js, 'fetchOlderPage')
   return new Function('opts', `
     let olderBusy=false,olderHasMore=${String(opts.olderHasMore ?? false)},olderExhausted=false,activeSession='s1',subagentView=null
@@ -970,6 +977,7 @@ function buildPageFetchSandbox(opts) {
     // estimate for real height); the sandbox paints nothing, so it is a no-op
     function settleOlderShift(){}
     async function rpc(method,payload){rpcCalls.push({method,payload});return {events:[],hasMore:false}}
+    ${pageSource}
     ${source}
     return { run: fetchOlderPage, calls, rpcCalls, state: () => ({ olderBusy, olderHasMore, olderExhausted }) }
   `)(opts)

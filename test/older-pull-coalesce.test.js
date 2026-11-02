@@ -99,11 +99,15 @@ const HARNESS = `
 function buildSandbox() {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const fetchPage = 'async ' + extractFunction(js, 'fetchOlderPage')
+  // R14-4：fetchOlderPage 改调共享的 olderPage()。沙箱必须带真那份，否则它抛
+  // ReferenceError 被 catch 吞掉，四条断言只会看到「没取到页面」。
+  const pageFn = extractFunction(js, 'olderPage')
   const pull = 'async ' + extractFunction(js, 'loadOlder')
   const keyFn = extractFunction(js, 'olderKey')
   const paintFn = extractFunction(js, 'paintOlder')
   return new Function(`
     ${HARNESS}
+    ${pageFn}
     ${fetchPage}
     ${keyFn}
     ${paintFn}
@@ -116,6 +120,7 @@ function buildSandbox() {
 function buildNoRowsSandbox(paintThrows) {
   const js = mobilePageAssets({ locale: 'zh' }).js
   const fetchPage = 'async ' + extractFunction(js, 'fetchOlderPage')
+  const pageFn = extractFunction(js, 'olderPage')
   const pull = 'async ' + extractFunction(js, 'loadOlder')
   const keyFn = extractFunction(js, 'olderKey')
   const paintFn = extractFunction(js, 'paintOlder')
@@ -123,6 +128,7 @@ function buildNoRowsSandbox(paintThrows) {
     ${HARNESS}
     rows.length=0
     ${paintThrows ? "paintMessages=()=>{throw new Error('paint blew up')}" : ''}
+    ${pageFn}
     ${fetchPage}
     ${keyFn}
     ${paintFn}

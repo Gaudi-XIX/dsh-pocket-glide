@@ -19,6 +19,12 @@ import { HARNESS_ENDPOINTS, RPC_ALLOWLIST } from '../lib/constants.js';
 
 const { css, js, document } = mobilePageAssets({ locale: 'zh' });
 
+// R14-1.2 把四个图标提到出货 js 的顶层一行，renderQueueDock 的 REMOVE_SVG 与 goal
+// bar 的 GOAL_CLEAR_SVG 都指向那里的 X_SVG。顶层常量不在函数切片里，下面两个沙箱
+// 取材都必须把这行一并带上——测的还是同一份出货 dock。
+const SHARED_SVG_LINE = js.split('\n').find((row) => row.startsWith('const FILE_SVG='));
+assert.ok(SHARED_SVG_LINE, 'the shipped script must declare the shared SVG icons on one line');
+
 // --------------------------------------------------------------- extraction
 
 function extractFunction(source, name) {
@@ -114,6 +120,7 @@ function buildDockSandbox() {
     'containers',
     'document',
     `
+    ${SHARED_SVG_LINE}
     const L={
       goalPhaseActive:'进行中',goalPhasePaused:'已暂停',goalPhaseBlocked:'受阻',goalPhaseComplete:'已完成',
       goalRoundUnit:' 轮',goalPause:'暂停',goalResume:'恢复',goalEdit:'编辑',goalClear:'清除',goalSave:'保存',goalCancel:'取消',goalFold:'收起/展开',
@@ -292,6 +299,7 @@ function buildQueueActionSandbox(rpc) {
     'showToast',
     'toasts',
     `
+    ${SHARED_SVG_LINE}
     const L={queueEditFailed:'编辑失败',queueRemoveFailed:'撤回失败',queueSteerFailed:'发送失败',queueCount:'排队消息 {n} 条',queueImage:'图片',queueFile:'文件',queueUnrenderable:'[图片/文件]',queueEdit:'编辑',queueSave:'保存',queueCancel:'取消',queueRemove:'撤回',queueSteer:'立刻发送'}
     let currentGoal=null,queuedTurn=[],queueBusy=false,queueEditing=null,queueEditText='',goalBusy=false,goalEditing=false,goalEditText='',goalFolded=false,activeSession='s1',streamProjections=null
     // A queue action now also kicks the transcript leg (user 2026-10-19: 「发送」后
@@ -382,7 +390,8 @@ test('the remove affordance is the same 13px stroke icon family as steer/edit', 
   // The text × glyph sat on a different baseline, size, and weight than the
   // 13×13 stroke SVGs next to it (live report 2026-10-09); the red is-danger
   // stays as the destructive marker, only the glyph unifies.
-  assert.ok(js.includes('REMOVE_SVG=\'<svg width="13" height="13"'), 'remove ships as a 13×13 stroke SVG like its siblings')
+  assert.match(SHARED_SVG_LINE, /X_SVG='<svg width="13" height="13"/, 'remove ships as a 13×13 stroke SVG like its siblings')
+  assert.ok(js.includes('REMOVE_SVG=X_SVG;'), 'and it is that one shared line, not a second copy of the glyph')
   assert.ok(!js.includes('aria-label="\'+esc(L.queueRemove)+\'">×</button>'), 'the bare × glyph is gone from the remove button')
   assert.ok(js.includes('+esc(L.queueRemove)+\'">\'+REMOVE_SVG+\'</button>'), 'the remove button renders REMOVE_SVG')
 })
@@ -395,7 +404,8 @@ test('the goal bar clear affordance is the same 13px stroke icon family as pause
   // tall and its centre sat 4.4px below the pause icon's (ink centre 74.5 vs
   // 70.5); after unifying on the SVG the spread is 0.41px. Red is-danger stays
   // as the destructive marker — only the glyph unifies.
-  assert.ok(js.includes('GOAL_CLEAR_SVG=\'<svg width="13" height="13"'), 'clear ships as a 13×13 stroke SVG like its siblings')
+  assert.match(SHARED_SVG_LINE, /X_SVG='<svg width="13" height="13"/, 'clear ships as a 13×13 stroke SVG like its siblings')
+  assert.ok(js.includes('GOAL_CLEAR_SVG=X_SVG'), 'and it is that one shared line, not a second copy of the glyph')
   assert.ok(!js.includes('+esc(L.goalClear)+\'"\'+(busy?\' disabled\':\'\')+\'>×</button>'), 'the bare × glyph is gone from the clear button')
   assert.ok(js.includes('+esc(L.goalClear)+\'"\'+(busy?\' disabled\':\'\')+\'>\'+GOAL_CLEAR_SVG+\'</button>'), 'the clear button renders GOAL_CLEAR_SVG')
 })

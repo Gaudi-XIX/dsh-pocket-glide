@@ -19,9 +19,11 @@ import { mobilePageAssets, messageBlocksScript, messageBlocksLabels } from '../l
 import { applyDescendantRunning, isRecord } from '../lib/projections.js'
 import { withSessionErrors, noteSessionTurnEnd } from '../lib/session-stream.js'
 
-/** 判据 §3 的注入清单：17 个函数与各自的 UTF-8 字节数，合计 13486。不许增减。 */
+/** 判据 §3 的注入清单：17 个函数与各自的 UTF-8 字节数，合计 12138。不许增减。
+ *  renderBlock 从 6002 降到 4654（−1348）：R14-1.2 把文件/呈现块那两段内联 SVG
+ *  提到顶层一行复用，渲染结果不变、源码变短，判据表随之改。 */
 const CORE_WEIGHTS = {
-  renderBlock: 6002,
+  renderBlock: 4654,
   processLineText: 1515,
   toolActivityCategory: 793,
   activityIcon: 731,
@@ -75,8 +77,8 @@ const SEGMENT_WEIGHTS = {
 }
 
 const BLOCK_WEIGHTS = { ...CORE_WEIGHTS, ...TAIL_WEIGHTS, ...PROCESS_WEIGHTS, ...SEGMENT_WEIGHTS }
-const CORE_TOTAL = 13486
-const BLOCK_TOTAL = 26329
+const CORE_TOTAL = 12138
+const BLOCK_TOTAL = 24981
 const BLOCK_NAMES = Object.keys(BLOCK_WEIGHTS)
 
 /**
@@ -148,7 +150,7 @@ const plain = (value) => JSON.parse(JSON.stringify(value))
 // ① 注入契约
 // ---------------------------------------------------------------------------
 
-test('块渲染器从出货产物切片：28 个函数、逐函数同字节、原 17 个仍合计 13486', () => {
+test('块渲染器从出货产物切片：28 个函数、逐函数同字节、原 17 个仍合计 12138', () => {
   for (const locale of ['zh', 'en']) {
     const script = messageBlocksScript(locale)
     let total = 0
@@ -168,6 +170,12 @@ test('块渲染器从出货产物切片：28 个函数、逐函数同字节、�
     // 两张扩展名表是函数裸用的全局，照行从同一份出货文本带出来。
     assert.equal(script.includes("const IMAGE_FILE_EXTS=['png','jpg','jpeg','gif','webp','bmp','avif'];"), true)
     assert.match(script, /const TEXT_FILE_EXTS=\['txt',/)
+    // R14-1.2 把四个图标提到顶层一行（FILE_SVG/SPIN_SVG/STOP_SVG/X_SVG），
+    // renderBlock 的文件/呈现分支改读 FILE_SVG。切片注入必须把这一行一起带出来，
+    // 否则 BOT 页 renderBlock 会真的抛 ReferenceError —— 所以我在这里同时钉住
+    // 「提供方在注入里」与「消费方读的就是它」两头。
+    assert.match(script, /(^|\n)const FILE_SVG='<svg /, 'R14-1.2 的共享图标行必须随注入带上')
+    assert.equal(sliceFunction(script, 'renderBlock').includes('FILE_SVG'), true, 'renderBlock 的文件/呈现分支读的就是那一行')
     // 服务端求值自证：切错了这里就抛 SyntaxError。
     const api = new Function(`${script}\nreturn {${BLOCK_NAMES.join(',')}}`)()
     for (const name of BLOCK_NAMES) assert.equal(typeof api[name], 'function', `${name} 必须可调用`)

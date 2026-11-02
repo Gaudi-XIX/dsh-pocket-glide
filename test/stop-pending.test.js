@@ -122,12 +122,17 @@ function buildPromptSandbox() {
   const send = { hidden: false, disabled: false };
   const cancel = { hidden: false, disabled: false, innerHTML: '<svg width="14" height="14" viewBox="0 0 14 14"><rect x="2" y="2" width="10" height="10" rx="2" fill="currentColor"/></svg>', _stopping: undefined };
   const els = { prompt, send, cancel };
+  // R14-1.2：cancel.innerHTML 改读顶层 SPIN_SVG/STOP_SVG。顶层常量不在 syncPromptUi
+  // 的切片里，取材时一并带上——测的还是同一份出货 syncPromptUi。
+  const svgLine = js.split('\n').find((row) => row.startsWith('const FILE_SVG='));
+  assert.ok(svgLine, 'the shipped script must declare the shared SVG icons on one line');
   const make = new Function(
     'els',
     `
     let agentRunning=true,stopPending=false
     function readyDrafts(){return []}
     const $=(id)=>els[id]
+    ${svgLine}
     ${extractFunction(js, 'syncPromptUi')}
     return {
       prompt:els.prompt,send:els.send,cancel:els.cancel,

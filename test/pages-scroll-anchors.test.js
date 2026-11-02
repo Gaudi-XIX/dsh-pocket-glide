@@ -276,7 +276,7 @@ test('msg-hist lands on the message wrapper and on the flat process message, nev
 test('paintMessages sticks only while followStream holds, and a forced stick re-arms it', () => {
   const js = assets.zh.js
   const body = [
-    'transcriptHasContent', 'olderButtonHtml', 'loadingShell', 'transcriptWaitHtml',
+    'transcriptHasContent', 'olderButtonHtml',
     'showTranscriptRetry', 'paintMessages', 'esc', 'markHistoryTail', 'readTranscriptAnchor', 'restoreTranscriptAnchor',
     'transcriptDistance', 'isNearBottom',
   ]
@@ -354,7 +354,7 @@ test('paintMessages sticks only while followStream holds, and a forced stick re-
 test('paintMessages tags the history tail through the real markHistoryTail', () => {
   const js = assets.zh.js
   const body = [
-    'transcriptHasContent', 'olderButtonHtml', 'loadingShell', 'transcriptWaitHtml',
+    'transcriptHasContent', 'olderButtonHtml',
     'showTranscriptRetry', 'paintMessages', 'esc', 'markHistoryTail', 'readTranscriptAnchor', 'restoreTranscriptAnchor',
   ]
     .map((name) => extractFunction(js, name))

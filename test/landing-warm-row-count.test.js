@@ -9,7 +9,7 @@
 // 现在的口径（判据 2，落点固定在 `pageWarmSummary` 的 landing 分支）：与 boot 交给页面的那份
 // 同一套现成过滤——`withoutWorkspaceRows` + `bootVisibleRows`，调用侧先剔掉页面永不画的两类行
 // （隐藏工作区的成员、`origin === 'subagent'` 的行）。两个公共函数本体一个分支都没加（第 7 条
-// 用例拿 e46e979 的原文对比钉死）；也没有偏移量、没有 clamp（第 6 条用例）。
+// 用例拿 e1e7a8130485bc06bd451e5f040ac2efcc675fec 的原文对比钉死）；也没有偏移量、没有 clamp（第 6 条用例）。
 //
 // 残差按判据 `.agents/docs/ui-unify-pocket-bot-20261030.md:300-321` 的三分类处置：
 //   ① `blankRowVisible`（陈旧空白行）——**已闭合**：它和 `BLANK_ROW_VISIBLE_MS` 都是
@@ -422,7 +422,7 @@ test('a few hundred live rows are reported in full, not truncated to a round num
 test('the landing branch is wired to the shared filters, and the shared filters are untouched', () => {
   // 判据 2 的硬约束：口径必须落在那两个公共函数的调用侧，公共函数本体不加分支。
   // ①落点体内确实调用 `withoutWorkspaceRows` 与 `bootVisibleRows`；②没有任何 `rows: rows.length`
-  // 式的原件读数残留；③没有偏移量／钳位补丁；④两个公共函数的正文与基提交 e46e979 逐字节相同。
+  // 式的原件读数残留；③没有偏移量／钳位补丁；④两个公共函数的正文与基提交 e1e7a8130485bc06bd451e5f040ac2efcc675fec 逐字节相同。
   // ⑤残差①闭合走的是 `lib/pages.js` 的既有导出，不是桥侧抄一份。
   const source = readFileSync(fileURLToPath(new URL('../lib/bridge.js', import.meta.url)), 'utf8')
   const start = source.indexOf('  pageWarmSummary(page) {')
@@ -464,7 +464,7 @@ test('the landing branch is wired to the shared filters, and the shared filters 
   assert.doesNotMatch(source, /function blankRowVisible\s*\(/, 'no local copy of blankRowVisible in lib/bridge.js')
   assert.doesNotMatch(source, /const BLANK_ROW_VISIBLE_MS\s*=/, 'no local copy of BLANK_ROW_VISIBLE_MS in lib/bridge.js')
 
-  const baseline = preFixBaseline('e46e979', 'lib/bridge.js')
+  const baseline = preFixBaseline('e1e7a8130485bc06bd451e5f040ac2efcc675fec', 'lib/bridge.js')
   if (!baseline) {
     // 读不到基线 ≠ 基线成立（test/helpers/pre-fix-baseline.mjs:11-14）：记未取证，不回退读工作树。
     return

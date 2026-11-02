@@ -67,7 +67,6 @@ const ANCHORS = [
   ['function paintMessages(', 'test/error-visibility.test.js:847'],
   ['async function ensureTranscriptFilled()', 'test/error-visibility.test.js:849'],
   ['function oldestEventSeq()', 'test/error-visibility.test.js:849'],
-  ['function loadingShell()', 'test/error-visibility.test.js:820'],
   ['const STREAM_CODE_COPY=', 'test/error-visibility.test.js:119'],
   ['STREAM_DOWN_COOLDOWN_MS=', 'test/error-visibility.test.js:122'],
   ['STREAM_DOWN_STABLE_MS=', 'test/error-visibility.test.js:123'],
@@ -92,6 +91,17 @@ const ANCHORS = [
   ['LAST_MESSAGE_KEY=', 'test/pages-scroll-anchors.test.js:494'],
 ]
 
+/**
+ * R14-1.6 把骨架整段删掉：`loadingShell` / `transcriptWaitHtml` 在出货产物里已无
+ * 定义、也无任何调用点（grep 已证死）。原来钉「恰好出现一次」的那条锚点随之反转成
+ * 「出现即失败」——比原来更严：从「必须存在一份」变成「一份都不许回来」。
+ * `src` 仍记它当初登记在哪条断言上，方便回溯。
+ */
+const ABSENT_ANCHORS = [
+  ['function loadingShell()', 'R14-1.6 已删（原 test/error-visibility.test.js:820）'],
+  ['function transcriptWaitHtml(', 'R14-1.6 已删'],
+]
+
 const count = (haystack, needle) => haystack.split(needle).length - 1
 
 for (const locale of ['zh', 'en']) {
@@ -101,6 +111,12 @@ for (const locale of ['zh', 'en']) {
       assert.equal(
         count(js, anchor), 1,
         `anchor ${JSON.stringify(anchor)} (${source}) must hit exactly once in the shipped ${locale} js, got ${count(js, anchor)}`,
+      )
+    }
+    for (const [anchor, source] of ABSENT_ANCHORS) {
+      assert.equal(
+        count(js, anchor), 0,
+        `anchor ${JSON.stringify(anchor)} (${source}) must be gone from the shipped ${locale} js, got ${count(js, anchor)}`,
       )
     }
   })

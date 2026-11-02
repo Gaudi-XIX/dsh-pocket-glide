@@ -697,6 +697,9 @@ function fakeBrowser({
   // than thrown away.
   const classes = new Set(['bp-list', 'bp-loading', 'bp-busy'])
   const body = {
+    // R14-1 的离屏量高把探针挂到 body 上排版；替身照真浏览器答「挂得上、随后能摘」。
+    appendChild() {},
+    removeChild() {},
     classList: {
       add: (name) => classes.add(name),
       remove: (name) => classes.delete(name),
@@ -719,6 +722,40 @@ function fakeBrowser({
     documentElement: { lang: 'zh-CN' },
     getElementById: (id) => node(id),
     addEventListener: (type, fn) => documentListeners.set(type, fn),
+    // R14-1：一屏的判据从「scrollHeight 比 clientHeight 高」换成「离屏容器里
+    // 逐行量高、累加 ≥ clientHeight×1.15」（lib/bot-page.js measureChatRows）。
+    // 替身不给 createElement 的话，量高会抛、退回 rows.length，于是「刚好够一屏」
+    // 与「不够一屏」在替身里同值——那条判据在替身里永远打不了勾（P1-5：替身缺
+    // 什么，生产里就多一条给替身让路的判据）。这里按 bpMsgs 同一套几何答：
+    // 一行 40px。
+    createElement: () => {
+      let probeHtml = ''
+      const probe = {
+        tagName: 'DIV',
+        style: {},
+        setAttribute() {},
+        appendChild() {},
+        remove() {},
+        scrollTop: 0,
+        scrollHeight: 0,
+        clientHeight: 0,
+        children: [],
+        getBoundingClientRect: () => ({ top: 0, bottom: 0, height: 0 }),
+        querySelectorAll: () => [],
+      }
+      Object.defineProperty(probe, 'innerHTML', {
+        configurable: true,
+        get: () => probeHtml,
+        set: (next) => {
+          probeHtml = String(next)
+          const re = /class="(bp-(?:msg|divider|event|older)[^"]*)"/g
+          const rows = []
+          while (re.exec(probeHtml)) rows.push(1)
+          probe.children = rows.map(() => ({ getBoundingClientRect: () => ({ top: 0, bottom: 40, height: 40 }) }))
+        },
+      })
+      return probe
+    },
   }
   const navigations = []
   const historyReplaced = []
@@ -2664,7 +2701,11 @@ test('a chat keeps the way back to the list, not to the landing', async () => {
   assert.ok(!page.classes.has('bp-list'))
 })
 
-test('the last roster is on screen before the team read returns, and carries no approval card', async () => {
+test('a failed team read shows no recalled roster, so the first frame cannot jump', async () => {
+  // R14-3.5：BOT 主页的机器人数/群数若先用 localStorage 缓存 `pocketBotTeam` 画一
+  // 遍、真值到达再二画，就是现象①⑤（数字先少后跳）。新契约：首帧数字只来自同一
+  // 份快照，缺项留白，不许先用缓存旧值画一遍。`paintRecall()`（原「名单画完即把
+  // 上次缓存先画一版」）已删——这条按新契约改：缓存里的名单在任何时刻都不得上屏。
   const recalled = {
     bots: [{ id: 'b-chief', name: 'Chief', role: 'Chief of Staff', sessionId: 's-chief' }],
     rooms: [],
@@ -2672,17 +2713,21 @@ test('the last roster is on screen before the team read returns, and carries no 
     questions: null,
     at: Date.now()
   }
-  // The read fails: whatever is on screen can only have come from the recall.
+  // The read fails: under the old contract the phone would still show the cached
+  // roster; under R14-3 the first frame has to stay blank, not a stale copy.
   const page = fakeBrowser({
     seed: { pocketBotTeam: JSON.stringify(recalled) },
     answer: (method) => (method === 'bot.team' ? { ok: false, error: '连不上', code: 'bot/down' } : {}),
   })
   await page.settle(20)
 
-  assert.ok(page.node('bpMembersList').innerHTML.includes('Chief'),
-    'the roster the phone drew last time is painted at once, before any read returns')
+  assert.ok(!page.node('bpMembersList').innerHTML.includes('Chief'),
+    'the roster from last time is NOT painted first: a stale copy must not fill the list before the read (R14-3)')
   assert.ok(!page.node('bpMembersList').innerHTML.includes('data-approve'),
     'no 允许/拒绝 button comes back from a copy — a stale card must not be answerable')
+  const defined = BOT_PAGE_JS.includes('function paintRecall()') ? 1 : 0
+  assert.equal(BOT_PAGE_JS.split('paintRecall()').length - 1 - defined, 0,
+    'the cache-first paint has no call site left: a stale roster must not be drawn before the read (R14-3.5)')
 })
 
 test('the copy kept for the next open carries the rows and no approval card', async () => {
@@ -2909,9 +2954,9 @@ test('the Pocket page uses PIN-code style transition card with BOT heading when 
   assert.match(html, /<em style="flex-basis:100%;text-align:center">/, 'the line sits on its own row, not beside the name')
   assert.match(html, /<h1>BOT<\/h1>/, 'carries the BOT heading')
   assert.match(html, /class="boot-steps show"/, 'carries the PIN boot steps container')
-  assert.match(html, /读取 BOT 列表/, 'step 1 reads what the Bot page reads first')
-  assert.match(html, /读取 BOT 会话/, 'step 2 reads the bot conversations')
-  assert.match(html, /读取群聊/, 'step 3 reads the groups')
+  assert.match(html, /机器人数/, 'step 1 counts the Bots the Bot page will list')
+  assert.match(html, /群数/, 'step 2 counts the groups')
+  assert.match(html, /加载消息/, 'step 3 counts the messages the /bot document ships')
   assert.match(html, /正在准备页面/, 'step 4 prepares the page')
   // 行一渲染就有读数、右侧不留空（用户 2026-10-27：三页的读数逻辑要一样）。
   assert.match(html, /data-unit=" 个 BOT"[^>]*>0 个 BOT</, 'step 1 starts at zero Bots, never blank')
@@ -2962,8 +3007,9 @@ test('the landing card counts the Bots the page already knows, before anything a
   })
   assert.match(html, /var lockRow=function\(i\)\{if\(!cueDone\|\|!cueSummary\)return null;/, 'every cell waits for the bridge cue, and none is pre-filled locally')
   assert.match(html, /typeof cueSummary\.bots==="number"\?cueSummary\.bots:null/, 'the Bot count is the summary field, not a local tally')
-  assert.match(html, /typeof cueSummary\.botSessions==="number"\?cueSummary\.botSessions:null/, 'and so is the Bot-session count')
-  assert.match(html, /typeof cueSummary\.rooms==="number"\?cueSummary\.rooms:null/, 'and the room count')
+  assert.match(html, /typeof cueSummary\.rooms==="number"\?cueSummary\.rooms:null/, 'the room count is the summary field, not a local tally')
+  assert.match(html, /typeof cueSummary\.messages==="number"\?cueSummary\.messages:null/, 'and the shipped-preview message count (R14-5.1)')
+  assert.doesNotMatch(html, /cueSummary\.botSessions/, 'the Bot-session row is gone (R14-5.2)')
   assert.doesNotMatch(html, /var bots=0,chats=0;/, 'no local counter survives for the landing card')
   // Q1 口径 B：页面已知的读数不再预填进任何缓冲，也没有「先写着、激活时覆盖」的第二条路径——
   // 轮到哪一行，lockRow 就在那一刻现取（pre-cue 有读数的要求本身没变）。

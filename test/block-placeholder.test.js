@@ -20,6 +20,16 @@ function labels(locale) {
 
 // renderBlock is a single dense line that also contains braces inside string
 // literals, so the slice runs to the next definition instead of counting braces.
+//
+// R14-1.2 把四个图标提到出货 js 的顶层一行，renderBlock 的文件/呈现分支改读
+// `FILE_SVG`。顶层常量不在这两个函数的切片里，取材时必须一并带上——测的还是
+// 同一份出货 renderBlock，不是换了个函数。
+function shippedSvgLine(js) {
+  const line = js.split('\n').find((row) => row.startsWith('const FILE_SVG='))
+  assert.ok(line, 'the shipped script must declare the shared SVG icons on one line')
+  return line
+}
+
 function renderSandbox(locale) {
   const js = assets[locale].js
   const start = js.indexOf('function renderBlock(')
@@ -35,6 +45,7 @@ function renderSandbox(locale) {
     `const markdown=text=>String(text||'')`,
     `let agentRunning=false`,
     `function formatBytes(n){n=Number(n)||0;if(n<1024)return n+' B';const units=['KB','MB','GB'];let v=n/1024,i=0;while(v>=1024&&i<units.length-1){v/=1024;i++}return v.toFixed(v<10?1:0)+' '+units[i]}`,
+    shippedSvgLine(js),
     js.slice(start, end),
     js.slice(messageStart, messageEnd),
   ].join('\n')

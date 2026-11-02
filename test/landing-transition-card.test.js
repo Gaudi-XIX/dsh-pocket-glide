@@ -48,7 +48,7 @@ function landingHead() {
  */
 function harness({
     cue = 'ok',
-    value = { ready: true, workspaces: null, sessions: null, messages: null, bots: 2, botSessions: 3, rooms: 3 },
+    value = { ready: true, workspaces: null, sessions: null, messages: 5, bots: 2, botSessions: 3, rooms: 3 },
     summaries = [{ botName: 'a' }, { botName: 'a' }, { botName: 'b' }]
   } = {}) {
   const navigations = []
@@ -231,8 +231,8 @@ test('过渡卡：cue 未到之前一行都不定稿，到了才按阶梯顺序�
   h.answer()
   await h.flush()
   assert.equal(h.rows[0].querySelector('.bsc').textContent, '2 个 BOT')
-  assert.equal(h.rows[1].querySelector('.bsc').textContent, '3 个会话', '第二格取自摘要的 botSessions')
-  assert.equal(h.rows[2].querySelector('.bsc').textContent, '3 个群')
+  assert.equal(h.rows[1].querySelector('.bsc').textContent, '3 个群', '第二格取自摘要的 rooms')
+  assert.equal(h.rows[2].querySelector('.bsc').textContent, '5 条消息', '第三格取自本次 /bot boot 的 previews 条数')
   assert.equal(h.rows[3].querySelector('.bsc').textContent, '已就绪')
   for (let index = 0; index < ROWS.length; index += 1) {
     assert.equal(h.rows[index]._final, true, `第 ${index} 行在 cue 到达后定稿`)
