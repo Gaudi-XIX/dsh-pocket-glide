@@ -241,7 +241,7 @@ test('过渡卡：cue 未到之前一行都不定稿，到了才按阶梯顺序�
   await h.flush()
   assert.equal(h.rows[0].querySelector('.bsc').textContent, '2 个 BOT')
   assert.equal(h.rows[1].querySelector('.bsc').textContent, '3 个群', '第二格取自摘要的 rooms')
-  assert.equal(h.rows[2].querySelector('.bsc').textContent, '5 条消息', '第三格取自本次 /bot boot 的 previews 条数')
+  assert.equal(h.rows[2].querySelector('.bsc').textContent, '5 条消息', '第三格取自答复里的摘要字段 messages，不是页面自己读到的条数')
   assert.equal(h.rows[3].querySelector('.bsc').textContent, '已就绪')
   for (let index = 0; index < ROWS.length; index += 1) {
     assert.equal(h.rows[index]._final, true, `第 ${index} 行在 cue 到达后定稿`)
@@ -316,4 +316,11 @@ test('答复永不到达：2000ms 后报错、不跳转，再等 5s 也不自行
   assert.deepEqual(h.navigations, [], '报错之后不许自行放行')
   assert.equal(h.failRow.hidden, false)
   assert.ok(!h.rows[3].querySelector('.bsc').textContent.includes('已就绪'))
+  // 判据 V5：这一帧与之后任何一帧都不许出现「未就绪」，末格也不许出现字符串 0——
+  // 收口是留白＋#switchFail 显形，不是拿一个假读数把卡填满（R15-3.2/3.3 删掉了
+  // 「未就绪」那条路：旧实现到点会往末格写它，失败收口还会把 0 补上去）。
+  for (const row of h.rows) {
+    assert.ok(!row.querySelector('.bsc').textContent.includes('未就绪'), '卡上任何一格都不许出现「未就绪」')
+  }
+  assert.ok(!h.rows[3].querySelector('.bsc').textContent.includes('0'), '末格不许出现字符串 0')
 })

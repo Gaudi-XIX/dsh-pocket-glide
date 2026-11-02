@@ -5,7 +5,7 @@
 //      的会话行只有 4 行——取的是「payload 全量长度」这种和屏幕无关的数；
 //   ② 这一趟 boot 没带 tails 时第三行把 0 定稿成读数，读到 0 与根本没读到在界面上无法区分。
 //
-// 取样点：出货页里冷启动卡那一段（`const bootOv=$('bootOverlay')` 起、`const boot=takeHandoffBoot()`
+// 取样点：出货页里冷启动卡那一段（`const bootOv=$('bootOverlay')` 起、`if(handoff){applyBootData(boot)`
 // 止）读的是 **boot 载荷下发的 `stageSummary`**（判据 v7 §3/§4：四张卡同一份摘要，页面不许再数
 // DOM）。这一条是裁决 R3 改的：旧口径「直接读 .ws-card／.task-row 的 length」在读数要跟摘要
 // 一致的契约下已不成立——页面只许「确认」，DOM 与摘要不一致时以摘要为准。
@@ -36,7 +36,10 @@ function cardSource() {
   const block = blocks().find((source) => source.includes("const bootOv=$('bootOverlay')"))
   assert.ok(block, '出货页里找不到冷启动卡那一段')
   const start = block.indexOf("const bootOv=$('bootOverlay')")
-  const end = block.indexOf('const boot=takeHandoffBoot()')
+  // 判据 R15-2.2(乙)：这一段现在还要读 `boot.stageSummary` 来决定露不露卡，所以取样必须
+  // 把 `const boot=…`／`const ovSummary=…`／`ovLadder`…`ovFail` 整段括进来；切到
+  // `if(handoff){applyBootData(boot)` 为止（再往后是本页自己的加载流程，不属于这张卡）。
+  const end = block.indexOf('if(handoff){applyBootData(boot)')
   assert.ok(end > start, '出货页里冷启动卡那一段的首尾锚点对不上')
   return block.slice(start, end)
 }
@@ -46,8 +49,11 @@ function cardSource() {
 function fakeRows() {
   return ROWS.map((spec) => {
     const cell = {
-      textContent: spec.start ? spec.start : '0' + spec.unit,
-      dataset: { unit: spec.unit },
+      // 判据 R15-1.1/1.2：带 `blank` 的格子在出货 markup 里出生就是空的、只带
+      // `data-blank="1"`，挂载兜底认这个标记才不写「0＋单位」。替身照抄——否则
+      // 「摘要未到不成值」这条在替身里永远测不出（P1-5：替身不许比真机宽松）。
+      textContent: spec.blank ? '' : (spec.start ? spec.start : '0' + spec.unit),
+      dataset: spec.blank ? { unit: spec.unit, blank: '1' } : { unit: spec.unit },
       _final: false,
       _scan: null,
     }
@@ -71,7 +77,7 @@ function fakeRows() {
 // 四张卡读的就是这一份：ready + 三格数字（判据 v7 §3 的七键里本页适用的四个）。
 const SUMMARY = { ready: true, workspaces: 4, sessions: 4, messages: 3 }
 
-function harness({ cards = 4, rows = 4, payloadWs = 4, payloadRows = 402 } = {}) {
+function harness({ cards = 4, rows = 4, payloadWs = 4, payloadRows = 402, bootPayload = { stageSummary: SUMMARY } } = {}) {
   const timers = new Map()
   let seq = 0
   let now = 0
@@ -126,6 +132,11 @@ function harness({ cards = 4, rows = 4, payloadWs = 4, payloadRows = 402 } = {})
     'document',
     'workspaces',
     'sessionSummaries',
+    // 判据 R15-2.2(乙) 起，这一段卡片源码还要问 boot 要 `stageSummary`：替身照真机
+    // 把「这一趟的 boot 载荷」喂进去（冷启动那趟走的正是 takeHandoffBoot 这条 stash）。
+    'window',
+    'takeHandoffBoot',
+    'cachedBoot',
     body,
   )
   // workspaces / sessionSummaries 是诱饵：真页面作用域里这两个数是 payload 全量，卡片不该读它们。
@@ -137,6 +148,9 @@ function harness({ cards = 4, rows = 4, payloadWs = 4, payloadRows = 402 } = {})
     documentStub,
     new Array(payloadWs).fill({}),
     new Array(payloadRows).fill({ botName: 'x' }),
+    {},
+    () => bootPayload,
+    null,
   )
 
   return {
@@ -194,9 +208,33 @@ test('L2 没拿到真值的行不落 0、末行不写「已就绪」、fail-clos
     h.ovReady()
     assert.equal(h.overlay.hidden, true, '还有行没读到真值 ⇒ halt 并收卡离场')
     assert.equal(h.rows[3].cell.textContent.includes('已就绪'), false, '末行不许写「已就绪」')
-    assert.equal(h.rows[2].cell.textContent, '0 条消息', '收口时落回占位 0＋单位，不当读数')
+    assert.equal(h.rows[2].cell.textContent, '', '收口时不许把占位 0 当读数写上去：这一格保持留白（判据 R15-5）')
   } finally {
     h.stop()
+  }
+})
+
+test('没有可用摘要的那一趟不显示冷启动卡，四格一格都不成值（判据 R15-2.2 乙）', () => {
+  // 重新进那趟（shell 形状）只有 stageSummary 可用：字段整块缺失、ready:false、三格缺一、
+  // 或某一格不是数，都不许露这张卡——宁可不显示，也不显示一张写假值的卡。旧实现只数
+  // 「有没有 .boot-step 行」，于是这样一趟会露出三格 0＋末格 ovFail 补写的字符串 0。
+  const bad = [
+    ['摘要整块缺失', {}],
+    ['ready 为 false（冷摘要）', { stageSummary: { ready: false, workspaces: 0, sessions: 0, messages: 0 } }],
+    ['三格缺一', { stageSummary: { ready: true, workspaces: 1, sessions: 2 } }],
+    ['有一格不是数', { stageSummary: { ready: true, workspaces: '1', sessions: 2, messages: 3 } }],
+  ]
+  for (const [why, bootPayload] of bad) {
+    const h = harness({ bootPayload })
+    try {
+      assert.equal(h.overlay.hidden, true, `${why}：这张卡不该显形`)
+      assert.equal(h.ovLadder, null, `${why}：没有可用摘要就没有阶梯在跑`)
+      h.tick(2000)
+      assert.equal(h.overlay.hidden, true, `${why}：不会过一会儿又自己露出来`)
+      assert.deepEqual(h.ovState, [-1, -1, -1, -1], `${why}：四格一格都不许被写成读数`)
+    } finally {
+      h.stop()
+    }
   }
 })
 

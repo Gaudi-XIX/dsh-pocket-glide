@@ -182,7 +182,7 @@ test('PARSE: every inline script of every phone page actually parses', () => {
 // 一旦只住在 bootstrap 里（commit d0449d3 的做法），真机冷开时 app.js 先跑，抛
 // `ReferenceError: ladderRun is not defined`，catch 里 ovFail() 又撞上 `ovLadder` 的 TDZ
 // 抛出第二个错，async IIFE reject，loadListData/renderWorkspaces 再也不会执行，而
-// `window.__pocketAppReady=true` 照常置位——遮罩永久停在「正在打开 Pocket」，列表空白。
+// `window.__pocketAppReady=true` 照常置位——遮罩永久停在「正在进入 Pocket」，列表空白。
 //
 // 三条既有测试都看不见它：handoff-boot-dedup 只称字节，landing-transition-card 只把
 // bootstrap 抽出来跑（主脚本被替身掉），bot-page 只对字符串做 match。这条测试钉的是

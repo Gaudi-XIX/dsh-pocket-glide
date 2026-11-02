@@ -438,11 +438,13 @@ function shellShape(html = renderBotPage({ cssUrl: '/app.css?h=0', jsUrl: '/bot.
     }
     if (!VOID.has(name) && !attrs.trimEnd().endsWith('/')) stack.push({ name, id })
   }
-  // 每一行的「单位」与起步读数也照壳取（`data-unit` 与节点里的初值）：真 DOM 里
-  // `el.dataset.unit` 与 `el.textContent` 就是这么来的。替身缺这两样，卡片脚本写出来
-  // 的就不是真机上的那句话——「12」与「12 个会话」差的是同一个教训（P1-5）。
-  const slots = [...html.matchAll(/<span class="bsc" data-unit="([^"]*)"[^>]*>([^<]*)</g)]
-    .map(([, unit, start]) => ({ unit, start }))
+  // 每一行的「单位」与起步读数也照壳取（`data-unit` 与节点里的初值，外加 `data-blank`
+  // 这个「留白行」标记）：真 DOM 里 `el.dataset.unit` / `el.dataset.blank` / `el.textContent`
+  // 就是这么来的。替身缺这几样，卡片脚本写出来的就不是真机上的那句话——「12」与
+  // 「12 个会话」差的是同一个教训（P1-5）；漏掉 `data-blank` 则会让真机留白的行在替身里
+  // 被挂载兜底写成「0＋单位」，R15-1 的「摘要未到不许成值」就永远测不出来。
+  const slots = [...html.matchAll(/<span class="bsc" data-unit="([^"]*)"([^>]*)>([^<]*)</g)]
+    .map(([, unit, rest, start]) => ({ unit, start, blank: /data-blank="1"/.test(rest) }))
   return { ids, ancestors, flags, steps, counts, slots }
 }
 const SHELL = shellShape()
@@ -667,10 +669,12 @@ function fakeBrowser({
   // `classList.toggle` 支持 `(name, force)` 两参形态），测试据此断言走到了第几步。
   for (let index = 0; index < SHELL.steps; index += 1) {
     const classes = new Set(index === 0 ? ['boot-step', 'is-active'] : ['boot-step'])
-    const slot = SHELL.slots[index] || { unit: '', start: '' }
+    const slot = SHELL.slots[index] || { unit: '', start: '', blank: false }
     // 数字位与真 DOM 同形：有初值、有 `dataset.unit`（单位照壳读）、有 parentElement
     // 指回这一行——卡片脚本靠这三样把「读了多少」写成人话并给这一行划线。
-    const countNode = { textContent: slot.start, dataset: { unit: slot.unit } }
+    // `data-blank="1"` 也照壳带上：真机的挂载兜底认这个标记，留白行不许被写成
+    // 「0＋单位」（判据 R15-1.2）；替身漏掉它，同一个兜底就会把留白行写成 0 而测试全绿。
+    const countNode = { textContent: slot.start, dataset: { unit: slot.unit, ...(slot.blank ? { blank: '1' } : {}) } }
     const stepNode = {
       index,
       classes,
@@ -901,30 +905,45 @@ function fakeBrowser({
  * 把过渡卡推完。真机上点 BOT 页右上角那一下先起四步卡（70ms 一步），走完再停
  * dwell 才真的离开页面——替身里 timeout 不自己 fire，所以测试必须显式推。
  *
- * 2026-10-27② 起卡片还要等桥答复一份「已载入多少」，等不到 1.6s 兜底就自己走；
- * 替身里那个 timeout 也不自己 fire，所以这里连它一起烧——等价于「桥 1.6 秒没答」。
- * 1.6 这个数字不是随手定的：桥那边等 warmPage 的上限是 `pageCueWaitMs ?? 1500`，
- * 卡先放弃就会把数字写在正在卸载的文档上（2026-10-28）。
+ * 2026-10-27② 起卡片还要等桥答复一份「已载入多少」。判据 R15-3.4：端上的等待
+ * 上限是 `SWITCH_WAIT_MS = 2000`（桥侧 `pageCueWaitMs ?? 1500` 再加 500ms 余量，
+ * 见 lib/bot-page.js:2493）；到点仍未成值就走 fail-closed（收卡＋留在 /bot），
+ * 不再像旧值 1600 那样自己放行。**「桥 2 秒没答」这一档由它自己的用例显式推那个
+ * 2000ms 的表**（见 `the card outlasts …`），这个助手不推——它走的是「答复到了、
+ * 卡正常走完」那条路。
  *
  * 2026-10-30 Q1：逐行阶梯与停留都改成链式 setTimeout（原先 70ms 那档走 setInterval），
  * 所以推的是 fireTimers 而不是 fireIntervals——每档只烧毫秒数相等的那些表。
  */
 async function finishSwitch(page) {
+  // 桥的答复在微任务里就到（真机也在 2s 上限内先答）。先让摘要落地，再推阶梯：替身里
+  // `clearTimeout` 是空实现，`SWITCH_WAIT_MS` 那只表一旦烧掉就是「桥 2 秒没答」那条
+  // fail-closed 路（收卡、留 /bot，由它自己的用例管），会把这一趟当场打成收卡。
+  await page.settle()
   for (let step = 0; step < page.switchSteps.length; step += 1) page.fireTimers(70)
-  page.fireTimers(1600)
   await page.settle()
   // 判据 6D：完成文字落屏之后要停 500ms 才跳转，这条表就是那 0.5 秒。
   page.fireTimers(500)
   await page.settle()
 }
 
+/**
+ * 走完 BOT→Pocket 那张卡所需的答复。判据 R15-3.1：四格全部成值（前三格都是数）且末格
+ * 成「已就绪」才允许导航——所以凡是期望「真的到了首页」的用例，cue 都必须给齐三个数。
+ * 冷摘要或缺格的答复会走 fail-closed（另有专门用例），不会离开本页。
+ */
+const WARM_LANDING = { ready: true, workspaces: 1, sessions: 2, messages: 3 }
+const warmLanding = (method) => (method === 'page.cue' ? WARM_LANDING : {})
+
 test('the way out says how much of the landing is already warm, on the row that speaks for it', async () => {
   // 用户 2026-10-27②：「中间页也应该有数据的显示（即加载了多少数据的显示）」。
-  // 四步卡片快步走完只要 280ms，那时桥还什么都没说；现在它等 bridge 的答复（1.6s
-  // 兜底），把「读了多少会话 / 是否就绪」写在自己的那两行上。
+  // 四步卡片快步走完只要 280ms，那时桥还什么都没说；现在它等 bridge 的答复，把
+  // 「工作区 / 会话 / 消息各多少、能不能离开」写在自己的四行上。
+  // 判据 R15-1.4 + R15-3.1：三格都取同一份 page.cue 摘要，末格只在三格都成值时才写
+  // 「已就绪」——所以这一趟的答复必须三格都是数（messages 为 null 会让卡一直等到 2000ms）。
   const page = fakeBrowser({
     answer: (method) => (method === 'page.cue'
-      ? { ready: true, workspaces: 3, sessions: 12, messages: null, bots: null, botSessions: null, rooms: null }
+      ? { ready: true, workspaces: 3, sessions: 12, messages: 5, bots: null, botSessions: null, rooms: null }
       : {}),
   })
   await page.settle()
@@ -937,13 +956,16 @@ test('the way out says how much of the landing is already warm, on the row that 
   await page.settle()
   assert.equal(page.switchCounts[0].textContent, '3 个工作区', 'the first row says how many workspaces the landing holds')
   assert.equal(page.switchCounts[1].textContent, '12 个会话', 'the row that reads the list says how many rows it read')
+  assert.equal(page.switchCounts[2].textContent, '5 条消息', 'the message row takes the summary field too, not what this page read')
   assert.equal(page.switchCounts[3].textContent, '已就绪', 'the last row says whether the landing is warm')
 })
 
-test('a cold summary never overwrites the numbers the page already holds with zeros', async () => {
-  // 2026-10-28：冷摘要（ready:false）里每一格都是 0。照写就把点下去那一刻刚用本地缓存
-  // 填好的「读了多少会话 / 多少消息」抹回 0——用户看到的正是「第 0/1 格恒 0」。
-  // 只有 ready:true 才允许写数字：桥没读到就说「未就绪」，一个数都不装。
+test('a cold summary never paints zeros: the card waits, then closes without leaving', async () => {
+  // 2026-10-28 的老毛病：冷摘要（ready:false）里每一格都是 0，照写就把点下去那一刻刚
+  // 用本地缓存填好的读数抹回 0（用户看到的「第 0/1 格恒 0」）。
+  // 判据 R15-1.3：`knownRows`/`knownMessages` 那条「回落本地读数」的路整条删除——页面
+  // 自己读过多少都不再是卡上的数。摘要是冷的，三格就一直留白；末格不写「未就绪」，
+  // 按 fail-closed 收口：收卡、留在 /bot、用 toast 说明（判据 R15-3.5）。
   const page = fakeBrowser({
     answer: (method) => {
       if (method === 'bot.team') return teamWith()
@@ -959,15 +981,33 @@ test('a cold summary never overwrites the numbers the page already holds with ze
   await page.settle()
   for (let step = 0; step < page.switchSteps.length; step += 1) page.fireTimers(70)
   await page.settle()
-  assert.equal(page.switchCounts[1].textContent, '2 个会话', 'the rows this page already read stay on the row that counts them')
-  assert.equal(page.switchCounts[2].textContent, '2 条消息', 'and so do the messages it already holds')
-  assert.equal(page.switchCounts[3].textContent, '未就绪', 'a bridge that read nothing says so instead of printing zeros as facts')
+  // 这一页确实已经读过一条会话、两条消息（上面的替身喂了 previews），但那几个数一个
+  // 都不许上卡：三格留白，因为桥的摘要是冷的。
+  assert.equal(page.switchCounts[0].textContent, '', 'a page-local reading is not a cue reading: the first row stays blank')
+  assert.equal(page.switchCounts[1].textContent, '', 'the rows this page already read are no longer a fallback')
+  assert.equal(page.switchCounts[2].textContent, '', 'nor for the messages it already holds')
+  assert.equal(page.switchCounts[3].textContent, '准备中', 'the last row keeps its own word — never 未就绪')
+  assert.doesNotMatch(page.switchCounts[3].textContent, /未就绪/, 'the not-ready word is gone')
+  // 不可用的答复 ⇒ fail-closed：卡片自己下屏，页面留在原处，失败用 toast 说。
+  assert.equal(page.node('bpSwitchOverlay').hidden, true, 'an unusable answer takes the card off screen instead of painting zeros')
+  assert.equal(page.node('bpToast').hidden, false, 'and the failure is spoken through the page’s own toast')
+  assert.equal(page.node('bpToast').textContent, '准备超时，请再试一次', 'with the shared timeout copy')
+  assert.deepEqual(page.navigations, [], 'fail-closed never leaves the page')
+  assert.deepEqual(page.historyReplaced, [], 'and never replaces the entry behind it either')
+  // 到点也不会自己放行（fail-closed 是幂等的）。
+  page.fireTimers(2000)
+  await page.settle()
+  assert.deepEqual(page.navigations, [], 'nor does the wait bound release the page afterwards')
+  assert.equal(page.node('bpSwitchOverlay').hidden, true, 'the card stays closed')
 })
 
-test('the card outlasts the bridge’s own wait before giving up on the numbers', async () => {
+test('the card outlasts the bridge’s own wait, then closes without leaving when nothing lands', async () => {
   // 桥那边等一次预热的上限是 `warmPage` 的 `pageCueWaitMs ?? 1500`（lib/bridge.js）。
-  // 卡片 1.2s 就自己走的话，慢答把数字写在正在卸载的文档上——手机上就是「第 0 格还是 0」。
-  // 所以这里钉住的是先后：1.2s 时必须还在等，1.6s 的兜底到了才准离开。
+  // 卡片比它先放弃的话，慢答会把数字写在正在卸载的文档上——手机上就是「第 0 格还是 0」。
+  // 判据 R15-3.4：端上上限是 2000（1500 + 500 余量），不是旧值 1600。
+  // 判据 R15-3.5 + V6：到点仍未成值就是 fail-closed——收卡、留在 /bot、toast 说明，
+  // 不写「未就绪」也不导航。这条就是 V6 要的「窗口到点仍未成值 ⇒ 卡收起、无导航」。
+  assert.match(BOT_PAGE_JS, /var SWITCH_WAIT_MS = 2000\b/, 'the wait is 2000: the bridge waits 1500, so the page keeps a 500ms margin')
   const page = fakeBrowser({ answer: () => ({}), hang: (method) => method === 'page.cue' })
   await page.settle()
   page.click('bpHome', { preventDefault() {} })
@@ -976,11 +1016,16 @@ test('the card outlasts the bridge’s own wait before giving up on the numbers'
   page.fireTimers(1200)
   await page.settle()
   assert.deepEqual(page.navigations, [], '1.2s is inside the bridge’s window; leaving here is what loses the numbers')
-  page.fireTimers(1600)
+  assert.equal(page.node('bpSwitchOverlay').hidden, false, 'and the card is still up, still waiting')
+  page.fireTimers(2000)
   await page.settle()
-  assert.deepEqual(page.navigations, [], 'the bound that lets the card go replaces this entry with the landing')
-  assert.deepEqual(page.historyReplaced, [['/']], 'and the entry it replaces points at the landing')
-  assert.equal(page.historyReplaced[0][0], '/', 'the landing is exactly /')
+  assert.deepEqual(page.navigations, [], 'the bound closes the card; it never fakes a departure')
+  assert.deepEqual(page.historyReplaced, [], 'so the entry behind the page is untouched — the phone stays on /bot')
+  assert.equal(page.location.pathname, '/bot', 'and the path never changes')
+  assert.equal(page.node('bpSwitchOverlay').hidden, true, 'the card is taken off screen')
+  assert.equal(page.node('bpToast').hidden, false, 'the failure is spoken through the page’s own toast')
+  assert.match(page.node('bpToast').textContent, /准备超时/, 'with the timeout copy')
+  assert.equal(page.switchCounts[3].textContent, '准备中', 'and the last row never says 未就绪')
 })
 
 test('a chat the roster already read opens with its rows and does not read them again', async () => {
@@ -1872,7 +1917,7 @@ test('a divider stamps when the earlier part began', async () => {
   page.fireWindow('hashchange')
   await page.settle()
   const msgs = page.node('bpMsgs').innerHTML
-  assert.match(msgs, /09:05 · 更早的记录/, 'the divider prints the part boundary like the landing does')
+  assert.match(msgs, /09:05 · 更早的对话/, 'the divider prints the part boundary like the landing does')
 })
 
 // ---------------------------------------------------------------------------
@@ -2056,7 +2101,7 @@ test('the back key steps out of a chat, and the list itself carries no back', as
 })
 
 test('a page opened with nothing behind it still finds the way home', async () => {
-  const page = fakeBrowser()
+  const page = fakeBrowser({ answer: warmLanding })
   await page.settle()
   page.window.history.length = 1
   page.click('bpHome', { preventDefault() {} })
@@ -2066,7 +2111,7 @@ test('a page opened with nothing behind it still finds the way home', async () =
 })
 
 test('a page opened from another site goes to the landing, not back to that site', async () => {
-  const page = fakeBrowser()
+  const page = fakeBrowser({ answer: warmLanding })
   await page.settle()
   // Opened from a chat app or a search result: there is an entry behind this
   // page, but it is not this site's landing.
@@ -2524,7 +2569,7 @@ test('the word you sent is on screen once, through the poll that brings it back'
 // ---------------------------------------------------------------------------
 
 test('the list shows the way home, and taking it says so before leaving', async () => {
-  const page = fakeBrowser({ answer: () => ({}) })
+  const page = fakeBrowser({ answer: warmLanding })
   await page.settle()
 
   assert.ok(page.classes.has('bp-list'), 'the list is the side of the page the way home belongs on')
@@ -2543,7 +2588,7 @@ test('the list shows the way home, and taking it says so before leaving', async 
 })
 
 test('the last word on the way out rides a keepalive request, because the answer is needed', async () => {
-  const page = fakeBrowser({ answer: () => ({}) })
+  const page = fakeBrowser({ answer: warmLanding })
   await page.settle()
 
   page.click('bpHome', { preventDefault() {} })
@@ -2561,7 +2606,7 @@ test('the last word on the way out rides a keepalive request, because the answer
 // `querySelectorAll`，页面为此写了一条双判据，于是这条分支只有真机跑得到——
 // 动画里抛错让 `leave()` 永不执行（用户卡过渡页）时，测试面照样全绿。
 test('the way out shows every step, and strikes a row only once its reading is settled', async () => {
-  const page = fakeBrowser({ answer: () => ({}) })
+  const page = fakeBrowser({ answer: warmLanding })
   const cueCount = () => page.calls.filter((call) => call.method === 'page.cue').length
   assert.equal(page.switchSteps.length, 4,
     'the shell ships four boot steps, and the stand-in counts them off the markup instead of trusting a number')
@@ -2582,29 +2627,36 @@ test('the way out shows every step, and strikes a row only once its reading is s
 
   for (let step = 1; step < page.switchSteps.length; step += 1) page.fireTimers(70)
   await page.settle()
-  // Q1 起末行一有读数就收口：冷摘要写「未就绪」，收口即离开（原来那 60ms 的帧同步
-  // 尾巴没有了）。所以这里钉的是「四档走完、每一行都定了稿，然后才离开」。
+  // 判据 R15-3.1：四格全成值、末格写「已就绪」之后才允许导航；完成文案落屏之后还要停
+  // 那 500ms 的 dwell（判据 6D）。所以这里钉的是「四档走完、每一行都定了稿，然后才离开」。
   assert.ok(page.switchSteps.every((step) => step.classList.contains('is-done')),
     'the last row settles every open row, so the card never leaves with an unstruck line')
+  assert.equal(page.switchCounts[3].textContent, '已就绪', 'the last row is the completion word')
   assert.equal(cueCount(), 1, 'and only then does it say its one word')
+  assert.deepEqual(page.navigations, [], 'the completion line has landed, but the dwell is still running')
+  assert.deepEqual(page.historyReplaced, [], 'so nothing has replaced this entry yet')
+
+  page.fireTimers(500)
+  await page.settle()
   assert.deepEqual(page.navigations, [], 'the landing is reached by replacing this entry')
   assert.deepEqual(page.historyReplaced, [['/']], 'and the entry it replaces points at the landing')
   assert.equal(page.historyReplaced[0][0], '/', 'the landing is exactly /')
 })
 
 // 判据 6D：完成文字落屏之后要停 0.5 秒再走（t1 - t0 ∈ [500,1200]ms），而且这 0.5 秒
-// 必须是**自己那一支表**量出来的，不许靠帧同步顺带凑够。这一条把三件事分开钉：
-// ①「已就绪」落屏那一刻还没开始走；②下一档就是整整 500ms 的停留，不是 60ms 的余量；
-// ③读数没到（fail-closed 写「未就绪」）这条路上不做这次停留，仍按原来的兜底放行。
+// 必须是**自己那一支表**量出来的，不许靠帧同步顺带凑够。这一条把两件事分开钉：
+// ①「已就绪」落屏那一刻还没开始走；②下一档就是整整 500ms 的停留，不是 60ms 的余量。
+// 「读数到不了」那条路已改成 fail-closed 收卡（判据 R15-3.2/3.3），它不做停留也不需要——
+// 由 `an unusable answer closes the card…` 那条用例单独钉。
 test('the way out dwells half a second after the completion line, on its own timer', async () => {
   const page = fakeBrowser({
     answer: (method) => (method === 'page.cue'
-      ? { ready: true, workspaces: 3, sessions: 12, messages: null, bots: null, botSessions: null, rooms: null }
+      ? { ready: true, workspaces: 3, sessions: 12, messages: 5, bots: null, botSessions: null, rooms: null }
       : {}),
   })
   await page.settle()
   page.click('bpHome', { preventDefault() {} })
-  // 桥的答复在微任务里就到了（真机也是 1.6s 上限内先答）。Q1 起四行由同一份
+  // 桥的答复在微任务里就到了（真机也在 2s 上限内先答）。Q1 起四行由同一份
   // ladderRun 逐档推：推到第四档时它才取到「已就绪」，落屏之后那 0.5 秒才起算。
   await page.settle()
   for (let step = 0; step < page.switchSteps.length; step += 1) page.fireTimers(70)
@@ -2623,28 +2675,33 @@ test('the way out dwells half a second after the completion line, on its own tim
   assert.equal(page.historyReplaced[0][0], '/', 'the landing is exactly /')
 })
 
-test('the way out does not pretend it read the landing: no dwell on the not-ready branch', async () => {
+test('an unusable answer closes the card instead of dwelling on a fake completion', async () => {
+  // 旧实现把「桥说没准备好」写成末格的「未就绪」，还靠 notReadyDwellMs: 0 立刻跳走——
+  // 用户看到一句「未就绪」就离场。判据 R15-3.2/R15-3.3 删掉那条路：末格不成值（返 null），
+  // 不可用的答复走 switchFail——收卡、留在 /bot、toast 说明，不写「未就绪」。
   const page = fakeBrowser({ answer: (method) => (method === 'page.cue' ? { ready: false, rows: 0, workspaces: 0 } : {}) })
   await page.settle()
   page.click('bpHome', { preventDefault() {} })
   await page.settle()
   for (let step = 0; step < page.switchSteps.length; step += 1) page.fireTimers(70)
+  await page.settle()
 
-  assert.equal(page.switchCounts[3].textContent, '未就绪', 'the card says the landing is cold instead of "已就绪"')
-  // 未就绪这一档的停留是 0ms（ladderRun 的 notReadyDwellMs: 0）：文字落屏就离开，
-  // 一次 500ms 的停留都没挣到，也不该被它拖慢。
-  assert.deepEqual(page.navigations, [], 'the cold branch still leaves by replacing this entry')
-  assert.deepEqual(page.historyReplaced, [['/']], 'and the entry it replaces points at the landing')
-  assert.equal(page.historyReplaced[0][0], '/', 'the landing is exactly /')
-  // 反证：那一档 500ms 的停留表根本不存在，烧它也不会再走一次。
-  // 说清这条验的是什么：它证明的是 onDone 的幂等守卫（ladder 里 `if(left)return`）
-  // 挡住重复交棒，不证明「停留时长」——停留时长由上面 6D 那组的 dwellTimer 断言管。
-  // 别把它读成时序证据：这个断言在任何时长的实现下都能绿。
+  assert.equal(page.switchCounts[3].textContent, '准备中', 'the last row keeps its placeholder — it is never written as 未就绪')
+  assert.doesNotMatch(page.switchCounts[3].textContent, /未就绪/, 'the not-ready word is gone from the card')
+  assert.equal(page.node('bpSwitchOverlay').hidden, true, 'the card is closed instead of dwelling on a fake completion')
+  assert.equal(page.node('bpToast').hidden, false, 'and the failure is spoken through the page’s own toast')
+  assert.equal(page.node('bpToast').textContent, '准备超时，请再试一次', 'with the shared copy')
+  assert.deepEqual(page.navigations, [], 'fail-closed does not leave the page')
+  assert.deepEqual(page.historyReplaced, [], 'and does not replace the entry behind it')
+  assert.equal(page.switchSteps.some((step) => step.classList.contains('is-active')), false,
+    'no row is left spinning on the closed card')
+
+  // 反证：收卡之后再烧任何一档都不放行（onDone 的幂等守卫挡住重复交棒，也没有第二条兜底路径）。
+  // 这条只证明「不会自己放行」，不证明停留时长——停留时长由上面 6D 那组管。
   page.fireTimers(500)
   await page.settle()
-  assert.deepEqual(page.navigations, [], 'and the way out is a replace, not a step back')
-  assert.deepEqual(page.historyReplaced, [['/']], 'and the entry it replaces points at the landing')
-  assert.equal(page.historyReplaced[0][0], '/', 'the landing is exactly /')
+  assert.deepEqual(page.navigations, [], 'and no later timer releases it either')
+  assert.deepEqual(page.historyReplaced, [], 'still on /bot')
 })
 
 // 判据 6D 的承重断言：停留必须挂在自己的表上。只断言「500ms 后才走」的话，把
@@ -2932,40 +2989,60 @@ test('the Bot page uses PIN-code style transition card with Pocket heading when 
   assert.match(html, /id="bpSwitchOverlay" class="switch-overlay" hidden/, 'the switch overlay is in markup')
   // 2026-10-29 判据 D6 + 第五节 A：视觉顺序 h1(24) → p(14) → boot-step(13) → brand(13)，
   // 品牌行从主标题上方挪到阶梯下方，当页脚签名——这样它不会再小于自己下方任何文本。
-  assert.match(html, /<div class="card"><h1>Pocket<\/h1><p>/, 'the card opens with the heading, not the wordmark')
+  // 判据 R15-4.1：副标题与标题同处一张卡的开头；裸词 match 会命中同一份内联脚本里的
+  // 文案 JSON（`TX`），所以这里连外壳一起钉。
+  assert.match(html, /<div class="card"><h1>Pocket<\/h1><p>正在进入 Pocket<\/p>/, 'the card opens with the heading and the shared subtitle')
   assert.match(html, /<\/div><div class="brand" style="flex-wrap:wrap">/, 'and the wordmark closes it as a footer signature')
   assert.match(html, /Curiouser and curiouser!/, 'the card wears the same wordmark line as the landing')
   assert.match(html, /<em style="flex-basis:100%;text-align:center">/, 'the line sits on its own row, not beside the name')
   assert.match(html, /<h1>Pocket<\/h1>/, 'carries the Pocket heading')
   assert.match(html, /class="boot-steps show"/, 'carries the PIN boot steps container')
-  assert.match(html, /读取工作区/, 'step 1 reads what the landing reads first')
-  assert.match(html, /读取会话列表/, 'step 2 reads the session list')
-  assert.match(html, /读取会话消息/, 'step 3 reads the messages')
-  assert.match(html, /正在准备页面/, 'step 4 prepares the page')
+  assert.match(html, /<span class="boot-step-label">读取工作区<\/span>/, 'step 1 reads what the landing reads first')
+  assert.match(html, /<span class="boot-step-label">读取会话列表<\/span>/, 'step 2 reads the session list')
+  assert.match(html, /<span class="boot-step-label">读取会话消息<\/span>/, 'step 3 reads the messages')
+  assert.match(html, /<span class="boot-step-label">准备页面<\/span>/, 'step 4 prepares the page')
+  // 判据 R15-1.1：botToPocketRows 前三格本轮补了 `blank: true` ⇒ 摘要未到之前三格一律
+  // 留白（`data-blank="1"` 且格内为空），不再有台账式的「0＋单位」。
+  assert.match(html, /data-unit=" 个工作区"[^>]*data-blank="1"[^>]*><\/span>/, 'step 1 starts blank until the summary lands')
+  assert.match(html, /data-unit=" 个会话"[^>]*data-blank="1"[^>]*><\/span>/, 'step 2 starts blank too, never a painted 0')
+  assert.match(html, /data-unit=" 条消息"[^>]*data-blank="1"[^>]*><\/span>/, 'and the messages cell as well')
+  assert.match(html, /data-unit=""[^>]*>准备中</, 'the prepare step starts with its own word')
+  assert.doesNotMatch(html, /正在准备页面/, 'the old step-4 wording is gone (R15-4.2)')
+  assert.doesNotMatch(html, /正在打开 Pocket/, 'and so is the old subtitle (R15-4.1)')
 })
 
 test('the Pocket page uses PIN-code style transition card with BOT heading when switching to Bot', () => {
   const html = renderMobilePage({ locale: 'zh', boot: null })
   assert.match(html, /id="switchOverlay" class="switch-overlay" hidden/, 'the Pocket switch overlay is in markup')
+  // 这一份文档同时带两张卡（#switchOverlay 与 #bootOverlay），两卡的 label/单位有重名
+  // （都有「准备页面」「 条消息」）——所以切出 BOT 卡自己的 markup 再断言，别让另一张卡
+  // 顶罪：只改一张时整文档 match 仍会绿。
+  const at = html.indexOf('id="switchOverlay"')
+  const card = html.slice(at, html.indexOf('id="bootOverlay"'))
+  assert.ok(at > 0 && card.includes('id="switchOverlay"'), 'the BOT card sits between the two overlays')
   // 2026-10-29 判据 D6 + 第五节 A：与 BOT 侧那张卡同序，品牌行落在阶梯之后。
-  assert.match(html, /<div class="card"><h1>BOT<\/h1><p>/, 'the card opens with the heading, not the wordmark')
-  assert.match(html, /<\/p><div class="brand" style="flex-wrap:wrap">/, 'and the wordmark closes it as a footer signature')
-  assert.match(html, /Curiouser and curiouser!/, 'the card wears the same wordmark line as the landing')
-  assert.match(html, /<em style="flex-basis:100%;text-align:center">/, 'the line sits on its own row, not beside the name')
-  assert.match(html, /<h1>BOT<\/h1>/, 'carries the BOT heading')
-  assert.match(html, /class="boot-steps show"/, 'carries the PIN boot steps container')
-  assert.match(html, /机器人数/, 'step 1 counts the Bots the Bot page will list')
-  assert.match(html, /群数/, 'step 2 counts the groups')
-  assert.match(html, /加载消息/, 'step 3 counts the messages the /bot document ships')
-  assert.match(html, /正在准备页面/, 'step 4 prepares the page')
-  // 三格起始形态按「本轮快照到没到」分两类：Pocket→BOT 卡前三格（BOT/群/消息）在快照到手
-  // 之前留白、真值一次写成（判据 R14-3.2/3 禁止先画 0 再改真值）；冷启动卡那几格本轮不改，
-  // 仍写「0＋单位」。
-  assert.match(html, /data-unit=" 个 BOT"[^>]*data-blank="1"[^>]*><\/span>/, 'step 1 starts blank until the snapshot lands, never a painted 0')
-  assert.match(html, /data-unit=" 个会话"[^>]*>0 个会话</, 'step 2 starts at zero chats')
-  assert.match(html, /data-unit=" 个群"[^>]*data-blank="1"[^>]*><\/span>/, 'step 3 starts blank until the snapshot lands')
-  assert.match(html, /data-unit=" 条消息"[^>]*data-blank="1"[^>]*><\/span>/, 'the messages cell starts blank until the snapshot lands')
-  assert.match(html, /data-unit=""[^>]*>准备中</, 'the prepare step starts with its own word')
+  assert.match(card, /<div class="card"><h1>BOT<\/h1><p>正在进入 BOT<\/p>/, 'the card opens with the heading and the shared subtitle')
+  assert.match(card, /<\/p><div class="brand" style="flex-wrap:wrap">/, 'and the wordmark closes it as a footer signature')
+  assert.match(card, /Curiouser and curiouser!/, 'the card wears the same wordmark line as the landing')
+  assert.match(card, /<em style="flex-basis:100%;text-align:center">/, 'the line sits on its own row, not beside the name')
+  assert.match(card, /<h1>BOT<\/h1>/, 'carries the BOT heading')
+  assert.match(card, /class="boot-steps show"/, 'carries the PIN boot steps container')
+  // 判据 R15-4.2：四格 label 逐字，且连 `.boot-step-label` 外壳一起钉（裸词会命中 TX 文案 JSON）。
+  assert.match(card, /<span class="boot-step-label">读取 BOT 列表<\/span>/, 'step 1 reads the Bot list the page will show')
+  assert.match(card, /<span class="boot-step-label">读取群列表<\/span>/, 'step 2 reads the rooms')
+  assert.match(card, /<span class="boot-step-label">读取消息<\/span>/, 'step 3 reads the messages')
+  assert.match(card, /<span class="boot-step-label">准备页面<\/span>/, 'step 4 prepares the page')
+  // 判据 R15-1.1：前三格摘要未到一律留白（`data-blank="1"` 且格内为空），不写「0＋单位」。
+  assert.match(card, /data-unit=" 个 BOT"[^>]*data-blank="1"[^>]*><\/span>/, 'step 1 starts blank until the snapshot lands, never a painted 0')
+  assert.match(card, /data-unit=" 个群"[^>]*data-blank="1"[^>]*><\/span>/, 'step 2 starts blank until the snapshot lands')
+  assert.match(card, /data-unit=" 条消息"[^>]*data-blank="1"[^>]*><\/span>/, 'the messages cell starts blank until the snapshot lands')
+  assert.match(card, /data-unit=""[^>]*>准备中</, 'the prepare step starts with its own word')
+  assert.doesNotMatch(card, /机器人数|群数|加载消息|正在准备页面/, 'none of the old wording survives on this card')
+  // 同一份文档里那张冷启动卡（#bootOverlay）：判据 R15-1.1 后它的前三格同样留白——
+  // 旧的「0 个会话」占位在出货文档里一个字都不该再出现（判据 R15-1.2）。
+  assert.match(html, /data-unit=" 个会话"[^>]*data-blank="1"[^>]*><\/span>/, 'the cold-start card leaves its chat cell blank as well')
+  assert.doesNotMatch(html, /data-unit=" 个会话"[^>]*>0 个会话</, 'a missing summary is never painted as 0 chats')
+  assert.doesNotMatch(html, /正在打开 Pocket/, 'and 正在打开 Pocket is gone from the shipped document (R15-4.1)')
 })
 
 test('going to the Bot page replaces the landing entry, so the way back leaves instead of bouncing', () => {
@@ -3024,11 +3101,25 @@ test('the landing card counts the Bots the page already knows, before anything a
   assert.match(html, /lock:lockRow/, 'the row picks up its reading the moment the ladder reaches it')
 })
 
-test('the BOT page counts the chats it already read, before the cue answers', () => {
-  assert.match(BOT_PAGE_JS, /var knownRows = 0/, 'counts only what this page already read, as a fallback')
-  assert.match(BOT_PAGE_JS, /if \(warm && typeof summary\.sessions === 'number'\) return summary\.sessions/, 'the summary field wins when the bridge answers')
-  assert.match(BOT_PAGE_JS, /if \(warm && typeof summary\.messages === 'number'\) return summary\.messages/, 'and so does the message count')
-  assert.doesNotMatch(BOT_PAGE_JS, /var previewRows = 0/, 'the old pre-cue tally is gone; the fallback is named for what it is')
+test('the BOT card takes every cell from the bridge summary, never from what the page already read', () => {
+  // 判据 R15-1.3：`knownRows` / `knownMessages` 那条「回到本页已读读数」的路整条删除——
+  // ladderRun 的 mark() 每格只成值一次，回落值先占位就永久盖掉摘要真值。
+  assert.doesNotMatch(BOT_PAGE_JS, /knownRows/, 'the pre-cue tally is gone from the page script')
+  assert.doesNotMatch(BOT_PAGE_JS, /knownMessages/, 'and so is the message tally')
+  assert.doesNotMatch(BOT_PAGE_JS, /var previewRows = 0/, 'the older pre-cue tally stays gone')
+  // runSwitchToPocket() 这一段不许再读 state.previews（判据 V2 的结构性证据：源码 grep 0 命中）。
+  const start = BOT_PAGE_JS.indexOf('function runSwitchToPocket()')
+  const end = BOT_PAGE_JS.indexOf("$('bpHome').addEventListener", start)
+  assert.ok(start > 0 && end > start, 'the way-out entry point is where the script says it is')
+  assert.doesNotMatch(BOT_PAGE_JS.slice(start, end), /state\.previews/, 'the way-out card never falls back to the previews this page holds')
+  // 三格只认摘要字段，且每格都要 ready 才成值；末格要三格全是数（判据 R15-1.4 / R15-3.1）。
+  assert.match(BOT_PAGE_JS, /var warm = Boolean\(summary\) && summary\.ready === true/, 'the summary must be warm before any cell becomes a reading')
+  assert.match(BOT_PAGE_JS, /if \(i === 0\) return warm && typeof summary\.workspaces === 'number' \? summary\.workspaces : null/, 'step 1 takes the summary field')
+  assert.match(BOT_PAGE_JS, /if \(i === 1\) return warm && typeof summary\.sessions === 'number' \? summary\.sessions : null/, 'so does the session row')
+  assert.match(BOT_PAGE_JS, /if \(i === 2\) return warm && typeof summary\.messages === 'number' \? summary\.messages : null/, 'and the message row')
+  assert.match(BOT_PAGE_JS, /if \(typeof summary\.workspaces !== 'number' \|\| typeof summary\.sessions !== 'number' \|\| typeof summary\.messages !== 'number'\) return null/, 'the last row only completes once all three readings are numbers (R15-3.1)')
+  assert.match(BOT_PAGE_JS, /return TX\.ready/, 'and its completion word comes from the shared table')
+  assert.doesNotMatch(BOT_PAGE_JS, /未就绪/, 'the not-ready word is gone from the page script')
   // 同一份行级规则：这些数只在轮到那一行时被 lock 现取，不预填、不提前写。
   assert.match(BOT_PAGE_JS, /var ladder = ladderRun\(\{/, 'the way-out card is driven by the shared ladder')
   assert.match(BOT_PAGE_JS, /lock: lock,/, 'and every row answers for itself when the ladder reaches it')

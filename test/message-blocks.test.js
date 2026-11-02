@@ -577,7 +577,7 @@ test('T9：更早的记录里每一条消息行与 divider 都带时间', async 
   // 替身的消息区量不到一屏高 ⇒ 页面自己会往回补，补的就是 bot.earlier 那一段。
   await browser.flush()
   const html = browser.node('bpMsgs').innerHTML
-  assert.match(html, /<div class="bp-divider"><span>\d{2}:\d{2} · 更早的记录<\/span><\/div>/, 'divider 带时间')
+  assert.match(html, /<div class="bp-divider"><span>\d{2}:\d{2} · 更早的对话<\/span><\/div>/, 'divider 带时间')
   assert.match(html, /<div class="bp-msg message user"><div class="markdown"><p>早前的问<\/p><\/div><span class="bp-tail">\d{2}:\d{2}<\/span><\/div>/, '更早的 user 行带时间')
   assert.match(html, /<div class="bp-msg message assistant"><div class="markdown"><p>早前的答<\/p><\/div><span class="bp-tail">\d{2}:\d{2}<\/span><\/div>/, '更早的 assistant 行带时间')
   // 「· 名字」那类行显式豁免：markup 被既有断言钉死，本批不画时间。
