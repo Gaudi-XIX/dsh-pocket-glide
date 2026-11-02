@@ -60,7 +60,10 @@ function harness({
   const rows = []
   for (let index = 0; index < ROWS.length; index += 1) {
     const slot = ROWS[index]
-    const cell = { textContent: slot.start || '', dataset: { unit: slot.unit }, _final: false, _scan: null }
+    // blank 行（Pocket→BOT 卡前三格）在真机 markup 里带 `data-blank="1"` 且内容为空：
+    // ladderRun 的挂载兜底认这个标记，不把「0＋单位」写进去。
+    const dataset = slot.blank === true ? { unit: slot.unit, blank: '1' } : { unit: slot.unit }
+    const cell = { textContent: slot.start || '', dataset, _final: false, _scan: null }
     const row = {
       index,
       _active: false,
@@ -210,8 +213,12 @@ test('过渡卡：cue 未到之前一行都不定稿，到了才按阶梯顺序�
   h.start()
   h.click()
 
-  // 挂载那一帧：四行都先写占位（非末行「0＋单位」、末行保留「准备中」），扫描已经起了。
-  assert.equal(h.rows[0].querySelector('.bsc').textContent, '0 个 BOT')
+  // 挂载那一帧：前三格留白（blank 行不写「0＋单位」——判据 R14-3.2/3 禁止先画 0 再改真值），
+  // 末行保留自己的占位词，扫描已经起了。
+  assert.equal(h.rows[0].querySelector('.bsc').textContent, '', '读数没到之前第一格必须留白')
+  assert.equal(h.rows[1].querySelector('.bsc').textContent, '', '读数没到之前第二格必须留白')
+  assert.equal(h.rows[2].querySelector('.bsc').textContent, '', '读数没到之前第三格必须留白')
+  assert.equal(h.rows[3].querySelector('.bsc').textContent, '准备中', '末行仍写自己的占位词')
   assert.ok(h.rows[0].querySelector('.bsc')._scan, '第一行在等读数时是滚着的')
   assert.equal(h.rows[0]._final, false)
 
@@ -223,7 +230,9 @@ test('过渡卡：cue 未到之前一行都不定稿，到了才按阶梯顺序�
     [false, false, false, false],
     'cue 没到，卡上不许出现任何定稿读数'
   )
-  assert.match(h.rows[0].querySelector('.bsc').textContent, /^\d+ 个 BOT$/, '仍停在滚动占位读数上')
+  assert.equal(h.rows[0].querySelector('.bsc').textContent, '', 'cue 没到，第一格一直是留白——不许退回「0 个 BOT」这种占位读数')
+  assert.equal(h.rows[1].querySelector('.bsc').textContent, '', '第二格同样一直留白')
+  assert.equal(h.rows[2].querySelector('.bsc').textContent, '', '第三格同样一直留白')
   assert.deepEqual(h.navigations, [])
   assert.equal(h.failRow.hidden, true, '还在等 cue，不是失败')
 

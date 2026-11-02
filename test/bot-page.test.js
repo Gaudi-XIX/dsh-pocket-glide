@@ -2958,10 +2958,13 @@ test('the Pocket page uses PIN-code style transition card with BOT heading when 
   assert.match(html, /群数/, 'step 2 counts the groups')
   assert.match(html, /加载消息/, 'step 3 counts the messages the /bot document ships')
   assert.match(html, /正在准备页面/, 'step 4 prepares the page')
-  // 行一渲染就有读数、右侧不留空（用户 2026-10-27：三页的读数逻辑要一样）。
-  assert.match(html, /data-unit=" 个 BOT"[^>]*>0 个 BOT</, 'step 1 starts at zero Bots, never blank')
+  // 三格起始形态按「本轮快照到没到」分两类：Pocket→BOT 卡前三格（BOT/群/消息）在快照到手
+  // 之前留白、真值一次写成（判据 R14-3.2/3 禁止先画 0 再改真值）；冷启动卡那几格本轮不改，
+  // 仍写「0＋单位」。
+  assert.match(html, /data-unit=" 个 BOT"[^>]*data-blank="1"[^>]*><\/span>/, 'step 1 starts blank until the snapshot lands, never a painted 0')
   assert.match(html, /data-unit=" 个会话"[^>]*>0 个会话</, 'step 2 starts at zero chats')
-  assert.match(html, /data-unit=" 个群"[^>]*>0 个群</, 'step 3 starts at zero rooms')
+  assert.match(html, /data-unit=" 个群"[^>]*data-blank="1"[^>]*><\/span>/, 'step 3 starts blank until the snapshot lands')
+  assert.match(html, /data-unit=" 条消息"[^>]*data-blank="1"[^>]*><\/span>/, 'the messages cell starts blank until the snapshot lands')
   assert.match(html, /data-unit=""[^>]*>准备中</, 'the prepare step starts with its own word')
 })
 
