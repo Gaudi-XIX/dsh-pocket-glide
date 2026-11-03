@@ -45,7 +45,9 @@ const RUN_STAGES = script.slice(stagesFrom, stagesTo + STAGES_END.length)
  * @returns {{label: string, count: string, active: boolean, unit: string}[]}
  */
 function templateRows(body) {
-  const labelsAt = body.indexOf('const labels=')
+  // 行集现在从文案表来（const STAGE_ROWS=…），切片必须把那段声明一起括进来。
+  const rowsAt = body.indexOf('const STAGE_ROWS=')
+  const labelsAt = rowsAt >= 0 ? rowsAt : body.indexOf('const labels=')
   const innerAt = body.indexOf('stepsHost.innerHTML=')
   assert.ok(labelsAt >= 0 && innerAt > labelsAt, 'the page paints its rows from a template expression')
   const decls = body.slice(labelsAt, innerAt)
@@ -78,7 +80,7 @@ function parseTemplate(markup) {
   const labels = [...markup.matchAll(/<span class="boot-step-label">([^<]*)<\/span>/g)].map((m) => m[1])
   const counts = [...markup.matchAll(/<span class="bsc"[^>]*>([^<]*)<\/span>/g)].map((m) => m[1])
   const actives = [...markup.matchAll(/<div class="boot-step([^"]*)">/g)].map((m) => m[1].includes('is-active'))
-  assert.equal(labels.length, 4, `the reconnect ladder has four rows, saw ${labels.length}`)
+  assert.equal(labels.length, 5, `the reconnect ladder has five rows, saw ${labels.length}`)
   assert.equal(counts.length, labels.length)
   return labels.map((label, i) => ({ label, count: counts[i], active: Boolean(actives[i]) }))
 }
@@ -174,7 +176,7 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
     stageFailed: '页面没打开成功，请点重试。',
     retry: '重新连接',
   }
-  const ROW_UNIT = { workspace: () => ' 个工作区', sessionList: () => ' 个会话', session: () => ' 条消息' }
+  const ROW_UNIT = { bots: () => ' 个 BOT 与群', workspace: () => ' 个工作区', sessionList: () => ' 个会话', session: () => ' 条消息' }
 
   const read = (method, value) => {
     // The call is booked when it LEAVES, not when it answers — 6C is about the three
@@ -201,7 +203,7 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
             sess: { items: [] },
             tails,
             // 判据 v7 §3：冷开页的卡片读这一份（裁决 R7：替身补 stageSummary，断言文本不动）。
-            stageSummary: { ready: true, workspaces: 3, sessions: 2, messages: countTailMessages(tails) },
+            stageSummary: { ready: true, workspaces: 3, sessions: 2, messages: countTailMessages(tails), bots: 2, botSessions: 3, rooms: 1 },
           }),
         })
       }, delays.boot === undefined ? 0 : delays.boot)
@@ -214,13 +216,13 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
   const deps = [
     'document', 'location', 'fetch', 'sessionStorage', 'setTimeout', 'clearTimeout', 'requestAnimationFrame',
     '$', 'ROW_UNIT', 'T', 'ZH', 'releaseCount', 'stageRunner', 'gateLadder', 'sumsReady', 'markBooted',
-    'withRetry', 'rpc', 'withTimeout', 'FETCH_TIMEOUT_MS', 'bgTailsPromise',
+    'withRetry', 'rpc', 'withTimeout', 'FETCH_TIMEOUT_MS', 'bgTails',
     'paintStageSums', 'countUp', 'stepCountEl', 'setCount', 'shellReady', 'SHELL_ASSETS', 'diag', 'fail',
   ]
   const values = [
     documentStub, location, fetchStub, sessionStorage, fakeSetTimeout, fakeClearTimeout, fakeRaf,
     (id) => elements[id] || null, ROW_UNIT, T, true, api.releaseCount, makeStageRunner, api.gateLadder, api.sumsReady, () => { marks.push(clock.now) },
-    async (fn) => fn(), (method) => read(method, { workspaces: 3, sessions: 2 }), async (p) => p, 8000, null,
+    async (fn) => fn(), (method) => read(method, { workspaces: 3, sessions: 2 }), async (p) => p, 8000, async () => null,
     api.paintStageSums, api.countUp, api.stepCountEl, api.setCount, Promise.resolve(), {},
     () => {}, fail,
   ]
@@ -255,7 +257,7 @@ test('6C the ladder lights one row at a time, never backwards, never skipping', 
   // Row 0 ships lit in the template; from then on the lit row only moves forward by one.
   const litOrder = []
   for (const e of activeEvents) if (e.on) litOrder.push(e.row)
-  assert.deepEqual(litOrder, [1, 2, 3], `the lit row walks 0→1→2→3, saw ${JSON.stringify(litOrder)}`)
+  assert.deepEqual(litOrder, [1, 2, 3, 4], `the lit row walks 0→1→2→3→4, saw ${JSON.stringify(litOrder)}`)
 
   // At every booked moment at most one row is lit, and the ladder never un-lights the
   // row it has reached while lighting an earlier one.
@@ -266,10 +268,10 @@ test('6C the ladder lights one row at a time, never backwards, never skipping', 
     assert.ok(active.size <= 1, `row ${e.row} change left ${active.size} rows lit at ${e.at} ms`)
   }
 
-  // 6C also says the three legs still leave together: the ladder paces the display, not
-  // the reads. All three must be in flight at t=0.
+  // 6C also says the legs still leave together: the ladder paces the display, not
+  // the reads. All four must be in flight at t=0 (bot.team 那条腿给三区 id 用).
   const starts = w.calls.filter((c) => c.method !== 'replace')
-  assert.deepEqual(starts.map((c) => c.method).sort(), ['boot', 'session.list', 'workspace.list'])
+  assert.deepEqual(starts.map((c) => c.method).sort(), ['boot', 'bot.team', 'session.list', 'workspace.list'])
   for (const c of starts) assert.equal(c.at, 0, `${c.method} must leave at once, left at ${c.at} ms`)
 })
 
@@ -280,11 +282,11 @@ test('6B the last row keeps its completion text 200 ms after it lands', async ()
   let readyAt = null
   for (let step = 0; step < 200 && readyAt === null; step += 1) {
     await w.advance(20)
-    if (w.text(3) === '已就绪') readyAt = w.clock.now
+    if (w.text(4) === '已就绪') readyAt = w.clock.now
   }
   assert.ok(readyAt !== null, 'the last row must land on 已就绪')
   await w.advance(200)
-  assert.equal(w.text(3), '已就绪', '200 ms after landing, the row still says 已就绪 (no scan took it back)')
+  assert.equal(w.text(4), '已就绪', '200 ms after landing, the row still says 已就绪 (no scan took it back)')
   await w.advance(600)
   await pending.catch(() => {})
 })
@@ -292,19 +294,20 @@ test('6B the last row keeps its completion text 200 ms after it lands', async ()
 test('6B no timer invents a number: every cell goes from blank straight to its reading', async () => {
   const w = makeWorld()
   const pending = w.runStages()
-  const seen = [[], [], [], []]; for (let i = 0; i < 4; i += 1) seen[i].push(w.text(i))
+  const seen = [[], [], [], [], []]; for (let i = 0; i < 5; i += 1) seen[i].push(w.text(i))
   for (let step = 0; step < 120; step += 1) {
     await w.advance(20)
-    for (let i = 0; i < 4; i += 1) if (!seen[i].includes(w.text(i))) seen[i].push(w.text(i))
+    for (let i = 0; i < 5; i += 1) if (!seen[i].includes(w.text(i))) seen[i].push(w.text(i))
   }
   await pending.catch(() => {})
   // 判据 C1（用户 m00236①(a)「先显示一遍 000 再弹真值」）：整条阶梯跑完，每一格都只在
   // 真值到达的那一刻从空串变成读数——没有 0 预填，没有滚动序列，也没有第二次数值。
   const msgs = countTailMessages({ a: { events: [{ type: 'user/message' }, { type: 'assistant/message' }] } })
-  assert.deepEqual(seen[0], ['', '3 ws'], 'row 0 goes straight from blank to its reading (shipped unit factory, ZH undefined here)')
-  assert.deepEqual(seen[1], ['', '2 sess'], 'row 1 goes straight from blank to its reading')
-  assert.deepEqual(seen[2], ['', `${msgs} msg`], 'row 2 goes straight from blank to its reading')
-  assert.deepEqual(seen[3], ['准备中', '已就绪'], 'the last row goes from the prepare wording straight to 已就绪')
+  assert.deepEqual(seen[0], ['', '3 bots & groups'], 'row 0 goes straight from blank to its reading (shipped unit factory, ZH undefined here)')
+  assert.deepEqual(seen[1], ['', '3 ws'], 'row 1 goes straight from blank to its reading')
+  assert.deepEqual(seen[2], ['', '2 sess'], 'row 2 goes straight from blank to its reading')
+  assert.deepEqual(seen[3], ['', `${msgs} msg`], 'row 3 goes straight from blank to its reading')
+  assert.deepEqual(seen[4], ['准备中', '已就绪'], 'the last row goes from the prepare wording straight to 已就绪')
 })
 test('6D navigation waits at least 500 ms after the completion text', async () => {
   const w = makeWorld({ delays: { 'workspace.list': 120, 'session.list': 240, boot: 360 } })
@@ -316,7 +319,7 @@ test('6D navigation waits at least 500 ms after the completion text', async () =
   // Rebuild the timeline from the class/text bookkeeping: the completion write is the
   // first moment row 3 stops being the prepare row.
   for (const e of w.events) {
-    if (e.name === 'is-active' && e.on && e.row === 3) readyAt = e.at
+    if (e.name === 'is-active' && e.on && e.row === 4) readyAt = e.at
   }
   // The text write happens inside stage(3), i.e. after the row is lit.
   const navAt = w.nav.at
@@ -330,18 +333,18 @@ test('6D navigation waits at least 500 ms after the completion text', async () =
 test('6D the pairing page orders the same three beats: completion, fixed dwell, navigation', () => {
   const page = renderPairingPinPage('zh', null, {})
   const body = [...page.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
-  const ready = body.indexOf("if(sumsReady())setCount(4,ZH?'已就绪':'ready')")
+  const ready = body.indexOf("if(sumsReady())setCount(5,ZH?'已就绪':'ready')")
   const dwell = body.indexOf('await new Promise(r=>setTimeout(r,500))', ready)
   const nav = body.indexOf("location.replace('/')", dwell)
-  assert.ok(ready >= 0, 'the pairing page writes 已就绪 on its fifth row')
+  assert.ok(ready >= 0, 'the pairing page writes 已就绪 on its sixth row')
   assert.ok(dwell > ready, 'a fixed 500 ms wait follows the completion text')
   assert.ok(nav > dwell, 'and the navigation comes after that wait, not before it')
 })
 
 test('6A both pages ship blank counted rows and the prepare wording on their last row', () => {
   for (const [name, page, rows] of [
-    ['reconnect', renderMobileReconnectPage('zh', 'lan', {}), 4],
-    ['pairing', renderPairingPinPage('zh', null, {}), 5],
+    ['reconnect', renderMobileReconnectPage('zh', 'lan', {}), 5],
+    ['pairing', renderPairingPinPage('zh', null, {}), 6],
   ]) {
     const body = [...page.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
     assert.ok(body.includes('const lastRow=labels.length-1;'), `${name}: the last row is derived, not hardcoded`)

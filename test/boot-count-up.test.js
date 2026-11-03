@@ -256,16 +256,19 @@ test('the conversation row counts messages, not preloaded packs', () => {
   // The row takes its number from the boot payload's stageSummary — one summary,
   // one field, painted on the row the summary owns: index 3 on the 5-row PIN
   // ladder, index 2 on the 4-row reconnection ladder (R8-0).
-  const bootPayload = { stageSummary: { ready: true, workspaces: 2, sessions: 3, messages: 5 } }
-  const pin = makeWorld({ reduced: true, rowCount: 5 })
+  const bootPayload = { stageSummary: { ready: true, workspaces: 2, sessions: 3, messages: 5, bots: 4, botSessions: 6, rooms: 2 } }
+  const pin = makeWorld({ reduced: true, rowCount: 6 })
   pin.api.paintStageSums(bootPayload.stageSummary)
-  assert.equal(pin.text(1), '2 ws', 'the PIN ladder paints workspaces on its second row')
-  assert.equal(pin.text(2), '3 sess', 'and sessions on its third row')
-  assert.equal(pin.text(3), '5 msg', 'its "reading the conversation" row shows stageSummary.messages itself')
-  const reconnect = makeWorld({ reduced: true, rowCount: 4 })
+  assert.equal(pin.text(1), '6 bots & groups', 'the PIN ladder paints the bot zones on its second row')
+  assert.equal(pin.text(2), '2 ws', 'the PIN ladder paints workspaces on its third row')
+  assert.equal(pin.text(3), '3 sess', 'and sessions on its fourth row')
+  assert.equal(pin.text(4), '5 msg', 'its "reading the conversation" row shows stageSummary.messages itself')
+  const reconnect = makeWorld({ reduced: true, rowCount: 5 })
   reconnect.api.paintStageSums(bootPayload.stageSummary)
-  assert.equal(reconnect.text(0), '2 ws', 'the reconnection ladder still starts counting on row 0')
-  assert.equal(reconnect.text(2), '5 msg', 'and shows stageSummary.messages on row 2')
+  assert.equal(reconnect.text(0), '6 bots & groups', 'the reconnection ladder starts counting on row 0')
+  assert.equal(reconnect.text(1), '2 ws', 'workspaces on row 1')
+  assert.equal(reconnect.text(2), '3 sess', 'sessions on row 2')
+  assert.equal(reconnect.text(3), '5 msg', 'and shows stageSummary.messages on row 3')
 })
 
 test('the ladder rows are born blank — no 0 seed, no probe marker', () => {

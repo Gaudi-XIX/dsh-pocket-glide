@@ -38,7 +38,7 @@ function extractScript(render) {
 
 function buildHarness({
   html,
-  rows = 4,
+  rows = null,
   workspaces = [{ name: 'w1' }, { name: 'w2' }],
   sessions = [
     { sessionId: 's1', updatedAt: Date.now() },
@@ -48,11 +48,18 @@ function buildHarness({
 } = {}) {
   const script = extractScript(html)
   const counts = []
-  // The shipped pages seed every counted row with "0 + 它的量词"; the harness
-  // mirrors that so "rpc() does not paint" is observable as "the seed is intact".
-  const seeds = ['0 个工作区', '0 个会话', '0 条消息', '0', '0']
-  const children = Array.from({ length: rows }, (_, i) => {
-    const count = stubElement({ textContent: seeds[i] || '0' })
+  // 出厂模板的计数格出生是空串、末行是「准备中」（判据 C1.1/C1.3）；夹具照抄，
+  // 「rpc() 不画阶梯」就表现为「种子原样还在」，而不是手抄一份「0+量词」当种子。
+  const rowsAt = script.indexOf('const STAGE_ROWS=')
+  const rowsEnd = script.indexOf(';const labels=', rowsAt)
+  assert.ok(rowsAt >= 0 && rowsEnd > rowsAt, 'the page serialises its stage rows')
+  const STAGE_ROWS = JSON.parse(script.slice(rowsAt + 'const STAGE_ROWS='.length, rowsEnd))
+  const leadingRow = /"stepServer":/.test(script)
+  const total = rows === null ? STAGE_ROWS.length + (leadingRow ? 1 : 0) : rows
+  const seeds = Array.from({ length: total }, () => '')
+  seeds[total - 1] = /"stepServer":/.test(script) ? '准备中' : '准备中'
+  const children = Array.from({ length: total }, (_, i) => {
+    const count = stubElement({ textContent: seeds[i] })
     counts.push(count)
     return stubElement({ querySelector: (sel) => (sel === '.bsc' ? count : null) })
   })
@@ -119,20 +126,20 @@ test('reconnect page: rpc() sends the request instead of throwing', async () => 
   assert.equal(value.items.length, 2)
 })
 
-test('reconnect page: workspace count lands on the first ladder row', async () => {
+test('reconnect page: workspace count lands on the second ladder row', async () => {
   const { api, counts } = buildHarness({ html: renderMobileReconnectPage('zh', 'tunnel', {}) })
   await api.rpc('workspace.list')
-  assert.equal(counts[0].textContent, '0 个工作区', 'rpc() reads the list, it does not paint the ladder (v7 §3)')
+  assert.equal(counts[1].textContent, '', 'rpc() reads the list, it does not paint the ladder (v7 §3)')
   api.paintStageSums({ workspaces: 2, sessions: 2 })
-  assert.equal(counts[0].textContent, '2 个工作区')
+  assert.equal(counts[1].textContent, '2 个工作区')
 })
 
-test('reconnect page: session count lands on the second ladder row', async () => {
+test('reconnect page: session count lands on the third ladder row', async () => {
   const { api, counts } = buildHarness({ html: renderMobileReconnectPage('zh', 'tunnel', {}) })
   await api.rpc('session.list', { limit: 10 })
-  assert.equal(counts[1].textContent, '0 个会话', 'rpc() reads the list, it does not paint the ladder (v7 §3)')
+  assert.equal(counts[2].textContent, '', 'rpc() reads the list, it does not paint the ladder (v7 §3)')
   api.paintStageSums({ workspaces: 2, sessions: 2 })
-  assert.equal(counts[1].textContent, '2 个会话')
+  assert.equal(counts[2].textContent, '2 个会话')
 })
 
 test('reconnect page: only the 24-hour window and the pins reach the session count', async () => {
@@ -181,32 +188,36 @@ test('reconnect page: subagent rows stay out of the session count', async () => 
 test('reconnect page: english locale counts in english', async () => {
   const { api, counts } = buildHarness({ html: renderMobileReconnectPage('en', 'tunnel', {}) })
   await api.rpc('workspace.list')
-  assert.equal(counts[0].textContent, '0 个工作区', 'rpc() reads the list, it does not paint the ladder (v7 §3)')
+  assert.equal(counts[1].textContent, '', 'rpc() reads the list, it does not paint the ladder (v7 §3)')
   api.paintStageSums({ workspaces: 2, sessions: 2 })
-  assert.equal(counts[0].textContent, '2 ws')
+  assert.equal(counts[1].textContent, '2 ws')
 })
 
-test('PIN page: rpc() sends the request, and the five-step ladder maps rows 1..3', async () => {
-  const { api, requests, counts } = buildHarness({ html: renderPairingPinPage('zh'), rows: 5 })
+test('PIN page: rpc() sends the request, and the six-row ladder maps rows 2..4', async () => {
+  const { api, requests, counts } = buildHarness({ html: renderPairingPinPage('zh') })
   await api.rpc('session.list', { limit: 10 })
   assert.equal(requests.filter((r) => r.body.method === 'session.list').length, 1)
   assert.deepEqual(
     counts.map((count) => count.textContent),
-    ['0 个工作区', '0 个会话', '0 条消息', '0', '0'],
-    'rpc() does not paint: the summary does (v7 §3)'
+    ['', '', '', '', '', '准备中'],
+    'rpc() does not paint: the counted cells stay blank and the last row keeps 准备中 (v7 §3)'
   )
   api.paintStageSums({ workspaces: 2, sessions: 3, messages: 5 })
-  assert.equal(counts[1].textContent, '2 个工作区', 'the PIN ladder starts counting on its second row')
-  assert.equal(counts[2].textContent, '3 个会话')
-  assert.equal(counts[3].textContent, '5 条消息', 'the "reading the conversation" row shows the summary messages')
-  assert.equal(counts[0].textContent, '0 个工作区', 'the connection row never takes a count')
+  assert.equal(counts[2].textContent, '2 个工作区', 'the PIN ladder starts counting on its third row')
+  assert.equal(counts[3].textContent, '3 个会话')
+  assert.equal(counts[4].textContent, '5 条消息', 'the "reading the conversation" row shows the summary messages')
+  assert.equal(counts[0].textContent, '', 'the connection row never takes a count')
+  assert.equal(counts[1].textContent, '', 'BOT 与群那一行只吃 botSessions，摘要没给就不动')
+  api.paintStageSums({ workspaces: 2, sessions: 3, messages: 5, bots: 4, botSessions: 6, rooms: 2 })
+  assert.equal(counts[1].textContent, '6 个 BOT 与群', 'botSessions 一到就落在 BOT 与群那一行')
 
-  const reconnect = buildHarness({ html: renderMobileReconnectPage('zh', 'tunnel', {}), rows: 4 })
-  reconnect.api.paintStageSums({ workspaces: 2, sessions: 3, messages: 5 })
-  assert.equal(reconnect.counts[0].textContent, '2 个工作区', 'the four-row ladder still counts from row 0')
-  assert.equal(reconnect.counts[1].textContent, '3 个会话')
-  assert.equal(reconnect.counts[2].textContent, '5 条消息')
-  assert.equal(reconnect.counts[3].textContent, '0', 'its last row is the preparing label, not a count')
+  const reconnect = buildHarness({ html: renderMobileReconnectPage('zh', 'tunnel', {}) })
+  reconnect.api.paintStageSums({ workspaces: 2, sessions: 3, messages: 5, bots: 4, botSessions: 6, rooms: 2 })
+  assert.equal(reconnect.counts[0].textContent, '6 个 BOT 与群', 'the five-row ladder counts bots from row 0')
+  assert.equal(reconnect.counts[1].textContent, '2 个工作区')
+  assert.equal(reconnect.counts[2].textContent, '3 个会话')
+  assert.equal(reconnect.counts[3].textContent, '5 条消息')
+  assert.equal(reconnect.counts[4].textContent, '准备中', 'its last row is the preparing label, not a count')
 })
 
 test('the in-flight odometer is gone, so no row can show a numbers-only fake', () => {

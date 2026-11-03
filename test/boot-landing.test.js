@@ -43,7 +43,7 @@ async function render(bridge, url = '/?warm=123', request = null) {
   return { markup, response }
 }
 
-const candidate = [{ sessionId: 's1', updatedAt: 5, running: false, projections: { asOfSeq: 5 } }]
+const candidate = [{ sessionId: 's1', updatedAt: Date.now(), running: false, projections: { asOfSeq: 5 } }]
 
 // R11-1a: the page a row opens with now rides the document, so 「文档里不许有
 // events」这条禁令换成有界断言——分片数 ≤ 预览范围（10 个会话），每片 ≤ 30 条，
@@ -298,7 +298,7 @@ test('an empty session list ships an empty boot list and no focus', async () => 
 test('the preview range rides the document, and it is bounded', async () => {
   const items = Array.from({ length: 12 }, (_, index) => ({
     sessionId: `s${index + 1}`,
-    updatedAt: index + 1,
+    updatedAt: Date.now() - (12 - index) * 1000,
     running: false,
     projections: { asOfSeq: 5 },
   }))
@@ -331,7 +331,7 @@ test('the preview range rides the document, and it is bounded', async () => {
 test('a fat transcript is trimmed by the implementation, not left to the assertion', async () => {
   const items = Array.from({ length: PREVIEW_SESSIONS_CAP }, (_, index) => ({
     sessionId: `s${index + 1}`,
-    updatedAt: index + 1,
+    updatedAt: Date.now() - (12 - index) * 1000,
     running: false,
     projections: { asOfSeq: 5 },
   }))

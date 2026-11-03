@@ -93,6 +93,15 @@
 - **怎么验**：`test/asset-comment-strip.test.js` 10 条（剥离量 >90 KB、幂等、反用例、花括号平衡、`new Function` 可编译、`@keep` 双向、行尾/块注释保留）＋ `test/mobile-assets.test.js` 的逐字节契约改为「出货 = 剥离后的内联块」并新增余量断言。定向 6 档 140 条全过，全量 1,637 / 1,633 pass（2 红是本机 tar 环境红，与本卡无关）。
 - **顺带**：`lib/pages.js`「冷开画缓存壳」与 `lib/bridge.js`「文档不再带 payload」两处与实现相反的注释改成事实（只改注释，不改行为）。
 
+### 预读范围收窄到「置顶 ∪ 24 小时内」，启动卡新增「BOT 与群」行（2026-11-03，卡 `2026-11-03-feature-pocket-preload-scope-and-boot-card-rows`）
+
+- **为什么改**：手机冷开一次要把「最新的十条会话尾巴」全拉一遍，可那十条里常混着一天没动过的行、未分组的行、以及 DS BOT 自己的隐藏工作区；启动卡又只数工作区/会话/消息三格，主 Bot、群、其他 Bot 三类行在卡上一格都没有，用户看不出「到底在读什么」。这次把两侧的预读口径收成一条判据，并把 BOT 面拉成一行。
+- **改成什么（预读集合）**：置顶全部免窗全收；未置顶只认 **24 小时内**（`updatedAt` 是数字且在 `now - 24h` 之后，`lastMessageAt` 不算），按 `updatedAt` 倒序补到 10 个名额——10 只约束未置顶那一段。BOT 三区（主 Bot → 群 → 其他 Bot）的行共用同一条 10 的预算、合计 ≤10，遇上限按该次序截断；三区没有置顶概念。`subagent` 行、隐藏工作区的行、未分组行不进集合（隐藏工作区按 roster 读出的 id 排除，`lib/` 不落任何字面量）。
+- **改成什么（两侧同一份实现）**：选择落成 `lib/pages.js` 的纯函数 `bootPreloadIds()`，桥侧 `buildMobileBoot` 直接调，页侧用 `.toString()` 注入引导页共用脚本——同一份输入交出同一集合。引导页的 `session.tails` 不再在 `session.list` 拦截器里抢跑，改成「`workspace.list` / `session.list` / `bot.team` 三趟读都落地」之后才发，`/api/boot` 那一腿等这条链；抢跑时三区还是空的，两侧集合会不一致。预览列表回到「预读集合的前 10 个」，置顶不再单独插队。
+- **改成什么（启动卡第五行）**：三面（主页 5 行、PIN 6 行＝连接行＋表五行、重连 5 行）共用一张文案表：同步 BOT 与群 / 同步工作区 / 同步会话列表 / 同步会话内容 / 准备页面。新行数字只取 `botSessions` 单键（三区画出行数合计），与另外三格一样进就绪门：摘要缺任一键就整卡不显形（fail-closed，宁可不出也不出假数）。`botRoster()` 收成唯一 roster 取数点（5 秒 TTL + 在飞去重，探针失败按「读不到」收敛不抛），`bot.team`、`refreshBotWorkspaceId`、冷开载荷、shell 暖摘要共用一份，冷开首帧不再按空 roster 算成三个 null。
+- **怎么验**：`test/preload-scope.test.js` 14 条（置顶免窗、窗外不进、三区 main→room→other 与 10 的截断、跨段去重、未分组/隐藏/subagent 排除、桥与页同一集合、屏障只在三趟读落地后发尾巴且 `bot.team` 被拒时仍 resolve）；`test/boot-overlay-counts.test.js` 与 `test/botpage-warm-counts.test.js` 补「三键真值＋新行出生即真值＋进就绪门」；三面行序与格位由 `test/boot-overlay-counts.test.js` 的逐字断言钉住。全量 `npm test`（`node --test --test-concurrency=1 test/*.test.js`）= **1,815 tests / 1,814 pass / 0 fail / 1 skipped**（exit 0；2026-11-03 W2 21:4x 收工读数，含本单新增用例）。过程中曾两次观察到 `test/tunnel.test.js` 的 AC2.2 在负载/并发下红，归因是它的 `graceMs: 60` 与子进程冷启动竞速：该用例单跑 77 pass / 0 fail / 1 skip、未改动的 `HEAD` 干净树上同红（`git archive HEAD` 建树 75 pass / 1 fail）、verify 轮与本轮全量均绿；`lib/tunnel.js`、`test/tunnel.test.js` 均不在本单改动面，按环境/时序 flake 披露。
+- **壳字节**：本单净增各 **+80 B**（壳 JS zh 249,494 → 249,574、en 249,393 → 249,473，css 未变），余量硬底 8,000 B 保持满足。以上是**盘面读数**（同一棵工作树里另有一条在途线的壳增，本单不认领）；提交树的绝对值按房规用 `node tools/shell-bytes.mjs --rev <sha>` 重算（`test/shell-bytes-from-commit.test.js` 头注：写进 CHANGELOG 的壳字节数必须来自提交树）。`ASSET_BUDGET_BYTES` 与 `ASSET_MIN_HEADROOM_BYTES` 两行本单未改动（见 criteria §3 机检 3）。
+
 ### 未做：C 组 cookie `Secure`（0.4.59 发布前已由 W3 补做）
 
 按「这一跳是否 TLS」判要碰登录态：判错一次就是手机掉登录，而验证它需要 LAN 直连、隧道、反代三档真机各走一遍。本版不修（`F:\defws\.agents\flow\changes\2026-10-24-pocket-send-loss-and-tunnel-p0\tasks.md` T4 标 `SKIP-BY-LEAD`），隧道态登录态维持现状。**2026-10-25 由卡 `2026-10-24-pocket-tunnel-resilience` 的 W3 补做（见上节）；三档真机走查仍未做**，本机只有单测与真实 HTTP 端到端用例。上面这段保留为当时的判断与理由。

@@ -22,6 +22,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { LanMobileBridge } from '../lib/bridge.js'
+import {
+  bootPreloadIds,
+  renderMobileReconnectPage,
+  renderPairingPinPage,
+  unclaimedSessionIds,
+} from '../lib/pages.js'
 
 const DAY = 24 * 60 * 60 * 1000
 const row = (sessionId, updatedAt) => ({ sessionId, updatedAt, blank: false })
@@ -107,4 +113,354 @@ test('B2 隐藏工作区的会话不进预载：过滤排在预载之前', async
 
   assert.equal(bridge.tailRequests.includes('hiddenSess'), false, '藏起来的会话既不显示也不预载，即使被置顶')
   assert.deepEqual(bridge.tailRequests, ['a', 'b'])
+})
+
+// ---------------------------------------------------------------------------
+// T6 单测 1：窗与置顶的并集
+// ---------------------------------------------------------------------------
+
+const ZONES_EMPTY = { main: [], other: [], room: [] }
+
+test('单测 1：置顶免窗全收，窗外未置顶一个不进，窗内未置顶按 updatedAt 倒序补满 cap', () => {
+  const now = 5_000 * DAY
+  const rows = [
+    row('stale-1', now - 3 * DAY),
+    row('stale-2', now - 3 * DAY - 1000),
+    row('stale-3', now - 3 * DAY - 2000),
+    row('pin-old-1', now - 30 * DAY),
+    row('pin-old-2', now - 40 * DAY),
+    row('fresh-1', now - 1000),
+    row('fresh-2', now - 3000),
+    row('fresh-3', now - 2000),
+  ]
+  const ids = bootPreloadIds({
+    rows,
+    pinnedIds: ['pin-old-1', 'pin-old-2'],
+    zones: ZONES_EMPTY,
+    ungroupedIds: [],
+    hiddenIds: [],
+    now,
+    cap: 3,
+  })
+  assert.deepEqual(ids.slice(0, 2), ['pin-old-1', 'pin-old-2'],
+    '置顶不看时间：40 天前的那条照样预读，且排在前面（按 updatedAt 倒序就是 pin-old-1 在前）')
+  assert.deepEqual(ids.slice(2), ['fresh-1', 'fresh-3', 'fresh-2'], '窗内未置顶按 updatedAt 倒序，cap 只数这一段')
+  for (const id of ['stale-1', 'stale-2', 'stale-3']) {
+    assert.equal(ids.includes(id), false, `${id} 在 24 小时窗口外又不是置顶，不进预读集合`)
+  }
+})
+
+test('单测 1：只有 lastMessageAt 落在窗内的行不算——窗只认 updatedAt', () => {
+  const now = 5_000 * DAY
+  const old = row('lm-only', now - 10 * DAY)
+  old.lastMessageAt = now - 1000
+  const ids = bootPreloadIds({
+    rows: [old, row('fresh', now - 1000)],
+    pinnedIds: [],
+    zones: ZONES_EMPTY,
+    ungroupedIds: [],
+    hiddenIds: [],
+    now,
+    cap: 10,
+  })
+  assert.deepEqual(ids, ['fresh'],
+    'lastMessageAt 更精确，但判据 2 的窗只读 updatedAt：拿它当窗会让「多久算新」出现第二个口径')
+})
+
+// ---------------------------------------------------------------------------
+// T6 单测 2：三区次序与上限
+// ---------------------------------------------------------------------------
+
+test('单测 2：三区按 窗内主 Bot → 窗内群 → 其他按 updatedAt 倒序，合计不超过 cap', () => {
+  const now = 5_000 * DAY
+  const rows = [
+    row('main-in', now - 1000),
+    row('main-out', now - 3 * DAY),
+    row('room-in', now - 2000),
+    row('room-out', now - 4 * DAY),
+    row('other-a', now - 500),
+    row('other-b', now - 700),
+    row('other-c', now - 900),
+    row('other-d', now - 1100),
+    row('other-e', now - 1300),
+    row('other-f', now - 1500),
+  ]
+  const ids = bootPreloadIds({
+    rows,
+    pinnedIds: [],
+    zones: {
+      main: ['main-in', 'main-out'],
+      room: ['room-in', 'room-out'],
+      other: ['other-f', 'other-c', 'other-a', 'other-e', 'other-b', 'other-d'],
+    },
+    ungroupedIds: [],
+    hiddenIds: [],
+    now,
+    cap: 10,
+  })
+  assert.deepEqual(ids, ['main-in', 'room-in', 'other-a', 'other-b', 'other-c', 'other-d', 'other-e', 'other-f'],
+    '三区段自己排序：主 Bot 全部在前，群其次，其他按 updatedAt 倒序；窗外的主 Bot 与群都被窗挡掉')
+  assert.equal(ids.includes('main-out'), false, '三区也不吃置顶、不吃例外：窗外就是窗外')
+  assert.equal(ids.includes('room-out'), false, '群同理')
+})
+
+test('单测 2：三区合计遇 cap 截断，主 Bot 超额时截到 cap', () => {
+  const now = 5_000 * DAY
+  const rows = []
+  const main = []
+  for (let i = 0; i < 12; i += 1) {
+    rows.push(row(`m${i}`, now - (i + 1) * 1000))
+    main.push(`m${i}`)
+  }
+  rows.push(row('room-1', now - 100))
+  const ids = bootPreloadIds({
+    rows,
+    pinnedIds: [],
+    zones: { main, room: ['room-1'], other: [] },
+    ungroupedIds: [],
+    hiddenIds: [],
+    now,
+    cap: 10,
+  })
+  assert.equal(ids.length, 10, '三区合计的上限是 cap，不是每区各给 cap')
+  assert.deepEqual(ids, ['m0', 'm1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8', 'm9'],
+    '主 Bot 先吃满名额，群排在它后面因此一个都进不来——次序就是优先级')
+  assert.equal(ids.includes('room-1'), false, '满额后按次序截断，不是按区分摊')
+})
+
+test('单测 2：三区段不吃置顶——窗外未置顶的照样进不来，置顶行只由工作区段收一次', () => {
+  const now = 5_000 * DAY
+  const rows = [
+    row('old-pinned', now - 5 * DAY),
+    row('fresh-other', now - 1000),
+    row('stale-other', now - 3 * DAY),
+  ]
+  const ids = bootPreloadIds({
+    rows,
+    pinnedIds: ['old-pinned'],
+    zones: { main: [], room: [], other: ['old-pinned', 'fresh-other', 'stale-other'] },
+    ungroupedIds: [],
+    hiddenIds: [],
+    now,
+    cap: 10,
+  })
+  assert.deepEqual(ids, ['old-pinned', 'fresh-other'],
+    '置顶那条由工作区段收进来（免窗），窗外的 stale-other 仍在三区段里被窗挡掉——三区没有置顶概念')
+  assert.equal(ids.filter((id) => id === 'old-pinned').length, 1, '跨段去重：同一个会话只预读一次')
+})
+
+// ---------------------------------------------------------------------------
+// T6 单测 3：未分组不进预读，但仍然可见
+// ---------------------------------------------------------------------------
+
+test('单测 3：未分组的行不进预读集合，但仍在 landing 要画的行里', () => {
+  const now = Date.now()
+  const items = [row('s-1', now - 1000), row('s-loose', now - 500)]
+  const bridge = makeBridge({
+    items,
+    workspaces: [{ workspaceId: 'w1', title: 'DSH', path: 'F:/x', sessionIds: ['s-1'] }],
+  })
+  const landing = bridge.landingSummary(items, bridge.workspaceSnapshot, now)
+  const ids = bootPreloadIds({
+    rows: landing.rows,
+    pinnedIds: [],
+    zones: landing.zones,
+    ungroupedIds: landing.ungrouped,
+    hiddenIds: [],
+    now,
+    cap: 10,
+  })
+  assert.deepEqual(Array.from(landing.ungrouped), ['s-loose'], '没有工作区认领它，就是未分组')
+  assert.equal(ids.includes('s-loose'), false, '未分组的行不进预读集合（判据 2 的资格三条之一）')
+  assert.ok(landing.rows.some((r) => r.sessionId === 's-loose'),
+    '但它仍在 landing 要画的行里：显示腿与预读腿读同一份行集，只是预读多一道资格过滤')
+})
+
+// ---------------------------------------------------------------------------
+// T6 单测 6：桥页同源
+// ---------------------------------------------------------------------------
+
+test('单测 6：桥侧真正发出的 id 清单与同一输入下 bootPreloadIds 的返回值逐字相同', async () => {
+  const now = Date.now()
+  const items = []
+  const pinned = []
+  for (let i = 0; i < 3; i += 1) {
+    items.push(row(`pin${i}`, now - (20 + i) * DAY))
+    pinned.push(`pin${i}`)
+  }
+  for (let i = 0; i < 15; i += 1) items.push(row(`f${i}`, now - (i + 1) * 1000))
+  const hiddenSessions = new Set(['f-3'])
+  const workspaces = [{ workspaceId: 'w1', title: 'DSH', path: 'F:/x', sessionIds: items.map((i) => i.sessionId) }]
+  const bridge = makeBridge({
+    items,
+    pinnedSessionIds: pinned,
+    workspaces,
+    hiddenSessions,
+  })
+  bridge.options = { harnessUrl: () => 'http://127.0.0.1:1' }
+  await bridge.buildMobileBoot()
+
+  const landing = bridge.landingSummary(items, bridge.workspaceSnapshot, bridge.now())
+  const expected = bootPreloadIds({
+    rows: landing.rows,
+    pinnedIds: pinned,
+    zones: landing.zones,
+    ungroupedIds: landing.ungrouped,
+    hiddenIds: hiddenSessions,
+    now: bridge.now(),
+    windowMs: 24 * 60 * 60 * 1000,
+    cap: 10,
+  })
+  assert.deepEqual(bridge.tailRequests, expected,
+    '桥侧不许另有一份排序：喂给 session.tails 的清单必须就是共用的那个纯函数的返回值')
+  assert.equal(bridge.tailRequests.includes('f-3'), false, '隐藏会话两头都排除')
+})
+
+test('单测 6：引导页脚本里调用的是同一个注入函数，没有第二份排序', () => {
+  // 页侧注入点 `lib/pages.js:3687` 就是 `const bootPreloadIds=${bootPreloadIds.toString()};`
+  // ⇒ 逐字对拍：注入进文档的那一行必须与导出函数本体的 `.toString()` 逐字相等。
+  // 只断言前缀（`const bootPreloadIds=`）会被「注入了另一个同名函数」蒙混过去，
+  // 这是本单判据 §2 甲「预读选择只有一份实现」在页侧唯一能机械钉住的那一条。
+  const injected = `const bootPreloadIds=${bootPreloadIds.toString()};`
+  for (const html of [
+    renderMobileReconnectPage({ locale: 'zh' }),
+    renderPairingPinPage({ locale: 'zh' }),
+  ]) {
+    assert.ok(html.includes(injected), '共用脚本注入的就是这个函数本身（toString），且逐字相等')
+    assert.ok(html.includes('bootPreloadIds({'), '页侧算集合只经它一次')
+  }
+  const reconnect = renderMobileReconnectPage({ locale: 'zh' })
+  assert.equal(/newestFirst|preloadOrder|tailCandidates/.test(reconnect), false,
+    '页侧不许留旧的排序痕迹')
+  assert.equal(/slice\(0,\s*BOOT_TAIL_PRELOAD\)/.test(reconnect), false,
+    '也不许再做「先排序再截断」（那正是 12 个置顶被挤掉的老毛病）')
+})
+
+// ---------------------------------------------------------------------------
+// T6 单测 6b：页侧屏障（三趟读都落地才算，bot.team 被拒也不挂死）
+// ---------------------------------------------------------------------------
+
+const BARRIER_AT = 'const afterStageReads='
+const BARRIER_END = 'return bgTailsPromise};'
+
+/** 从出货页脚本里切出屏障那一段原样代码——测的是页面真身，不是复述一遍。 */
+function barrierSource() {
+  const html = renderMobileReconnectPage({ locale: 'zh' })
+  const at = html.indexOf(BARRIER_AT)
+  const end = html.indexOf(BARRIER_END)
+  assert.ok(at > 0 && end > at, '出货页里必须能找到屏障段')
+  return html.slice(at, end + BARRIER_END.length)
+}
+
+/** 用切出来的真源码造一个 bgTails，变量全部由外面喂（模拟页面里的同名状态）。 */
+function makeBgTails({ rpc, stageDone, stageItems, stageWorkspaces = [], stagePinnedSessionIds = [], stageZones, stageHiddenIds = new Set(), stageArchivedIds = [] }) {
+  const make = new Function(
+    'bootPreloadIds',
+    'unclaimedSessionIds',
+    'BOOT_TAIL_PRELOAD',
+    'rpc',
+    'stageDone',
+    'stageItems',
+    'stageWorkspaces',
+    'stagePinnedSessionIds',
+    'stageZones',
+    'stageHiddenIds',
+    'stageArchivedIds',
+    `${barrierSource()}; return bgTails;`,
+  )
+  return make(
+    bootPreloadIds,
+    unclaimedSessionIds,
+    10,
+    rpc,
+    stageDone,
+    stageItems,
+    stageWorkspaces,
+    stagePinnedSessionIds,
+    stageZones,
+    stageHiddenIds,
+    stageArchivedIds,
+  )
+}
+
+test('单测 6b：三趟读没落地就一个 session.tails 都不发，落地后发的就是同一份集合', async () => {
+  const calls = []
+  const stageDone = { ws: false, sess: false, team: false }
+  const rpc = (method, payload) => {
+    calls.push({ method, payload })
+    return Promise.resolve({ ok: true })
+  }
+  const bgTails = makeBgTails({
+    rpc,
+    stageDone,
+    stageItems: [row('s-1', Date.now() - 1000)],
+    stageWorkspaces: [{ workspaceId: 'w1', sessionIds: ['s-1'] }],
+    stageZones: { main: [], room: [], other: [] },
+  })
+
+  const pending = bgTails()
+  await new Promise((r) => setTimeout(r, 120))
+  assert.equal(calls.filter((c) => c.method === 'session.tails').length, 0,
+    '还没落地完毕：此刻发出去的清单会是按空三区算的，与桥侧不同（判据 8 的同一份输入就不成立）')
+
+  stageDone.ws = true
+  stageDone.sess = true
+  await new Promise((r) => setTimeout(r, 120))
+  assert.equal(calls.filter((c) => c.method === 'session.tails').length, 0,
+    '只差 bot.team 也不算落地：三区 id 只有它给得出')
+
+  stageDone.team = true
+  const result = await pending
+  const sent = calls.filter((c) => c.method === 'session.tails')
+  assert.equal(sent.length, 1, '三趟读落地后发一次，且只发一次')
+  assert.deepEqual(sent[0].payload.sessions, ['s-1'], '发出去的 id 清单就是刚才那份输入下的纯函数返回值')
+  assert.deepEqual(result, { ok: true }, '腿的返回值原样交回给 /api/boot 那条腿')
+})
+
+test('单测 6b：bot.team 被拒时 bgTails() 仍然 settle（不许把整页挂死）', async () => {
+  const stageDone = { ws: false, sess: false, team: false }
+  // 页面 rpc 的 finally 就是这么开门的：这一趟回来了（成功或失败）就算「读过了」。
+  const botTeamProbe = () =>
+    Promise.reject(new Error('rpc bot.team -> 403')).finally(() => {
+      stageDone.team = true
+    })
+  const calls = []
+  const rpc = (method) => {
+    calls.push(method)
+    return Promise.resolve({ ok: true })
+  }
+  const bgTails = makeBgTails({
+    rpc,
+    stageDone,
+    stageItems: [row('s-1', Date.now() - 1000)],
+    stageWorkspaces: [{ workspaceId: 'w1', sessionIds: ['s-1'] }],
+    stageZones: { main: [], room: [], other: [] },
+  })
+  stageDone.ws = true
+  stageDone.sess = true
+  await assert.rejects(botTeamProbe(), /403/, '这一趟确实是拒绝')
+  assert.equal(stageDone.team, true, '拒绝也把第三道门打开了（rpc 的 finally）')
+
+  let settled = false
+  const pending = bgTails().then((value) => {
+    settled = true
+    return value
+  })
+  await new Promise((r) => setTimeout(r, 200))
+  assert.equal(settled, true, '被拒的 bot.team 不许把 /api/boot 那条腿吊死')
+  assert.deepEqual(await pending, { ok: true }, '集合照发，不因一次被拒整页失败')
+  assert.deepEqual(calls, ['session.tails'], '而且只发了尾巴这一趟')
+})
+
+test('单测 6b：session.tails 自己失败时 bgTails() 也 resolve（尾巴腿不许拖垮整页）', async () => {
+  const stageDone = { ws: true, sess: true, team: true }
+  const rpc = () => Promise.reject(new Error('rpc session.tails -> 502'))
+  const bgTails = makeBgTails({
+    rpc,
+    stageDone,
+    stageItems: [row('s-1', Date.now() - 1000)],
+    stageWorkspaces: [{ workspaceId: 'w1', sessionIds: ['s-1'] }],
+    stageZones: { main: [], room: [], other: [] },
+  })
+  assert.equal(await bgTails(), null, '尾巴读失败退化成「没有尾包」，/api/boot 照常返回')
 })
