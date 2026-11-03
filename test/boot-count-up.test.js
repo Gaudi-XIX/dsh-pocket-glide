@@ -1,14 +1,13 @@
-// The boot ladder's counts climb 0→N instead of popping in whole (user
-// 2026-10-20: "先显示数字，一个数字过一个数字，哒哒哒的效果"), every number belongs to
-// exactly one row, and it is handed out the moment the ladder enters that row — not
-// when the row finishes (user 2026-10-21: "应该一步一步来，我只单的前端显示，后端肯定
-// 是提前加载"; 2026-10-22: "有没有可能刚进入那一行，就把后面对应的数字显示出来"). This
-// drives the function the phone actually ships — pulled out of sharedStageScript() and
-// run against a stub DOM — rather than re-asserting a string, because the whole point
-// is the frame-by-frame behaviour: it must advance, must land exactly on the final
-// value, must never hold a stage (it is fire-and-forget), must honour
-// prefers-reduced-motion by writing the final value at once, and must keep a parked
-// number invisible until its row comes.
+// The boot ladder's counts are written once, when the bridge's summary lands and the
+// ladder has reached that row (user 2026-10-21: "应该一步一步来，我只单的前端显示，后端
+// 肯定是提前加载"; 2026-10-22: "有没有可能刚进入那一行，就把后面对应的数字显示出来"). Every
+// number belongs to exactly one row, and a cell stays blank until its reading is known:
+// no rolling sequence, no tween, no 0 seed (2026-11-03 user m00236①(a): "它会先显示一遍
+// 000 已就绪，然后突然又把数字弹出来"). This drives the function the phone actually
+// ships — pulled out of sharedStageScript() and run against a stub DOM — rather than
+// re-asserting a string, because the whole point is the frame-by-frame behaviour: a
+// reading must land exactly once, must never be invented, and a parked number must stay
+// invisible until its row comes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -19,7 +18,8 @@ const blockStart = source.indexOf('function sharedStageScript()')
 const block = source.slice(blockStart, source.indexOf('export function renderMobileReconnectPage('))
 
 // The organ lines, verbatim from the shipped block. The gate lives before
-// COUNT_UP_MS, so the block is grabbed in three pieces around it.
+// The organ lines, sliced out of the shipped block in one piece: from the ladder gate
+// down to the RPC helper sits every count organ there is.
 const grab = (start, end) => {
   const from = block.indexOf(start)
   assert.ok(from >= 0, `missing anchor: ${start}`)
@@ -27,16 +27,12 @@ const grab = (start, end) => {
   assert.ok(to > from, `missing end anchor: ${end}`)
   return block.slice(from, to)
 }
-const ORGANS =
-  grab('let ladderGated=false;', 'const COUNT_UP_MS=') +
-  grab('const COUNT_UP_MS=', 'function setCount(') +
-  grab('function setCount(', '\nconst rpc=')
-
+const ORGANS = grab('let ladderGated=false;', 'const rpc=async(')
 // Build a bootSteps host with `rowCount` rows, each carrying one .bsc span.
 function makeWorld({ reduced = false, rowCount = 5 } = {}) {
-  const seeds = ['0 个工作区', '0 个会话', '0 条消息', '0', '0']
-  const rows = Array.from({ length: rowCount }, (_, i) => {
-    const el = { textContent: seeds[i] }
+  // 出厂模板的出生文本是空串（判据 C1.1）——未成值的格子从头到尾留白，所以桩也留白。
+  const rows = Array.from({ length: rowCount }, () => {
+    const el = { textContent: '' }
     return { el, querySelector: (sel) => (sel === '.bsc' ? el : null) }
   })
   const host = { children: rows }
@@ -47,8 +43,8 @@ function makeWorld({ reduced = false, rowCount = 5 } = {}) {
     queue.push(cb)
     return queue.length
   }
-  // The scan ticks on setTimeout; keep those ticks in the same pump so a test can
-  // walk the reel frame by frame instead of waiting on real time.
+  // Nothing schedules frames or ticks any more (判据 C1.2); the pump stays so a test
+  // can prove that no queued callback ever moves a cell.
   const timers = []
   const setTimeoutShim = (cb) => {
     timers.push(cb)
@@ -58,7 +54,7 @@ function makeWorld({ reduced = false, rowCount = 5 } = {}) {
   // walked in a handful of frames instead of real time.
   let now = 0
   const DateShim = { now: () => now }
-  const run = new Function('document', 'matchMedia', 'requestAnimationFrame', 'setTimeout', 'Date', `${ORGANS};return {countUp,paintCount,releaseCount,setCount,stepCountEl,gateLadder,startRowScan,stopRowScan,paintStageSums}`)
+  const run = new Function('document', 'matchMedia', 'requestAnimationFrame', 'setTimeout', 'Date', `${ORGANS};return {countUp,paintCount,releaseCount,setCount,stepCountEl,gateLadder,paintStageSums,sumsReady}`)
   const api = run(document, matchMedia, requestAnimationFrame, setTimeoutShim, DateShim)
   const pump = (frames = 40) => {
     for (let i = 0; i < frames && (queue.length || timers.length); i += 1) {
@@ -74,26 +70,21 @@ function makeWorld({ reduced = false, rowCount = 5 } = {}) {
 
 const zhFmt = (v) => `${v} 个工作区`
 
-test('a count climbs frame by frame and lands exactly on the final value', () => {
+test('a reading is written once — no tween, no intermediate value', () => {
   const { api, pump, text } = makeWorld()
   api.countUp(api.stepCountEl(0), 7, zhFmt)
-  // It has started moving but is not there yet on an early frame.
-  pump(2)
-  const mid = Number.parseInt(text(0), 10)
-  assert.ok(mid > 0 && mid < 7, `mid-flight value should be between 0 and 7, saw "${text(0)}"`)
-  // Run to the end of the ladder.
+  assert.equal(text(0), '7 个工作区', 'the final text lands on the spot')
+  // 判据 C1.2：禁补间——真值之后没有任何一帧把它改回中间值。
   pump(40)
-  assert.equal(text(0), '7 个工作区', 'the last frame writes the exact final string')
+  assert.equal(text(0), '7 个工作区', 'and no later frame rewrites it')
 })
-
-test('reduced motion writes the final value at once, no animation', () => {
+test('a reading lands before any frame runs, with no animation to wait for', () => {
   const { api, pump, text } = makeWorld({ reduced: true })
   api.countUp(api.stepCountEl(1), 12, (v) => `${v} 个会话`)
   assert.equal(text(1), '12 个会话', 'final value lands before any frame runs')
   pump(5)
   assert.equal(text(1), '12 个会话', 'and does not change afterwards')
 })
-
 test('a measured zero is written directly (it is a real reading, not a missing field)', () => {
   const { api, pump, text } = makeWorld()
   api.countUp(api.stepCountEl(2), 0, zhFmt)
@@ -150,7 +141,7 @@ test('a count measured before its row is reached is parked, not painted', () => 
   api.gateLadder()
   api.countUp(api.stepCountEl(1), 9, (v) => `${v} 个会话`)
   pump(40)
-  assert.equal(text(1), '0 个会话', 'the row still shows the seed the template ships — parked, never painted')
+  assert.equal(text(1), '', 'the row stays blank until its reading is known — parked, never painted')
 })
 
 test('opening the gate hands the first row its number at once (that row is already lit)', () => {
@@ -170,51 +161,44 @@ test('releaseCount hands the parked number over, and the ladder order is kept', 
   api.countUp(api.stepCountEl(1), 30, (v) => `${v} 个会话`)
   api.countUp(api.stepCountEl(2), 10, (v) => `${v} 条消息`)
   pump(40)
-  assert.deepEqual([text(1), text(2)], ['0 个会话', '0 条消息'], 'before its row the count stays at the template seed')
+  assert.deepEqual([text(1), text(2)], ['', ''], 'before its row the count stays blank — there is no seed to show')
   assert.equal(text(0), '2 个工作区', 'the row the ladder is on shows its own number')
   api.releaseCount(1)
   pump(40)
   assert.equal(text(1), '30 个会话')
-  assert.equal(text(2), '0 条消息', 'a row that has not been reached yet keeps its seed')
+  assert.equal(text(2), '', 'a row that has not been reached yet stays blank')
 })
 
-test('a row that opens before its answer is known starts a rolling count at once', () => {
-  // 2026-10-25 用户口径（m00277）：「一开始就显示多少个什么绘画，那个数字就快速从 0
-  // 飙到 9，不停地轮换，然后等到开始轮转以后，最终停到那个数字」——行一打开，右边
-  // 立刻是滚动的数字，而不是先写个 0 干等，也不是最后一次性跳出真值。
+test('a row that opens before its answer is known stays blank until the reading lands', () => {
+  // 2026-10-25 的用户口径曾要求「行一打开就开始滚数字」，2026-11-03 用户又报「先显示一遍
+  // 000 再弹真值」——滚动序列与假种子一并砍掉（判据 C1）：真值没到就留白，真值一到
+  // 一次写成，此后不再变。
   const { api, pump, text } = makeWorld()
   api.gateLadder()
-  // 真值还没到手；单位由行模板自带（每个计数行出场就写着「0 个会话」= 自己那一行的量词）。
   api.releaseCount(2)
-  assert.match(text(2), /^\d+ 条消息$/, 'the row shows a rolling number, not the bare seed')
-  const seen = new Set([text(2)])
-  for (let i = 0; i < 12; i += 1) {
-    pump(1)
-    seen.add(text(2))
-  }
-  assert.ok(seen.size >= 3, `the counter keeps moving while the answer is in flight, saw ${[...seen].join(' | ')}`)
-  // 真值回来那一刻收口，停在真值上。
+  assert.equal(text(2), '', 'no number before the reading exists')
+  for (let i = 0; i < 12; i += 1) pump(1)
+  assert.equal(text(2), '', 'and no timer invents one while the answer is in flight')
   api.countUp(api.stepCountEl(2), 37, (v) => `${v} 条消息`)
+  assert.equal(text(2), '37 条消息', 'the real reading is written once, the moment it lands')
   pump(40)
-  assert.equal(text(2), '37 条消息', 'the real reading wins the moment it lands')
-  pump(20)
-  assert.equal(text(2), '37 条消息', 'and stays there — the reel does not resume')
+  assert.equal(text(2), '37 条消息', 'and stays there — nothing resumes')
 })
-
-test('the rolling count sweeps 0..9 and wraps instead of climbing forever', () => {
-  // 用户 m00277 原话是「从 0 飙到 9，不停地轮换」：一圈到 9 就回到 0，不是一味递增。
-  // 这样它在真值回来之前既看得出“在动”，又不会被读成一个真实读数。
-  const { api, pump, text } = makeWorld()
-  api.gateLadder()
-  api.countUp(api.stepCountEl(3), 0, (v) => `${v} 条消息`) // 先记下 formatter；真值 0 仍是真读数
-  api.releaseCount(3)
-  const nums = []
-  for (let i = 0; i < 14; i += 1) {
-    pump(1)
-    nums.push(Number.parseInt(text(3), 10))
+test('the shared block ships no rolling counter and no probe bookkeeping', () => {
+  // 判据 C1.1/C1.2/C1.3：0→9 轮换、补间、两个引导页计数格出厂预填的 0 全部删净。
+  // 这里钉「现存的那条写数字的路」：计数写入器体内既没有帧、也没有定时器。
+  const body = block.slice(block.indexOf('function paintCount('), block.indexOf('function countUp('))
+  assert.ok(body.length > 0, 'the count writer is in the shipped block')
+  assert.equal(/requestAnimationFrame|setTimeout/.test(body), false, 'the count writer neither tweens nor schedules')
+  // 计数格出厂不带任何 data-* 标记：旧探针标记或将来任何新标记都会在这里现形。
+  for (const [name, html] of [
+    ['reconnect', renderMobileReconnectPage('zh', 'lan', {})],
+    ['pairing', renderPairingPinPage('zh', null, {})],
+  ]) {
+    const spans = [...html.matchAll(/<span class="bsc"[^>]*>/g)].map((m) => m[0])
+    assert.ok(spans.length > 0, `${name}: the counted cells ship`)
+    for (const span of spans) assert.equal(/data-/.test(span), false, `${name}: a counted cell ships no marker`)
   }
-  assert.ok(nums.includes(0), `the reel wraps back to 0, saw ${nums.join(',')}`)
-  assert.ok(Math.max(...nums) <= 9, `the reel never passes 9, saw ${nums.join(',')}`)
 })
 test('the gate is off by default, so the app-shell path is unchanged', () => {
   const { api, pump, text } = makeWorld()
@@ -232,9 +216,9 @@ test('both bootstrap pages gate the ladder and hand each row its number as it op
     const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
     assert.equal(count(scripts, 'gateLadder();'), 1, `${name}: the gate is opened once, before the reads go out`)
     assert.equal(
-      count(scripts, 'const openRow=(n)=>{for(let i=0;i<n;i+=1)settleRow(i);setStep(n);if(n===lastRow)return;releaseCount(n)};'),
+      count(scripts, 'const openRow=(n)=>{setStep(n);if(n===lastRow)return;releaseCount(n)};'),
       1,
-      `${name}: entering a row is what opens it — and every row the ladder has passed is settled first`,
+      `${name}: entering a row is what opens it — a row with no reading yet stays blank`,
     )
     assert.equal(count(scripts, 'const stage=stageRunner(openRow);'), 1, `${name}: the runner drives rows through openRow`)
     assert.ok(count(scripts, 'await stage(') >= 3, `${name}: every row is walked one after another`)
@@ -284,22 +268,21 @@ test('the conversation row counts messages, not preloaded packs', () => {
   assert.equal(reconnect.text(2), '5 msg', 'and shows stageSummary.messages on row 2')
 })
 
-test('the ladder rows start at 0, ready to crawl from the moment a row opens', () => {
-  // 2026-10-25 用户改口径（m00001③ + 复核反馈）：「到每一步开始的时候，右边就开始
-  // 跳数字」——行打开时立刻开始爬，答案后到再收口。行模板出厂预填 0（data-probe="0"），
-  // 爬升器从 0 起步；真值由 countUp→paintCount 写入。
-  // 2026-10-30 判据 6A 追加：**末行**不预填 0，它开口就说「准备中」/preparing——那一行
-  // 没有数字可爬，写 0 就是拿一个不存在的读数冒充进度。末行按各页自己的行数算，不写死。
+test('the ladder rows are born blank — no 0 seed, no probe marker', () => {
+  // 判据 C1.1/C1.3（2026-11-03 用户 m00236①(a)：「先显示一遍 000 再弹真值」）：三个计数格
+  // 从渲染到真值到达之前 textContent 恒为空串，出厂模板里没有 0 预填、计数格上没有任何标记；
+  // 末行仍是「准备中」/preparing——它没有数字可写。
   const html = renderMobileReconnectPage('zh', 'lan', {})
   const script = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
   assert.ok(
-    script.includes("(i===lastRow?(ZH?'准备中':'preparing'):'0'+(units[i]?units[i]():''))"),
-    'the count span ships "0 + 这一行的量词" on counted rows and 准备中 on the last row',
+    script.includes("(i===lastRow?(ZH?'准备中':'preparing'):'')"),
+    'counted rows are born with an empty cell and the last row says 准备中',
   )
-  assert.ok(script.includes("data-probe=\"0\">'"), 'the seed still ships inside the .bsc span')
-  assert.match(script, /const units=\[ROW_UNIT\.workspace,ROW_UNIT\.sessionList,ROW_UNIT\.session/, 'each count row is handed its own unit')
+  const spans = [...html.matchAll(/<span class="bsc"[^>]*>/g)].map((m) => m[0])
+  assert.ok(spans.length > 0, 'the counted cells ship')
+  for (const span of spans) assert.equal(/data-/.test(span), false, 'a counted cell ships bare — the probe marker is gone for good')
+  assert.equal(script.includes("'0'+(units[i]"), false, 'no row template pre-fills 0')
 })
-
 // 2026-10-25 真机回归：ROW_UNIT 的量词工厂里写了页面变量 `zh`，而工厂是在
 // **Node 侧**（生成页面时）求值的——`zh` 只活在生成的页面脚本里。于是点「连接」
 // 的瞬间就抛 ReferenceError: zh is not defined（栈在 Array.workspace），阶梯一行都
@@ -333,6 +316,21 @@ test('the shipped page scripts run as-is: no reference to a variable that only e
     )
     // 量词工厂必须靠运行时的 ZH 判断，不能直接引用 `zh`。
     assert.equal(/:\(\)=>zh\?/.test(script), false, `${name}: the unit factories must not close over the page variable zh`)
-    assert.match(script, /ROW_UNIT\.workspace/, `${name}: rows still carry their unit`)
+    assert.match(script, /ROW_UNIT\[unit\]\(\)/, `${name}: a row's unit still comes from the runtime unit factory`)
+  }
+})
+
+test('each guide page records the boot before it hands over, exactly once', () => {
+  // 判据 C3（用户 m00236①(b)：PIN 之后又插一张卡 ⇒ 一次冷启动两张卡）：两个引导页都在
+  // 那次 location.replace('/') 紧前方写一次 pocketBootedAt，而且只在阶梯真正走完的路径上。
+  for (const [name, html] of [
+    ['reconnect', renderMobileReconnectPage('zh', 'lan', {})],
+    ['pairing', renderPairingPinPage('zh', null, {})],
+  ]) {
+    const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
+    assert.equal(scripts.split('markBooted()').length - 1, 2, `${name}: the shared block defines it and the hand-off calls it`)
+    assert.equal(scripts.split('function markBooted()').length - 1, 1, `${name}: one definition only`)
+    assert.equal(scripts.split('markBooted();').length - 1, 1, `${name}: exactly one hand-off calls it`)
+    assert.ok(scripts.lastIndexOf("location.replace('/')") > scripts.lastIndexOf('markBooted()'), `${name}: the mark is written before the hand-off, never after it`)
   }
 })

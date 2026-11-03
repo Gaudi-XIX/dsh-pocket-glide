@@ -99,7 +99,7 @@ const RECENT_WINDOW_MS = assetNumber(/RECENT_WINDOW_MS=(\d+)/, 'RECENT_WINDOW_MS
 
 // 页面自己的 L 表：现取，不照抄文案（改文案不该改红这个文件）。
 const L = JSON.parse(js.match(/^const L=(\{.*\});/m)[1])
-for (const key of ['mainBot', 'otherBots', 'rooms', 'tagMain', 'tagNoModel']) {
+for (const key of ['mainBot', 'otherBots', 'rooms', 'tagMain', 'tagNoModel', 'emptySection']) {
   assert.equal(typeof L[key], 'string', `L.${key} 必须仍在壳里（botStage 的段标题/小标签取这几个键）`)
 }
 const MORE_ROWS = assetNumber(/MORE_ROWS=(\d+)/, 'MORE_ROWS')
@@ -368,7 +368,20 @@ test('AC3.4：BOT 卡的 toggle/more/pin 与工作区卡走同一套选择器与
     summaries: [stale('s-main', 3), stale('s-o1', 3), stale('s-o2', 4), stale('w1', 3), stale('w2', 4), stale('w3', 5)],
     expanded: ['bot:other', 'ws-a'],
   })
-  assert.deepEqual(CARD_IDS(html), ['bot:main', 'bot:other', 'ws-a'], 'AC3.4 相关卡都在（群段为空 ⇒ 不画）')
+  assert.deepEqual(
+    CARD_IDS(html),
+    ['bot:main', 'bot:other', 'bot:room', 'ws-a'],
+    'AC3.4 相关卡都在（群段为空也画一张群聊卡：用户 m00236② 看不到群分组）',
+  )
+  // 判据 C4：真读成立就推三段卡；空段不是「不画」，而是一张带空态行的卡。
+  assert.ok(
+    cardHtml(html, 'bot:room').includes('data-empty-section="room"'),
+    'AC3.4 空群段画的是带空态钩子的群聊卡，不是一个静默的缺席',
+  )
+  assert.ok(
+    cardHtml(html, 'bot:room').includes(L.rooms + L.emptySection.replace('{name}', '')),
+    'AC3.4 空态行文案取 L.emptySection、段名取该卡标题',
+  )
   assert.deepEqual(ROW_IDS(cardHtml(html, 'bot:other')), ['s-o1'], 'AC3.4 其他 BOT 段真画两行时窗内只显 1 行')
   assert.deepEqual(ROW_IDS(cardHtml(html, 'ws-a')), ['w1'], 'AC3.4 工作区卡同一把尺：窗内 1 行、其余在「更多」后')
   for (const id of ['bot:other', 'ws-a']) {

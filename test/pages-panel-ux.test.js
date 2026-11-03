@@ -263,13 +263,13 @@ test('the handoff reads go out in one batch, and the ladder only ever climbs', (
     assert.match(html, /const reads=\[\s*withRetry\(\(\)=>rpc\('workspace\.list'\)\)/, `${name} builds all three reads up front`)
     assert.match(html, /reads\.forEach\(p=>p\.catch\(\(\)=>\{\}\)\)/, `${name} disarms the not-yet-awaited legs`)
     assert.match(html, /await stage\(\d,\s*\(\)=>reads\[\d\]\)/, `${name} walks the rows in order`)
-    // 6B-3：阶梯越过某行时先 settleRow 把那一行落定（真值没来就落回 0+单位，不许停在
-    // 扫描线的随机数字上），然后点亮这一行；末行不参与扫描（早返回，等完成文字），
-    // 其余行才 releaseCount 交出数字。
+    // 6B-3（2026-11-03 判据 C1）：阶梯越过某行时只点亮它，不替它写数字——真值没来时那一行
+    // 保持留白，不落回 0+单位（用户 m00236①(a)：冷启动不许先闪一遍 000）；末行早返回等
+    // 完成文字，其余行才 releaseCount 交出真值。
     assert.match(
       html,
-      /const openRow=\(n\)=>\{for\(let i=0;i<n;i\+=1\)settleRow\(i\);setStep\(n\);if\(n===lastRow\)return;releaseCount\(n\)\};/,
-      `${name} opens a row's number as the ladder enters it, settling the rows it passes`
+      /const openRow=\(n\)=>\{setStep\(n\);if\(n===lastRow\)return;releaseCount\(n\)\};/,
+      `${name} opens a row's number as the ladder enters it, leaving the rows it passes blank`
     )
     assert.match(html, /const stage=stageRunner\(openRow\);/, `${name} the runner drives the rows through openRow`)
     assert.match(html, /gateLadder\(\)/, `${name} opens the count gate before the reads go out`)

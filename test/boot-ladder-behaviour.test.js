@@ -1,13 +1,13 @@
 // 判据第 6 条的行为面（2026-10-30 UI 统一卡，批次 A）。
 //
-// 静态 grep 只能证明「代码里写着 已就绪」「stopRowScan 多了一处」，证明不了：
-//   6B  末行落完成文字后 200 ms 再读，屏上仍是那四个字（扫描线不许盖回来）；
+// 静态 grep 只能证明「代码里写着 已就绪」「setCount 写了一行」，证明不了：
+//   6B  末行落完成文字后 200 ms 再读，屏上仍是那四个字（没有任何东西能把它盖回去）；
 //   6C  is-active 单调不减、步长 ≤ 1、同时只有一行；三条腿仍然同时出发（没被串行化）；
 //   6D  跳转时刻与完成文字时刻差 ≥ 500 ms（停留是独立等待，不是拿帧同步凑出来的）。
 //
 // 所以这里不重写阶梯，而是把**页面实际出厂的脚本**里那两段真代码取出来跑：
-// sharedStageScript() 的器官（gateLadder / stepCountEl / countUp / startRowScan /
-// stopRowScan / releaseCount / setCount / stageRunner …）与重连页的 runStages()，
+// sharedStageScript() 的器官（gateLadder / stepCountEl / countUp / sumsReady /
+// releaseCount / setCount / stageRunner …）与重连页的 runStages()，
 // 挂在一个只有 4 行的替身 DOM 与一台手动时钟上。断言读的是 class 变更事件序列与
 // 文字内容，不是字符串匹配。
 import test from 'node:test'
@@ -24,11 +24,8 @@ const grab = (start, end) => {
   assert.ok(to > from, `missing end anchor in the shipped page: ${end}`)
   return script.slice(from, to)
 }
-// 器官按闸门所在位置切三段（闸门在 COUNT_UP_MS 之前），与 boot-count-up.test.js 同法。
-const ORGANS =
-  grab('let ladderGated=false;', 'const COUNT_UP_MS=') +
-  grab('const COUNT_UP_MS=', 'function setCount(') +
-  grab('function setCount(', 'const rpc=')
+// 器官整段切出来：从阶梯闸门到 RPC 助手之间就是全部计数器官，与 boot-count-up.test.js 同法。
+const ORGANS = grab('let ladderGated=false;', 'const rpc=async(')
 const STAGE_RUNNER = grab('const stageRunner=(setStep)', 'async function verifyPin(')
 // The shipped runner, lifted verbatim: the page calls it as `stageRunner(openRow)`.
 const makeStageRunner = new Function(`${STAGE_RUNNER};return stageRunner;`)()
@@ -48,28 +45,24 @@ const RUN_STAGES = script.slice(stagesFrom, stagesTo + STAGES_END.length)
  * @returns {{label: string, count: string, active: boolean, unit: string}[]}
  */
 function templateRows(body) {
-  const unitsAt = body.indexOf('const units=')
+  const labelsAt = body.indexOf('const labels=')
   const innerAt = body.indexOf('stepsHost.innerHTML=')
-  assert.ok(unitsAt >= 0 && innerAt > unitsAt, 'the page paints its rows from a template expression')
-  const decls = body.slice(unitsAt, innerAt)
+  assert.ok(labelsAt >= 0 && innerAt > labelsAt, 'the page paints its rows from a template expression')
+  const decls = body.slice(labelsAt, innerAt)
   const exprEnd = body.indexOf(".join('');", innerAt)
   assert.ok(exprEnd > innerAt, 'the template expression ends on .join(...)')
   const expr = body.slice(innerAt, exprEnd + ".join('');".length)
   let painted = ''
   const host = { set innerHTML(v) { painted = v }, get innerHTML() { return painted }, classList: { add: () => {} } }
   const stepsHost = host
-  const ZH = true
-  const ROW_UNIT = { workspace: () => ' 个工作区', sessionList: () => ' 个会话', session: () => ' 条消息' }
   const T = { stepServer: '连接桌面端', stepWorkspace: '读取工作区', stepSessionList: '读取会话列表', stepSession: '读取会话消息', stepPrepare: '正在准备页面' }
   // eslint-disable-next-line no-new-func
-  const units = new Function('stepsHost', 'ZH', 'ROW_UNIT', 'T', `${decls}return units;`)(stepsHost, ZH, ROW_UNIT, T)
-  // eslint-disable-next-line no-new-func
-  new Function('stepsHost', 'ZH', 'ROW_UNIT', 'T', `${decls}${expr};`)(stepsHost, ZH, ROW_UNIT, T)
+  new Function('stepsHost', 'ZH', 'T', `${decls}${expr};`)(stepsHost, true, T)
   const labels = [...painted.matchAll(/<span class="boot-step-label">([^<]*)<\/span>/g)].map((m) => m[1])
   const counts = [...painted.matchAll(/<span class="bsc"[^>]*>([^<]*)<\/span>/g)].map((m) => m[1])
   const actives = [...painted.matchAll(/<div class="boot-step([^"]*)">/g)].map((m) => m[1].includes('is-active'))
   assert.equal(counts.length, labels.length, `every row carries one count span (${labels.length} rows)`)
-  const rows = labels.map((label, i) => ({ label, count: counts[i], active: Boolean(actives[i]), unit: units[i]() }))
+  const rows = labels.map((label, i) => ({ label, count: counts[i], active: Boolean(actives[i]) }))
   return { rows, markup: painted }
 }
 
@@ -96,6 +89,8 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
   const calls = []
   const failReasons = []
   const nav = { at: null, url: null }
+  // 判据 C3：markBooted 由页面在跳转前调用一次，这里只记账，不看它怎么写盘。
+  const marks = []
 
   const fakeSetTimeout = (cb, ms = 0) => {
     const timer = { at: clock.now + Number(ms || 0), cb, id: (clock.seq += 1) }
@@ -111,7 +106,7 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
   // The ladder rows: each carries one .bsc cell, and every class change is booked.
   const buildRow = ({ label, count, active }, index) => {
     const classes = new Set(active ? ['is-active'] : [])
-    const cell = { textContent: count, _scan: null, _probe: undefined, _fmt: undefined, _released: false, _pending: null }
+    const cell = { textContent: count, _released: false, _pending: null }
     const row = {
       label,
       cell,
@@ -164,7 +159,7 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
 
   const run = new Function(
     'document', 'matchMedia', 'requestAnimationFrame', 'setTimeout', 'clearTimeout', 'Date',
-    `${ORGANS};return {countUp,paintCount,releaseCount,setCount,stepCountEl,gateLadder,startRowScan,stopRowScan,paintStageSums}`,
+    `${ORGANS};return {countUp,paintCount,releaseCount,setCount,stepCountEl,gateLadder,paintStageSums,sumsReady}`,
   )
   const api = run(documentStub, matchMedia, fakeRaf, fakeSetTimeout, fakeClearTimeout, DateShim)
 
@@ -218,13 +213,13 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
 
   const deps = [
     'document', 'location', 'fetch', 'sessionStorage', 'setTimeout', 'clearTimeout', 'requestAnimationFrame',
-    '$', 'ROW_UNIT', 'T', 'ZH', 'stopRowScan', 'releaseCount', 'stageRunner', 'gateLadder',
+    '$', 'ROW_UNIT', 'T', 'ZH', 'releaseCount', 'stageRunner', 'gateLadder', 'sumsReady', 'markBooted',
     'withRetry', 'rpc', 'withTimeout', 'FETCH_TIMEOUT_MS', 'bgTailsPromise',
     'paintStageSums', 'countUp', 'stepCountEl', 'setCount', 'shellReady', 'SHELL_ASSETS', 'diag', 'fail',
   ]
   const values = [
     documentStub, location, fetchStub, sessionStorage, fakeSetTimeout, fakeClearTimeout, fakeRaf,
-    (id) => elements[id] || null, ROW_UNIT, T, true, api.stopRowScan, api.releaseCount, makeStageRunner, api.gateLadder,
+    (id) => elements[id] || null, ROW_UNIT, T, true, api.releaseCount, makeStageRunner, api.gateLadder, api.sumsReady, () => { marks.push(clock.now) },
     async (fn) => fn(), (method) => read(method, { workspaces: 3, sessions: 2 }), async (p) => p, 8000, null,
     api.paintStageSums, api.countUp, api.stepCountEl, api.setCount, Promise.resolve(), {},
     () => {}, fail,
@@ -247,7 +242,7 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
     await flush()
   }
 
-  return { clock, events, calls, nav, failReasons, api, rows: () => rows, advance, runStages, text: (i) => rows[i].cell.textContent }
+  return { clock, events, calls, nav, marks, failReasons, api, rows: () => rows, advance, runStages, text: (i) => rows[i].cell.textContent }
 }
 
 test('6C the ladder lights one row at a time, never backwards, never skipping', async () => {
@@ -294,19 +289,23 @@ test('6B the last row keeps its completion text 200 ms after it lands', async ()
   await pending.catch(() => {})
 })
 
-test('6B a rolling scan on the last row is stopped by the completion write', async () => {
+test('6B no timer invents a number: every cell goes from blank straight to its reading', async () => {
   const w = makeWorld()
-  // The page never scans the last row itself; this proves the guard in setCount: a scan
-  // that IS running is killed, so no random digit can survive the completion text.
-  w.api.startRowScan(w.api.stepCountEl(3), 3)
-  assert.equal(w.api.stepCountEl(3)._scan !== null, true, 'the scan is rolling before the write')
-  w.api.setCount(3, '已就绪')
-  assert.equal(w.text(3), '已就绪')
-  await w.advance(200)
-  assert.equal(w.text(3), '已就绪', 'the scan is dead: 200 ms later the text is untouched')
-  assert.equal(w.api.stepCountEl(3)._scan, null, 'and its timer handle is cleared, not just ignored')
+  const pending = w.runStages()
+  const seen = [[], [], [], []]; for (let i = 0; i < 4; i += 1) seen[i].push(w.text(i))
+  for (let step = 0; step < 120; step += 1) {
+    await w.advance(20)
+    for (let i = 0; i < 4; i += 1) if (!seen[i].includes(w.text(i))) seen[i].push(w.text(i))
+  }
+  await pending.catch(() => {})
+  // 判据 C1（用户 m00236①(a)「先显示一遍 000 再弹真值」）：整条阶梯跑完，每一格都只在
+  // 真值到达的那一刻从空串变成读数——没有 0 预填，没有滚动序列，也没有第二次数值。
+  const msgs = countTailMessages({ a: { events: [{ type: 'user/message' }, { type: 'assistant/message' }] } })
+  assert.deepEqual(seen[0], ['', '3 ws'], 'row 0 goes straight from blank to its reading (shipped unit factory, ZH undefined here)')
+  assert.deepEqual(seen[1], ['', '2 sess'], 'row 1 goes straight from blank to its reading')
+  assert.deepEqual(seen[2], ['', `${msgs} msg`], 'row 2 goes straight from blank to its reading')
+  assert.deepEqual(seen[3], ['准备中', '已就绪'], 'the last row goes from the prepare wording straight to 已就绪')
 })
-
 test('6D navigation waits at least 500 ms after the completion text', async () => {
   const w = makeWorld({ delays: { 'workspace.list': 120, 'session.list': 240, boot: 360 } })
   const pending = w.runStages()
@@ -331,7 +330,7 @@ test('6D navigation waits at least 500 ms after the completion text', async () =
 test('6D the pairing page orders the same three beats: completion, fixed dwell, navigation', () => {
   const page = renderPairingPinPage('zh', null, {})
   const body = [...page.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
-  const ready = body.indexOf("setCount(4,ZH?'已就绪':'ready')")
+  const ready = body.indexOf("if(sumsReady())setCount(4,ZH?'已就绪':'ready')")
   const dwell = body.indexOf('await new Promise(r=>setTimeout(r,500))', ready)
   const nav = body.indexOf("location.replace('/')", dwell)
   assert.ok(ready >= 0, 'the pairing page writes 已就绪 on its fifth row')
@@ -339,26 +338,40 @@ test('6D the pairing page orders the same three beats: completion, fixed dwell, 
   assert.ok(nav > dwell, 'and the navigation comes after that wait, not before it')
 })
 
-test('6A both pages ship the prepare wording on their own last row, not a zero', () => {
+test('6A both pages ship blank counted rows and the prepare wording on their last row', () => {
   for (const [name, page, rows] of [
     ['reconnect', renderMobileReconnectPage('zh', 'lan', {}), 4],
     ['pairing', renderPairingPinPage('zh', null, {}), 5],
   ]) {
     const body = [...page.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
     assert.ok(body.includes('const lastRow=labels.length-1;'), `${name}: the last row is derived, not hardcoded`)
+    // 判据 C1.1/C1.3：计数的格子出生即空串，末行照旧「准备中」；模板里没有 0 预填，计数格
+    // 上也没有任何 data-* 标记。
     assert.ok(
-      body.includes("(i===lastRow?(ZH?'准备中':'preparing'):'0'+(units[i]?units[i]():''))"),
-      `${name}: the seed is 准备中 on the last row and 0+unit on the counted ones`,
+      body.includes("(i===lastRow?(ZH?'准备中':'preparing'):'')"),
+      `${name}: counted rows open blank and the last row opens on 准备中`,
     )
+    const spans = [...page.matchAll(/<span class="bsc"[^>]*>/g)].map((m) => m[0])
+    assert.ok(spans.length > 0, `${name}: the counted cells ship`)
+    for (const span of spans) assert.equal(/data-/.test(span), false, `${name}: a counted cell ships no marker`)
     // Run the page's own template expression and read the rows it paints.
     const painted = templateRows(body).rows
     assert.equal(painted.length, rows, `${name}: ${rows} rows`)
     assert.equal(painted[rows - 1].count, '准备中', `${name}: the last row opens with 准备中, saw "${painted[rows - 1].count}"`)
     for (let i = 0; i < rows - 1; i += 1) {
-      // The pairing page's first row is the server row: its unit factory is `()=>''`,
-      // so its seed is a bare `0` — a counted row still starts on a real zero.
-      const expected = `0${painted[i].unit}`
-      assert.equal(painted[i].count, expected, `${name}: row ${i} opens on a real zero, saw "${painted[i].count}"`)
+      assert.equal(painted[i].count, '', `${name}: row ${i} opens blank, saw "${painted[i].count}"`)
     }
   }
+})
+
+test('6E a cold boot marks itself once, on the hand-off path, before it navigates', async () => {
+  // 判据 C3（用户 m00236①(b)：一次冷启动插了第二张卡）：标记只在阶梯真正走完的那条
+  // 路径上写一次，且落在 location.replace('/') 之前。
+  const w = makeWorld({ delays: { 'workspace.list': 120, 'session.list': 240, boot: 360 } })
+  const pending = w.runStages()
+  await w.advance(1400)
+  await pending.catch(() => {})
+  assert.equal(w.marks.length, 1, 'the boot is recorded exactly once')
+  assert.ok(w.nav.at !== null, 'the ladder still hands over')
+  assert.ok(w.marks[0] <= w.nav.at, `the mark (${w.marks[0]} ms) must land before the hand-off (${w.nav.at} ms)`)
 })
