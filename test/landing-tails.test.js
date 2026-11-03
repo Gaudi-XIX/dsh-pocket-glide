@@ -185,6 +185,7 @@ const listSandbox = ({ state = {}, rpcImpl }) => {
     const TAIL_REQUEUE_MAX=${requeueMaxOf()}
     const tailCache=new Map(),tailArmedAt={},tailPending=new Set(),tailFailed={}
     let activeSession=${JSON.stringify(state.activeSession ?? null)}
+    let tailRound=Promise.resolve()
     const sessionSummaries=${JSON.stringify(state.rows ?? [])}
     ${body}
     return {
@@ -218,7 +219,8 @@ test('an active transcript stops the prefetch, and a batch is in flight once per
   const box2 = listSandbox({ state: state2, rpcImpl: async () => { await gate; return { tails: { a: { updatedAt: 5, events: [userRec('late', 9)] } } } } })
   const first = box2.requestVisibleTails()
   assert.ok(box2.tailPending.has('a'), 'the id is claimed before the response')
-  await box2.requestVisibleTails()
+  const second = box2.requestVisibleTails()
+  assert.equal(second, first, 'a second render while in flight joins the same round — it never opens a second round trip')
   assert.equal(box2.tailPending.size, 1, 'a second render while in flight does not double-ask')
   release()
   await first
@@ -433,7 +435,7 @@ test('the batch is prefetch only: no tail line in the row, no re-render after it
   assert.doesNotMatch(js, /task-copy[^]*msg-tail[^]*tailTextOf/, 'the landing row paints no message text — prefetch only (m02164①)')
   assert.match(js, /rpc\('session\.tails',\{sessions:batch\},60000\)/, '每批尾包按 60s 自己的预算算，不吃 12s 默认档（桥 4 路并发翻 Host 页，一页 465–719ms）')
   assert.match(js, /if\(host\.innerHTML!==html\)host\.innerHTML=html;requestTailBootRound\(host\);requestVisibleTails\(host\)/, '首屏那一轮立即补、之后的接续轮次也随着每次重画（m02267 用户：「进去主页以后再加载」）')
-  assert.match(js, /extracted\.pack=tailPack\(hit\.events\);tailCache\.set\(id,extracted\)/, 'the pack is cached whole, not clipped to one line (m01005①)')
+  assert.match(js, /extracted\.pack=tailPack\(hit\.events\);extracted\.filled=true;tailCache\.set\(id,extracted\)/, 'the pack is cached whole, not clipped to one line (m01005①), and it is stamped filled in the same breath (判据 2(c) 的可见行证据就是这枚章)')
   // A batch that lands must not rebuild the list: the reader is scrolling it.
   // Cut the real function out of the asset — a whole-file regex would happily
   // match renderWorkspaces() defined a thousand lines below the fetch.

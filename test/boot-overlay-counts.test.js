@@ -174,15 +174,16 @@ test('L1 第一、二行取本次 boot 摘要的行数，不取 payload 全量�
   const h = harness({ cards: 4, rows: 4, payloadWs: 4, payloadRows: 402 })
   try {
     assert.equal(h.overlay.hidden, false, '冷启动这一趟卡必须显形')
-    h.ovData(SUMMARY)
-    advance(h)
-    assert.equal(h.ovState[0], 4, '第一行＝画出来的 4 张 .ws-card')
-    assert.equal(h.ovState[1], 4, '第二行＝画出来的 4 行 .task-row，不是 payload 的 402 行')
-    assert.equal(h.rows[0].cell.textContent, '4 个工作区')
-    assert.equal(h.rows[1].cell.textContent, '4 个会话')
-    assert.equal(h.rows[2].cell.textContent, '3 条消息')
-    assert.equal(h.rows[0].cell._final, true)
-    assert.equal(h.rows[1].cell._final, true)
+    // 判据 1／3a：露卡那一帧三格就是摘要真值——不 tick、不等 70ms 阶梯。
+    assert.equal(h.rows[0].cell.textContent, '4 个工作区', '露卡那一帧第一格就是真值（判据 1／3a）')
+    assert.equal(h.rows[1].cell.textContent, '4 个会话', '露卡那一帧第二格就是真值')
+    assert.equal(h.rows[2].cell.textContent, '3 条消息', '露卡那一帧第三格就是真值')
+    assert.equal(h.rows[0].cell._final, true, '第一格出生即定稿')
+    assert.equal(h.rows[1].cell._final, true, '第二格出生即定稿')
+    assert.equal(h.rows[2].cell._final, true, '第三格出生即定稿')
+    assert.equal(h.rows[3].cell.textContent.includes('已就绪'), false, '出生不写末行')
+    assert.equal(h.ovState[0], 4, '第一行＝boot 摘要的 4 张 .ws-card')
+    assert.equal(h.ovState[1], 4, '第二行＝boot 摘要的 4 行 .task-row，不是 payload 的 402 行')
     h.ovReady()
     assert.equal(h.rows[3].cell.textContent, '已就绪')
     h.tick(500)
@@ -192,23 +193,23 @@ test('L1 第一、二行取本次 boot 摘要的行数，不取 payload 全量�
   }
 })
 
-test('L2 没拿到真值的行不落 0、末行不写「已就绪」、fail-closed 收卡', () => {
+test('L2 出生即真值、末格未就绪前不成值、fail-closed 收卡不补 0', () => {
   const h = harness({ cards: 2, rows: 6 })
   try {
-    // 这一趟的摘要只有两格（会话行与工作区），没有 messages：第三行必须停在「未读到」(-1)。
-    h.ovData({ ready: true, workspaces: 2, sessions: 6 })
-    advance(h)
-    assert.equal(h.ovState[0], 2)
-    assert.equal(h.ovState[1], 6)
-    assert.equal(h.rows[1].cell.textContent, '6 个会话')
-    assert.equal(h.ovState[2], -1, '这一趟没有 tails 就是 -1（未读到），不是 0')
-    assert.equal(h.rows[2].cell._final, false, '第三行不许被定稿成 0')
-    assert.equal(h.rows[2].row._done, false)
-    assert.notEqual(h.rows[2].cell._scan, null, '第三行还在滚：读数没成立')
+    // 判据 1／3a：门内有可用摘要 ⇒ 前三格在露卡那一帧就是真值，不需要任何 tick。
+    assert.equal(h.overlay.hidden, false, '有可用摘要就露卡')
+    assert.equal(h.rows[0].cell.textContent, '4 个工作区')
+    assert.equal(h.rows[1].cell.textContent, '4 个会话')
+    assert.equal(h.rows[2].cell.textContent, '3 条消息')
+    assert.equal(h.ovState[3], -1, '第 4 格（就绪文案）未就绪前不写')
+    assert.equal(h.rows[3].cell.textContent.includes('已就绪'), false, '末行不许写「已就绪」')
+    // 纵深防御的 fail-closed 路（经过门内写数后公开路径已不可达，靠改写替身状态覆盖）：
+    // 前三格缺真值 ⇒ halt 收卡、不写「已就绪」、已定稿的读数不被补写成占位 0（判据 R15-5）。
+    h.ovState[2] = -1
     h.ovReady()
     assert.equal(h.overlay.hidden, true, '还有行没读到真值 ⇒ halt 并收卡离场')
     assert.equal(h.rows[3].cell.textContent.includes('已就绪'), false, '末行不许写「已就绪」')
-    assert.equal(h.rows[2].cell.textContent, '', '收口时不许把占位 0 当读数写上去：这一格保持留白（判据 R15-5）')
+    assert.equal(h.rows[2].cell.textContent, '3 条消息', '收口时不许改写已定稿的读数，也不补写占位 0')
   } finally {
     h.stop()
   }
@@ -239,9 +240,8 @@ test('没有可用摘要的那一趟不显示冷启动卡，四格一格都不�
 })
 
 test('读数跟着摘要走：页面画了几行都不改卡上的数，payload 与摘要各管各的', () => {
-  const a = harness({ cards: 1, rows: 2, payloadWs: 9, payloadRows: 402 })
+  const a = harness({ cards: 1, rows: 2, payloadWs: 9, payloadRows: 402, bootPayload: { stageSummary: { ready: true, workspaces: 1, sessions: 2, messages: 3 } } })
   try {
-    a.ovData({ ready: true, workspaces: 1, sessions: 2, messages: 3 })
     advance(a)
     assert.equal(a.ovState[0], 1)
     assert.equal(a.ovState[1], 2)
@@ -251,9 +251,8 @@ test('读数跟着摘要走：页面画了几行都不改卡上的数，payload 
     a.stop()
   }
 
-  const b = harness({ cards: 7, rows: 9, payloadWs: 1, payloadRows: 2 })
+  const b = harness({ cards: 7, rows: 9, payloadWs: 1, payloadRows: 2, bootPayload: { stageSummary: { ready: true, workspaces: 7, sessions: 9, messages: 1 } } })
   try {
-    b.ovData({ ready: true, workspaces: 7, sessions: 9, messages: 1 })
     advance(b)
     assert.equal(b.ovState[0], 7)
     assert.equal(b.ovState[1], 9)
@@ -265,9 +264,8 @@ test('读数跟着摘要走：页面画了几行都不改卡上的数，payload 
   }
 
   // 空工作区那条出口：读出来就是 0，0 是这一趟的真实读数（与 L2 的 -1 区分开）。
-  const c = harness({ cards: 0, rows: 0, payloadWs: 4, payloadRows: 402 })
+  const c = harness({ cards: 0, rows: 0, payloadWs: 4, payloadRows: 402, bootPayload: { stageSummary: { ready: true, workspaces: 0, sessions: 0, messages: 3 } } })
   try {
-    c.ovData({ ready: true, workspaces: 0, sessions: 0, messages: 3 })
     advance(c)
     assert.equal(c.ovState[0], 0)
     assert.equal(c.ovState[1], 0)
@@ -282,9 +280,8 @@ test('读数跟着摘要走：页面画了几行都不改卡上的数，payload 
 test('反方向：DOM 画的与摘要不一致时，卡上只认摘要', () => {
   // 判据 v7 §3：页面侧只许「确认」（不一致以摘要为准 + 控制台留痕），不许反过来拿 DOM 顶数。
   // 替身故意让画出来的卡片/行数与摘要完全相反，读数必须仍是摘要那三个数。
-  const h = harness({ cards: 99, rows: 99, payloadWs: 1, payloadRows: 1 })
+  const h = harness({ cards: 99, rows: 99, payloadWs: 1, payloadRows: 1, bootPayload: { stageSummary: { ready: true, workspaces: 2, sessions: 3, messages: 5 } } })
   try {
-    h.ovData({ ready: true, workspaces: 2, sessions: 3, messages: 5 })
     advance(h)
     assert.equal(h.ovState[0], 2, '摘要说 2 个工作区，DOM 画的 99 张不算数')
     assert.equal(h.ovState[1], 3, '摘要说 3 行会话，DOM 画的 99 行不算数')
