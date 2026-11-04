@@ -302,7 +302,7 @@ test('AC5.9：relay 记录（source.kind=bot）在 visibleMessages 产出里可�
   const events = [
     // 交接行：handoff=true ⇒ 取正文首行，画成 role='event' 的整行。
     rec(1, { message: { source: { kind: 'bot', handoff: true }, content: [{ type: 'text', text: 'relay line one\nsecond line' }] } }),
-    // 普通 relay：非 deferred/resumed/retried，role 在 request|reply|report|stopped ⇒ 「· <who>」+ peer。
+    // 普通 relay：非 deferred/resumed/retried，role 在 request|reply|report|stopped ⇒ 以 <who> 为名的居中分隔条。
     rec(2, { message: { source: { kind: 'bot', role: 'reply', senderName: 'Scout', senderSessionId: 's-scout' }, content: [{ type: 'text', text: 'x' }] } }),
   ]
   const rows = renderSandbox.visibleMessages(events)
@@ -310,9 +310,8 @@ test('AC5.9：relay 记录（source.kind=bot）在 visibleMessages 产出里可�
   assert.ok(events1.length >= 2, '两条 relay 都要成为 event 行')
   const handoff = events1.find((r) => r.blocks.some((b) => b.kind === 'event' && b.text === 'relay line one'))
   assert.ok(handoff, 'handoff relay 必须渲成 event 行，取正文首行（旧 relayRow 语义）')
-  const peer = events1.find((r) => r.blocks.some((b) => b.text === '· Scout'))
-  assert.ok(peer, 'reply relay 必须渲成「· <senderName>」')
-  assert.equal(peer.peer, 's-scout', 'reply relay 要带上 senderSessionId 作为 peer')
+  const peer = events1.find((r) => r.blocks.some((b) => b.kind === 'divider' && b.text === 'Scout'))
+  assert.ok(peer, 'reply relay 必须渲成以 <senderName> 为名的居中分隔条')
 })
 
 test('AC5.5：渲染链里没有旧 BOT 页的 #bpMsgs 容器（内容已并进落地页 transcript）', () => {

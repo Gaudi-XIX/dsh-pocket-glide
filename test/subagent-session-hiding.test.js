@@ -54,9 +54,12 @@ test('every session.list load goes through the one projection', () => {
   // projectSessionRows is visibleSessions plus the optimistic send marks (2026-10-13):
   // a session this phone just wrote to still paints "running" until the host agrees.
   const sites = [
-    ['refreshActiveSessionSummary', 'sessionSummaries=projectSessionRows(value.items)'],
     ['applyBootData', 'sessionSummaries=projectSessionRows(sessInput.items)'],
   ];
+  // The narrowed single-row read (sessionIds:[activeSession]) must never rewrite
+  // the projected list: boot and loadListData own that projection.
+  assert.ok(!extractFunction(js, 'refreshActiveSessionSummary').includes('sessionSummaries='),
+    'refreshActiveSessionSummary must not overwrite the list projection');
   // openSessionSettings dropped its session.list load (2026-10-10): the settings panel took
   // 1-2 seconds because it fetched the whole 469-row catalogue for one agentPreset value.
   assert.ok(!extractFunction(js, 'openSessionSettings').includes("rpc('session.list'"),

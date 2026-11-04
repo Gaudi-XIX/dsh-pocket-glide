@@ -310,11 +310,11 @@ test('AC4.1 over a real socket the document is compressed for clients that ask, 
 
 test('AC4.2 content-encoding lives in the asset branch and in sendHtml(), nowhere else', () => {
   const hits = [...bridgeSource.matchAll(/content-encoding/g)]
-  // R12-1: this number went 1 → 2, which is a one-step relaxation by count. The
-  // net lock is stricter: both places are pinned by source position, the request
+  // R12-1: this number went 1 → 2 → 3, one relaxation per added write path. The
+  // net lock is stricter: all three places are pinned by source position, the request
   // path may not compress synchronously, html()/text()/json() stay at zero, and
   // the event stream stays out of it (AC4.3 below).
-  assert.equal(hits.length, 2, 'the bridge sets content-encoding in exactly two places')
+  assert.equal(hits.length, 3, 'the bridge sets content-encoding in exactly three places')
   const branchStart = bridgeSource.indexOf("url.pathname === '/app.css'")
   const branchEnd = documentRouteAt()
   assert.ok(hits[0].index > branchStart && hits[0].index < branchEnd, 'the first is the asset branch')
@@ -323,6 +323,10 @@ test('AC4.2 content-encoding lives in the asset branch and in sendHtml(), nowher
   assert.ok(sendAt > 0, 'sendHtml() must exist')
   const sendEnd = bridgeSource.indexOf('\n  }\n', sendAt)
   assert.ok(hits[1].index > sendAt && hits[1].index < sendEnd, 'the second is inside sendHtml()')
+  const jsonAt = bridgeSource.indexOf('\n  async jsonCompressed(')
+  assert.ok(jsonAt > 0, 'jsonCompressed() must exist')
+  const jsonEnd = bridgeSource.indexOf('\n  }\n', jsonAt)
+  assert.ok(hits[2].index > jsonAt && hits[2].index < jsonEnd, 'the third is inside jsonCompressed()')
   const sendBody = bridgeSource.slice(sendAt, sendEnd)
   assert.ok(!sendBody.includes('Sync('), 'the request path must not compress synchronously (R12-3)')
   assert.ok(!readRepo('lib/session-stream.js').includes('content-encoding'), 'text/event-stream stays uncompressed')

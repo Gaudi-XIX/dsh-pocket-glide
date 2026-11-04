@@ -132,8 +132,8 @@ test('E the landing poll re-arms itself and reads through resumeOnReturn, quietl
   const poller = sliceTo('function stopListPoll()', 'function showToast')
   assert.match(
     poller,
-    /listPoll=setTimeout\(\(\)=>\{listPoll=null;if\(document\.hidden\|\|activeSession\|\|draftWorkspaceId\)return;void resumeOnReturn\(true\)\.finally\(startListPoll\)\},LIST_POLL_MS\)/,
-    'one tick re-arms the next; an open chat, draft or hidden tab stops the chain — no background treadmill',
+    /listPoll=setTimeout\(\(\)=>\{listPoll=null;if\(document\.hidden\|\|activeSession\|\|draftWorkspaceId\)return;checkConnection\(\);void resumeOnReturn\(true\)\.finally\(startListPoll\)\},LIST_POLL_MS\)/,
+    'one tick reads status and re-arms the next; an open chat, draft or hidden tab stops the chain — no background treadmill',
   )
   assert.match(
     js,
