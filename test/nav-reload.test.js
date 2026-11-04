@@ -261,7 +261,9 @@ test('B the instant paint seeds lastHistoryKey with the exact expression applyHi
   const instantKey = instant.match(/JSON\.stringify\((\[[^\]]*\])\)/)[1]
   const applyKey = apply.match(/JSON\.stringify\((\[[^\]]*\])\)/)[1]
   assert.equal(instantKey, applyKey, 'the two key expressions must stay byte-identical or the dedupe silently dies')
-  assert.ok(instant.indexOf('lastHistoryKey=') < instant.indexOf('paintMessages(box, messages.slice(-fit)'), 'the key is taken before the paint, like applyHistory does')
+  // 2026-11-04：画句从「按视口高裁到够一屏」改成整份画（已装内容必须首帧全在），
+  // 锚点随表达式改字面；钉的语义不变——取键点必须在画之前。
+  assert.ok(instant.indexOf('lastHistoryKey=') < instant.indexOf('paintMessages(box, messages, {'), 'the key is taken before the paint, like applyHistory does')
 })
 
 test('B a re-entry that did not paint leaves the box empty, never a skeleton', () => {
