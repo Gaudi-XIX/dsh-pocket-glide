@@ -118,6 +118,20 @@ test('a repaint of the same installed set never shrinks the transcript', () => {
   assert.deepEqual(paints, [4, 4, 4], 'every paint carries the whole installed set')
 })
 
+test('a repaint that pulls older rows upward only grows the painted set', () => {
+  // 用户判据 2 的正面：后续重画「只能增（向上补旧）不能减」。
+  // 已装 4 条 → 内层 setHistory 把更早 2 条并进已装集合（6 条）→ 第二帧必须画 6，且不回缩。
+  const older = [
+    { role: 'user', text: '第六格：先看一眼卡面' },
+    { role: 'assistant', text: '第六格完成' },
+  ]
+  const { paints, paint } = sandbox({ measureRows: () => 1 })
+  assert.equal(paint(installed), 4, 'first frame paints the installed 4')
+  assert.equal(paint(older.concat(installed)), 6, 'after topping up with older rows, the repaint paints 6')
+  assert.deepEqual(paints, [4, 6], 'repaint only adds, never subtracts')
+  // 旧实现两条都必红：measureRows→1 时它只画尾部 1 条（1 ≠ 4、1 ≠ 6）。
+})
+
 test('measureRows survives and still answers the "is one screen full?" question', () => {
   // 用户明令：measureRows 保留，只用于 qj / ensureTranscriptFilled 的补拉判断。
   const measure = extractFunction(js, 'measureRows')
