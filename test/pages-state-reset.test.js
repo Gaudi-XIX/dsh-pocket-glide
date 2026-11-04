@@ -92,7 +92,9 @@ test('B-2 the answer lock is released on every path, not just the error branch',
 })
 
 function buildQuestionSandbox() {
-  const body = ['syncPendingQuestion', 'submitQuestionAnswers']
+  // pendingCardFor rides along: since the 2026-11-03 parity card syncPendingQuestion
+  // resolves its card through it, and the clock organs are stubbed below.
+  const body = ['pendingCardFor', 'syncPendingQuestion', 'submitQuestionAnswers']
     .map((name) => (name === 'submitQuestionAnswers' ? 'async ' : '') + extractFunction(js, name))
     .join('\n')
   assertSpliceable(body, 'the question submit pair')
@@ -104,6 +106,10 @@ function buildQuestionSandbox() {
     const errors=[]
     function questionDraft(){return {selected:['A'],custom:''}}
     function renderQuestionComposer(){}
+    function engageQuestion(){}
+    function releaseQuestionWait(){}
+    function syncQuestionTicker(){}
+    let streamProjections=null,teamState=null,questionTimer=null,claimedWaits=new Set(),teamReadAt=0,activeSession='s1'
     function showError(id,error){errors.push({id,error})}
     async function rpc(method,payload){rpcCalls.push({method,payload});await new Promise((resolve,reject)=>{answer={resolve,reject}})}
     async function loadHistory(){}

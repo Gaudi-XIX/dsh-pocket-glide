@@ -52,7 +52,9 @@ function slice(source, startNeedle, endNeedle) {
 }
 
 const DRAFT = slice(js, 'function questionDraft(', 'function renderQuestionComposer(')
-const SYNC = slice(js, 'function syncPendingQuestion(', 'function advanceQuestion(')
+// The sync unit starts at the card resolver it calls: since the 2026-11-03 parity card
+// syncPendingQuestion picks its card through pendingCardFor, so the slice has to carry it.
+const SYNC = slice(js, 'function pendingCardFor(', 'function advanceQuestion(')
 const ADVANCE = slice(js, 'function advanceQuestion(', 'async function submitQuestionAnswers(')
 const SUBMIT = slice(js, 'async function submitQuestionAnswers(', 'async function cancelQuestionRequest(')
 const CANCEL = slice(js, 'async function cancelQuestionRequest(', "function taskState(")
@@ -64,6 +66,7 @@ const KEYDOWN = slice(js, "$('questionComposer').onkeydown=", "document.addEvent
 const STATE = `
     let questionCollapsed=false,pendingQuestion=null,questionIndex=0,questionDrafts={},questionBusy=false
     let activeSession='s1',lastHistoryKey='kept',agentRunning=false
+    let streamProjections=null,teamState=null,questionTimer=null,claimedWaits=new Set(),teamReadAt=0
 `
 
 function fakeBox(name = '') {
