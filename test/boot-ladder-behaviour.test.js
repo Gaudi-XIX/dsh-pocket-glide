@@ -178,15 +178,21 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
   }
   const ROW_UNIT = { bots: () => ' 个 BOT 与群', workspace: () => ' 个工作区', sessionList: () => ' 个会话', session: () => ' 条消息' }
 
+  // R2.7.2：每格数字随它自己那条腿的回包到达——真页面的 rpc() 收到 `stage` 就地交给
+  // paintStageSums，这里照同一个协议回包，才能断言「哪一格的数在哪个时刻成值」。
+  const STAGE = {
+    'bot.team': { bots: 2, botSessions: 3, rooms: 1 },
+    'workspace.list': { workspaces: 3 },
+    'session.list': { sessions: 2 },
+  }
   const read = (method, value) => {
     // The call is booked when it LEAVES, not when it answers — 6C is about the three
     // legs going out together, so an answer that arrives later must not look like a
     // later departure.
     calls.push({ method, at: clock.now })
-    // The shipped rpc() no longer paints a row itself (criteria v7 §3): the card's
-    // numbers come from the boot payload's stageSummary, once, in the boot leg.
     return new Promise((resolve) => {
       fakeSetTimeout(() => {
+        if (STAGE[method]) api.paintStageSums(STAGE[method])
         resolve({ ok: true, value: {} })
       }, delays[method] === undefined ? 0 : delays[method])
     })
@@ -222,7 +228,14 @@ function makeWorld({ tails = { a: { events: [{ type: 'user/message' }, { type: '
   const values = [
     documentStub, location, fetchStub, sessionStorage, fakeSetTimeout, fakeClearTimeout, fakeRaf,
     (id) => elements[id] || null, ROW_UNIT, T, true, api.releaseCount, makeStageRunner, api.gateLadder, api.sumsReady, () => { marks.push(clock.now) },
-    async (fn) => fn(), (method) => read(method, { workspaces: 3, sessions: 2 }), async (p) => p, 8000, async () => null,
+    async (fn) => fn(), (method) => read(method, { workspaces: 3, sessions: 2 }), async (p) => p, 8000,
+    // R4.1：尾包腿自己带 messages（真页面的 bgTails 走 rpc，stage 由 rpc 交给
+    // paintStageSums），替身在这里照同一个协议把这一格交出去。
+    async () => {
+      const messages = countTailMessages(tails)
+      api.paintStageSums({ messages })
+      return { tails, messages }
+    },
     api.paintStageSums, api.countUp, api.stepCountEl, api.setCount, Promise.resolve(), {},
     () => {}, fail,
   ]
@@ -273,6 +286,25 @@ test('6C the ladder lights one row at a time, never backwards, never skipping', 
   const starts = w.calls.filter((c) => c.method !== 'replace')
   assert.deepEqual(starts.map((c) => c.method).sort(), ['boot', 'bot.team', 'session.list', 'workspace.list'])
   for (const c of starts) assert.equal(c.at, 0, `${c.method} must leave at once, left at ${c.at} ms`)
+})
+
+test('6C2 each row waits for its own leg, and lights exactly when that leg answers', async () => {
+  // 判据 R2.2：行与腿一一对应——第 1 行等 bot.team、第 2 行等工作区、第 3 行等会话列表、
+  // 第 4 行（消息数量）等尾包腿。四条腿按 20/40/90/260 ms 错开：若实现退回成「等最慢
+  // 一条再连跳」，四行会挤在同一时刻亮。
+  const delays = { 'bot.team': 20, 'workspace.list': 40, 'session.list': 90, boot: 260 }
+  const w = makeWorld({ delays })
+  const pending = w.runStages()
+  await w.advance(2000)
+  await pending.catch(() => {})
+
+  const lit = w.events.filter((e) => e.name === 'is-active' && e.on).map((e) => ({ row: e.row, at: e.at }))
+  assert.deepEqual(lit.map((e) => e.row), [1, 2, 3, 4], 'the lit row still walks forward one at a time')
+  const times = lit.map((e) => e.at)
+  assert.equal(times[0], 20, `row 1 (bots) lights on bot.team's own answer (20 ms), saw ${times[0]}`)
+  assert.equal(times[1], 40, `row 2 (workspace) lights on the workspace leg's own answer (40 ms), saw ${times[1]}`)
+  assert.equal(times[2], 90, `row 3 (sessions) lights on the session leg's own answer (90 ms), saw ${times[2]}`)
+  assert.ok(times[3] >= 260, `row 4 (messages) waits for the tail leg (260 ms), lit at ${times[3]}`)
 })
 
 test('6B the last row keeps its completion text 200 ms after it lands', async () => {
@@ -333,7 +365,7 @@ test('6D navigation waits at least 500 ms after the completion text', async () =
 test('6D the pairing page orders the same three beats: completion, fixed dwell, navigation', () => {
   const page = renderPairingPinPage('zh', null, {})
   const body = [...page.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
-  const ready = body.indexOf("if(sumsReady())setCount(5,ZH?'已就绪':'ready')")
+  const ready = body.indexOf("if(sumsReady())setCount(lastRow,ZH?'已就绪':'ready')")
   const dwell = body.indexOf('await new Promise(r=>setTimeout(r,500))', ready)
   const nav = body.indexOf("location.replace('/')", dwell)
   assert.ok(ready >= 0, 'the pairing page writes 已就绪 on its sixth row')

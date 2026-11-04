@@ -57,9 +57,9 @@ function makeBridge({ items = [], pages = null, pageDelay = 0, refreshed = null 
 
 test('empty and junk session lists answer with an empty payload, not an error', async () => {
   const bridge = makeBridge()
-  assert.deepEqual(await bridge.forwardRpc('session.tails', {}), { ok: true, value: { tails: {} } })
-  assert.deepEqual(await bridge.forwardRpc('session.tails', { sessions: [] }), { ok: true, value: { tails: {} } })
-  assert.deepEqual(await bridge.forwardRpc('session.tails', { sessions: [1, null, '', {}] }), { ok: true, value: { tails: {} } })
+  assert.deepEqual(await bridge.forwardRpc('session.tails', {}), { ok: true, value: { tails: {}, messages: 0 }, stage: { messages: 0 } })
+  assert.deepEqual(await bridge.forwardRpc('session.tails', { sessions: [] }), { ok: true, value: { tails: {}, messages: 0 }, stage: { messages: 0 } })
+  assert.deepEqual(await bridge.forwardRpc('session.tails', { sessions: [1, null, '', {}] }), { ok: true, value: { tails: {}, messages: 0 }, stage: { messages: 0 } })
   assert.equal(bridge._pageCalls.length, 0, 'nothing to look up means the Host was not touched')
 })
 

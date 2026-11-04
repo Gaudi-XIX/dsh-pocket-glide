@@ -1,7 +1,8 @@
 // Coverage for m10822: a desktop turn that ends abnormally must surface on the
-// phone. visibleMessages() is browser-script code inlined via a template
-// literal, so it is not a module export. The test extracts the real function
-// source (with its two helpers) from pages.js and runs it in a vm context that
+// phone. visibleMessages() lives at module scope in pages.js (2026-11-04: the bridge
+// counts with the same instance through countVisibleMessageUnits), but it is not
+// itself an export — the page still carries it through `.toString()`. The test
+// extracts its real source (with its helpers) and runs it in a vm context that
 // supplies the page-global `L` labels exactly as the browser page does.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -19,10 +20,12 @@ function between(startAnchor, endAnchor) {
   return source.slice(start, end)
 }
 
+// 切片终点钉住模块作用域里紧跟 visibleMessages 的那个导出：若再拿 `function mdImageHook(`
+// 当终点，切片会一路扫进模板字面量（`${…}` 原文），vm 里直接 SyntaxError。
 const code = [
   between('function turnKeyOf(', 'function contentBlocks(content)'),
   between('function contentBlocks(content)', 'function visibleMessages(events)'),
-  between('function visibleMessages(events)', 'function mdImageHook('),
+  between('function visibleMessages(events)', 'export function countVisibleMessageUnits'),
 ].join('\n')
 
 const L = {

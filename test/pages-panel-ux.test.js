@@ -81,7 +81,7 @@ test('the PIN page knows the pending-pairing wait: copy keys and the polling org
     assert.match(html, /awaitPairConfirmation/, 'the shared wait organ must be in the page')
   }
   const zh = renderPairingPinPage('zh', null, {})
-  assert.match(zh, /请在电脑上确认接入/)
+  assert.match(zh, /正在与桌面端通信/)
   assert.match(zh, /桌面端已拒绝接入/)
 })
 
@@ -262,7 +262,7 @@ test('the handoff reads go out in one batch, and the ladder only ever climbs', (
   for (const [name, html] of [['pairing', pin], ['reconnect', reconnect]]) {
     assert.match(html, /const reads=\[\s*withRetry\(\(\)=>rpc\('workspace\.list'\)\)/, `${name} builds all three reads up front`)
     assert.match(html, /reads\.forEach\(p=>p\.catch\(\(\)=>\{\}\)\)/, `${name} disarms the not-yet-awaited legs`)
-    assert.match(html, /await stage\(\d,\s*\(\)=>reads\[\d\]\)/, `${name} walks the rows in order`)
+    assert.match(html, /await stage\([^,]+,\s*\(\)=>reads\[\d\]\)/, `${name} walks the rows in order`)
     // 6B-3（2026-11-03 判据 C1）：阶梯越过某行时只点亮它，不替它写数字——真值没来时那一行
     // 保持留白，不落回 0+单位（用户 m00236①(a)：冷启动不许先闪一遍 000）；末行早返回等
     // 完成文字，其余行才 releaseCount 交出真值。

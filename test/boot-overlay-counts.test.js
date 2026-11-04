@@ -321,7 +321,7 @@ const ROW_LABELS = [
   '同步 BOT 与群',
   '同步工作区',
   '同步会话列表',
-  '同步会话内容',
+  '同步消息数量',
   '准备页面',
 ]
 
@@ -372,7 +372,7 @@ test('单测 4：三面的数字格落在自己那一行（PIN 2..4，重连 1..
     assert.equal(labels[0], base === 2 ? '正在连接服务器' : '同步 BOT 与群', 'BOT 与群那一行在表首；PIN 的连接行在它前面')
     const botRow = labels.indexOf('同步 BOT 与群')
     assert.equal(botRow, base - 1, `BOT 与群那一行是第 ${base - 1} 格，工作区紧跟在它后面`)
-    for (const [offset, label] of ['同步工作区', '同步会话列表', '同步会话内容'].entries()) {
+    for (const [offset, label] of ['同步工作区', '同步会话列表', '同步消息数量'].entries()) {
       assert.equal(labels[base + offset], label, `第 ${base + offset} 格是「${label}」`)
       const unit = table.find((row) => row.label === label).unit
       assert.ok(unit && unit.length > 0, `「${label}」这一格带量词（它数东西）`)
