@@ -765,16 +765,21 @@ test('the API/SSE boundary is untouched: bypassed routes never enter respondWith
 
 // ------------------------------- 6b. re-entry: a non-ok answer is not a document
 //
-// Contract added for the 2026-11-04 re-entry hang. On `/` the worker stays
-// network-first, but "an answer" now has to be an answer: the revalidation wait is
-// bounded (SHELL_WAIT_MS) so a swallowed tunnel request cannot park the navigation
-// on a spinner, and an edge error page (502/503) or a refusal is not a document to
-// paint — those fall back to the stored SHELL, and only without one to the offline
-// page. The three helpers below are the only fetch shapes these tests need.
+// Contract added for the 2026-11-04 re-entry hang and extended on 2026-11-05. On `/`
+// the worker now answers from a stored shell that carries rows and revalidates behind
+// it; without one it fetches once, bounded (SHELL_WAIT_MS) so a swallowed tunnel
+// request cannot park the navigation on a spinner. An edge error page (502/503) or a
+// refusal is not a document to paint — with a stored shell the navigation still gets
+// the shell, and only without one the offline page. The three helpers below are the
+// only fetch shapes these tests need.
 
-const appShellDoc = () => new Response('<html>app-shell</html>', {
-  status: 200, headers: { 'x-pocket-cache': 'app', 'content-type': 'text/html' },
-})
+// A stored shell is only a shell if it carries rows: since 2026-11-05 the worker
+// sniffs the body (`"ws":` + `"sess":{"items":[{"`) before it lets a cache entry
+// answer a navigation, so a body without a boot block would be re-fetched, not painted.
+const appShellDoc = () => new Response(
+  '<html><script>window.__POCKET_BOOT__={"ws":{"items":[]},"sess":{"items":[{"sessionId":"s1"}]}}</script>app-shell</html>',
+  { status: 200, headers: { 'x-pocket-cache': 'app', 'content-type': 'text/html' } },
+)
 const edgeErrorDoc = () => new Response('<html>bad gateway</html>', {
   status: 502, headers: { 'content-type': 'text/html' },
 })
@@ -819,7 +824,7 @@ test('a non-ok answer with no cached shell falls back to the offline page', asyn
   assert.match(await res.text(), /网络不可用/, 'no shell to paint → the offline page says what happened')
 })
 
-test('a throwing revalidation goes through shellFallback: shell first, offline only without one', async () => {
+test('a throwing revalidation still answers from a stored shell — offline only without one', async () => {
   let mode = 'app'
   const withShell = swHarness({
     respond: () => { if (mode === 'app') return appShellDoc(); throw new TypeError('network down') },

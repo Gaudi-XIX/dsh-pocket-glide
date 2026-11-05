@@ -27,7 +27,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { LanMobileBridge } from '../lib/bridge.js'
-import { mobilePageAssets } from '../lib/pages.js'
+import { mobilePageAssets, botStage } from '../lib/pages.js'
 import { preFixBaseline } from './helpers/pre-fix-baseline.mjs'
 
 const DAY_MS = 86_400_000
@@ -38,13 +38,14 @@ const OLD = NOW - 10 * DAY_MS
 
 const rowOf = (sessionId, at = NOW, extra = {}) => ({ sessionId, updatedAt: at, ...extra })
 
-function makeBridge({ rows = [], items = [], pinnedSessionIds, hidden = 'w-bot', now = NOW } = {}) {
+function makeBridge({ rows = [], items = [], pinnedSessionIds, hidden = 'w-bot', now = NOW, team } = {}) {
   const bridge = Object.create(LanMobileBridge.prototype)
   bridge.log = () => {}
   bridge.now = () => now
   bridge._sessionListValue = { at: now, result: { ok: true, value: { items: rows } } }
   bridge.workspaceSnapshot = pinnedSessionIds ? { items, pinnedSessionIds } : { items }
   if (hidden !== null) bridge.botWorkspaceCache = { at: now, id: hidden }
+  if (team) bridge._botTeamValue = { view: team }
   return bridge
 }
 
@@ -523,4 +524,63 @@ test('the landing branch is wired to the shared filters, and the shared filters 
     bodyOf(baseline, 'function withoutWorkspaceRows(rows, workspaceId) {'),
     'withoutWorkspaceRows is shared with the landing: this batch may not add a branch to it'
   )
+})
+
+// ---------------------------------------------------------------------------
+// 判据 D1/D2：壳文档的行集与页面首帧画的行，逐 id 相同
+// ---------------------------------------------------------------------------
+// 2026-11-05 的真机读数是「卡上 199 / 摘要 20 / 首屏画 12」——三个数各说各话。
+// 修法是把首帧行集收成一份实现（`landingSummary` 的 `rows`），壳文档就发这一份。
+// 这条用例拿**页面自己的渲染器**（`renderWorkspaces` + `botStage`，一行都没重写）
+// 画一份，再拿桥的 `landingSummary().rows` 取一份，两边逐 id 对齐：
+// 位置、顺序、条数都相同才算同源；差一个 id 就是手机首屏与壳对不上。
+test('the shell row set is the landing paint, id for id (bot cards, ungrouped, pinned, window edges)', () => {
+  // 两个 Bot + 一个群。`s-other` 刻意**不在**会话列表里：页面对「团队里有、行里没有」
+  // 的会话本来就会合成一行（botStage 的 stub），桥必须跟着合成同一行。
+  const team = {
+    workspaceId: 'w-bot',
+    mainBotIds: ['b-main'],
+    bots: [
+      { id: 'b-main', sessionId: 's-main', name: '主 Bot' },
+      { id: 'b2', sessionId: 's-other', name: '副 Bot' },
+    ],
+    rooms: [{ id: 's-room', name: '群一' }],
+  }
+  const rows = [
+    rowOf('s-main', minute(2)),
+    rowOf('s-room', OLD), // 十天前：出 24h 窗，但地板 `Math.max(…,1)` 让卡上仍画 1 行
+    rowOf('s-a1', minute(1)),
+    rowOf('s-a2', OLD), // 十天前但置顶 ⇒ 排序第一、且被窗口放行
+    rowOf('s-a3', minute(4)),
+    rowOf('s-b1', minute(5)),
+    rowOf('s-u1', minute(6)), // 两张未分组行：任何工作区都不认领
+    rowOf('s-u2', minute(7)),
+  ]
+  const items = [
+    { workspaceId: 'w-a', sessionIds: ['s-a1', 's-a2', 's-a3'] },
+    { workspaceId: 'w-b', sessionIds: ['s-b1'] },
+  ]
+  const pinned = ['s-a2']
+
+  // B：页面。卡集与 applyBootData 同一式（botStage 在前，工作区在后），并把 stub
+  // 追加进同一份 rows——`projectSessionRows` 在 trailer 里读的就是这个数组。
+  const pageRows = rows.slice()
+  const botCards = botStage(team, pageRows, { mainBot: '', otherBots: '', rooms: '' })
+  const html = paintLanding({ workspaces: botCards.concat(items), rows: pageRows, pinned })
+  const painted = [...html.matchAll(/class="task-row[^"]*"[^>]*data-id="([^"]*)"/g)].map((m) => m[1])
+
+  // A：桥。同一份 rows、同一张快照、同一个时刻（`bridge.now()` 就是 NOW）。
+  const bridge = makeBridge({ rows, items, pinnedSessionIds: pinned, hidden: null, team })
+  const shell = bridge.landingSummary(rows, bridge.workspaceSnapshot, NOW)
+  const shipped = shell.rows.map((row) => row.sessionId)
+
+  assert.deepEqual(shipped, painted, '壳里的行集必须逐 id 等于首帧画出来的行（顺序也算）')
+  // 三个数同源：摘要的 sessions 就是这一份行集的长度，不是原件、也不是减法。
+  assert.equal(shell.sessions, shipped.length, 'stageSummary.sessions === |P|')
+  assert.equal(bridge.pageWarmSummary('landing').sessions, shipped.length, '卡上的数与壳同源')
+  // 三条容易假绿的边界，逐条钉住：
+  assert.ok(shipped.includes('s-other'), '团队里有、会话列表里没有的 Bot 会话，桥要合成同一行')
+  assert.ok(shipped.includes('s-u1') && shipped.includes('s-u2'), '两个未归属会话进未分组卡，各画一次')
+  assert.equal(new Set(shipped).size, shipped.length, '同一个 id 不能被两张卡各画一遍')
+  assert.equal(shipped.filter((id) => id === 's-a2').length, 1, '置顶的旧行只出现一次，且随卡走')
 })
