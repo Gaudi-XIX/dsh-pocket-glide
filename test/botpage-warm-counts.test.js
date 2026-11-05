@@ -287,8 +287,13 @@ test('FIX-1：shell 形状的七数门在三键上给出真数字，roster 取�
       '这一趟走的确是壳分支（`lib/bridge.js:7568`），不是 embedded／handoff——否则整包也带 stageSummary，本用例就成了空转')
     assert.equal(/"tails":/.test(shell), false, '壳里没有整包（`lib/handoff-boot-dedup.test.js:379` 同一条不变量）')
     const boot = embeddedBoot(shell)
-    assert.ok(boot, '七数门全绿 ⇒ shell 必须带一份 stageSummary 载荷（R15-2.2 甲）')
-    assert.deepEqual(Object.keys(boot), ['stageSummary'], '壳里只有摘要这一格，不是整包 boot')
+    assert.ok(boot, '七数门全绿 ⇒ shell 必须带一份带行集的载荷（R15-2.2 甲）')
+    // 2026-11-05 change：壳必须自带 ws + sess 行集，否则关掉 PWA（sessionStorage 清空）
+    // 后重进拿到的又是一份画不出列表的空壳——那正是「重进卡死」的根。tails 仍不下发。
+    assert.equal(typeof boot.ws, 'object', '壳里带工作区行集，不是只有摘要')
+    assert.equal(typeof boot.sess, 'object', '壳里带会话行集')
+    assert.ok(Array.isArray(boot.sess?.items), '会话行集是可画的数组')
+    assert.equal(Object.keys(boot).includes('tails'), false, '尾巴包不随壳下发')
     const summary = boot.stageSummary
     assert.ok(summary, '壳里的载荷带的正是 stageSummary')
     assert.deepEqual(Object.keys(summary), LANDING_KEYS, '仍是同一份七键形状')

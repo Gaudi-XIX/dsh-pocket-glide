@@ -316,3 +316,51 @@ test('consent gate: cf-visitor saying http keeps the cookie plaintext even when 
     await t.stop()
   }
 })
+
+// J4 (change 2026-11-05-bugfix-pocket-reentry-shell-cache-deadlock): once the device
+// has answered the disclaimer, the answer lives in its registry profile — so a cold
+// re-entry over a rotated tunnel hostname (no origin-bound cookie) still reaches the
+// data legs. This is the state the phone was in: the gate must not be what starves
+// the re-entry of rows, and it must stay armed for a device that never answered.
+test('J4 the data legs are reachable once the device itself has answered the disclaimer', async () => {
+  const t = await startBridge({ harness: 'fake' })
+  try {
+    const ua = 'PocketReentry/1.0 (Linux; Android 14)'
+    const mobile = await t.pairMobileTunnel(ua)
+    // Answer the disclaimer WHILE paired over the tunnel: the profile is matched by
+    // the UA fingerprint, and the answer is written there (not just the cookie).
+    const accepted = await httpFetch(t.base + '/consent/accept?next=%2F', {
+      method: 'POST',
+      headers: { ...tunnelHeaders, 'user-agent': ua, cookie: mobile, 'content-type': 'application/json' },
+      body: JSON.stringify({ next: '/' }),
+    })
+    assert.equal(accepted.status, 303)
+
+    // Replay the two legs with NO dsh_consent cookie — the rotated-hostname case.
+    const headers = { ...tunnelHeaders, 'user-agent': ua, cookie: mobile }
+    const status = await httpFetch(t.base + '/api/status', { headers })
+    assert.equal(status.status, 200, '/api/status is served, not bounced to the card')
+    assert.equal(status.headers.get('location'), null)
+    assert.equal((await status.json()).connectionMode, 'tunnel')
+
+    const rpc = await httpFetch(t.base + '/api/rpc', {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ method: 'workspace.list', payload: {} }),
+    })
+    assert.notEqual(rpc.status, 303, 'the rpc leg is not answered with a redirect')
+    assert.equal(rpc.headers.get('location'), null)
+    assert.match(String(rpc.headers.get('content-type')), /application\/json/)
+
+    // The gate is still armed: a handset with no paired cookie that never answered
+    // gets the card. (Same cookie + a different UA is NOT a stranger — the live
+    // session behind the cookie is what resolves the fingerprint.)
+    const stranger = await httpFetch(t.base + '/api/status', {
+      headers: { ...tunnelHeaders, 'user-agent': 'OtherPhone/1.0' },
+    })
+    assert.equal(stranger.status, 303, 'an unanswered device is still sent to /consent')
+    assert.match(String(stranger.headers.get('location')), /^\/consent\?next=/)
+  } finally {
+    await t.stop()
+  }
+})

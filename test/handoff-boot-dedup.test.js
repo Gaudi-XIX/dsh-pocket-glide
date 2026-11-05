@@ -330,11 +330,16 @@ test('AC-12 a /api/boot that never delivers records no note (401 short-circuit, 
 // T2/T3 — AC-5 死参、AC-6 可观察性
 // ---------------------------------------------------------------------------
 
-test('AC-5 buildMobileBoot takes no options: one payload shape for both routes', () => {
+test('AC-5 one payload builder: both cold-open routes call it bare, the shell asks for tails-off', () => {
   const source = readFileSync(join(REPO, 'lib', 'bridge.js'), 'utf8')
-  assert.equal(source.match(/buildMobileBoot\(/g).length, 3,
-    'one definition plus the two cold-open call sites, all argument-free')
-  assert.equal(source.match(/buildMobileBoot\(\{/g), null, 'no call site passes an options object')
+  // 一条定义 + 两个冷开路由的裸调用 + 壳那一处（2026-11-05：壳要自带行集，
+  // 但仍不许长出第二套装配逻辑，所以只在同一个函数上关 tails）。
+  assert.equal(source.match(/buildMobileBoot\(/g).length, 4,
+    'one definition plus three call sites — never a second payload builder')
+  assert.equal(source.match(/buildMobileBoot\(\)/g).length, 2,
+    'the two cold-open routes still assemble the full payload argument-free')
+  assert.equal(source.match(/buildMobileBoot\(\{ tails: false, stageSummary: shellSummary \}\)/g)?.length, 1,
+    'the shell route is the same builder with tails off and the gate summary passed in')
   assert.equal(source.match(/history: *false/g), null, 'the dead { history: false } option is gone')
 })
 

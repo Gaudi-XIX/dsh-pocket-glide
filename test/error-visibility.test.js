@@ -506,12 +506,20 @@ test('the tunnel tier comes from the status payload, not from a guess', () => {
 // --------------------------------------------------------------------- #status 文案位
 
 test('the status dot gained a readable copy slot beside it', () => {
-  const zhPage = renderMobilePage({ locale: 'zh', boot: BOOT, initialChat: true })
-  const enPage = renderMobilePage({ locale: 'en', boot: BOOT, initialChat: true })
+  // 槽位是页头结构的一部分：不带 boot 的静态页（也就是 mobilePageAssets 出货的那份）
+  // 逐字保留「正在连接」。带行集的文档（2026-11-05 起壳也带行集）首帧就要能操作，
+  // 因此那一份不挂 connecting —— 见本用例末尾两条。
+  const zhPage = renderMobilePage({ locale: 'zh', boot: null, initialChat: true })
+  const enPage = renderMobilePage({ locale: 'en', boot: null, initialChat: true })
   assert.match(zhPage, /<span id="statusText" class="status-text" aria-hidden="true">正在连接<\/span>/, 'the slot ships with the header')
   assert.match(enPage, /<span id="statusText" class="status-text" aria-hidden="true">Connecting<\/span>/, 'in both locales')
   assert.match(zhPage, /\.status-text\{/, 'and is styled instead of inheriting the dot')
   assert.ok(zhPage.includes('<div id="status" class="status connecting" role="status"'), 'the dot keeps its role')
+  const readyZh = renderMobilePage({ locale: 'zh', boot: BOOT, initialChat: true })
+  assert.ok(!readyZh.includes('class="status connecting"'),
+    '带行集的文档首帧不再挂 connecting：列表已经可操作，没有可等的东西')
+  assert.match(readyZh, /<span id="statusText" class="status-text" aria-hidden="true"><\/span>/,
+    '文案位留空，由第一条状态回执（或超时失败态）填真值')
   const setter = between('function setStatusCopy(text)', 'function renderTunnelWarning')
   assert.ok(setter.includes("$('statusText')"), 'the writer targets the slot only')
   const sandbox = buildNoticeSandbox()
