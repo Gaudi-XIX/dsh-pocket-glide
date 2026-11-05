@@ -647,7 +647,7 @@ test('the page wires the machine where the tests cannot reach: scroll, open, lea
 
 // ------------------------------------------- 6. the service worker's offline page
 
-function swHarness({ failPaths = [] } = {}) {
+function swHarness({ failPaths = [], respond = null } = {}) {
   const listeners = {}
   const store = new Map() // cache name → Map(key → Response)
   const fetchCalls = []
@@ -673,11 +673,23 @@ function swHarness({ failPaths = [] } = {}) {
   const fetchStub = async (input) => {
     const url = urlOf(input)
     fetchCalls.push(String(url))
+    // `respond` is the caller's own fetch: it returns whatever Response it wants
+    // (an edge error page, a fresh app document) or throws. It exists because the
+    // 2026-11-04 re-entry hang is about what the worker does with an answer that
+    // is not ok — a stub that only ever returns 'fresh-doc' cannot express that.
+    if (respond) return respond(String(url), input)
     if (failPaths.some((pattern) => String(url).includes(pattern))) throw new TypeError('network down')
     return new Response('fresh-doc', { headers: { 'content-type': 'text/html' } })
   }
-  new Function('self', 'caches', 'Response', 'fetch', 'URL', renderServiceWorker())(
-    selfStub, cachesStub, Response, fetchStub, URL,
+  // The worker's only setTimeout is the SHELL_WAIT_MS bound on shell revalidation.
+  // A real one would leave a live 10s timer behind every dispatch (and keep the
+  // runner alive), so the harness shadows it: the armed delay is recorded, nothing
+  // is ever fired. The bound is asserted as wiring (what gets armed), never by
+  // waiting it out.
+  const timerMs = []
+  const setTimeoutStub = (fn, ms) => { timerMs.push(ms); return timerMs.length }
+  new Function('self', 'caches', 'Response', 'fetch', 'URL', 'setTimeout', renderServiceWorker())(
+    selfStub, cachesStub, Response, fetchStub, URL, setTimeoutStub,
   )
   let answered = null
   const dispatch = async (request) => {
@@ -696,6 +708,7 @@ function swHarness({ failPaths = [] } = {}) {
     activate: async () => { await listeners.activate({ waitUntil: (p) => p }) },
     dispatch,
     fetchCalls,
+    timerMs,
     store,
   }
 }
@@ -748,6 +761,92 @@ test('the API/SSE boundary is untouched: bypassed routes never enter respondWith
   }
   const post = await sw.dispatch({ method: 'POST', mode: 'navigate', url: 'https://pocket.test/' })
   assert.equal(post, undefined, 'non-GET requests pass through')
+})
+
+// ------------------------------- 6b. re-entry: a non-ok answer is not a document
+//
+// Contract added for the 2026-11-04 re-entry hang. On `/` the worker stays
+// network-first, but "an answer" now has to be an answer: the revalidation wait is
+// bounded (SHELL_WAIT_MS) so a swallowed tunnel request cannot park the navigation
+// on a spinner, and an edge error page (502/503) or a refusal is not a document to
+// paint — those fall back to the stored SHELL, and only without one to the offline
+// page. The three helpers below are the only fetch shapes these tests need.
+
+const appShellDoc = () => new Response('<html>app-shell</html>', {
+  status: 200, headers: { 'x-pocket-cache': 'app', 'content-type': 'text/html' },
+})
+const edgeErrorDoc = () => new Response('<html>bad gateway</html>', {
+  status: 502, headers: { 'content-type': 'text/html' },
+})
+
+/** One live revalidation (app doc → SHELL stored), then the caller flips the mode. */
+async function swWithStoredShell() {
+  let mode = 'app'
+  const sw = swHarness({ respond: () => (mode === 'app' ? appShellDoc() : edgeErrorDoc()) })
+  await sw.install()
+  const first = await sw.dispatch(nav('/'))
+  assert.match(await first.text(), /app-shell/, 'the first live revalidation answers the navigation')
+  mode = 'edge-502'
+  return sw
+}
+
+test('a 502 from the edge hands the navigation the cached shell, not the error page', async () => {
+  const sw = await swWithStoredShell()
+  const res = await sw.dispatch(nav('/'))
+  assert.ok(res, 'the navigation was answered')
+  assert.equal(res.status, 200, 'the edge error page is not what the phone paints')
+  const body = await res.text()
+  assert.match(body, /app-shell/, 'the stored shell answered instead')
+  assert.doesNotMatch(body, /bad gateway/, 'the 502 body is not on screen')
+})
+
+test('with a cached shell the non-ok answer never reaches the offline page', async () => {
+  const sw = await swWithStoredShell()
+  const offline = sw.store.get('pocket-v3').get('/__offline__')
+  assert.match(await offline.text(), /网络不可用/, 'the offline page is what a fallback could have served')
+  const res = await sw.dispatch(nav('/'))
+  assert.notEqual(res, offline, 'the offline page object was not handed back')
+  const body = await res.text()
+  assert.doesNotMatch(body, /网络不可用/, 'the offline copy is not on screen')
+  assert.match(body, /app-shell/, 'the stored shell is')
+})
+
+test('a non-ok answer with no cached shell falls back to the offline page', async () => {
+  const sw = swHarness({ respond: () => edgeErrorDoc() })
+  await sw.install()
+  const res = await sw.dispatch(nav('/'))
+  assert.ok(res, 'the navigation was answered')
+  assert.match(await res.text(), /网络不可用/, 'no shell to paint → the offline page says what happened')
+})
+
+test('a throwing revalidation goes through shellFallback: shell first, offline only without one', async () => {
+  let mode = 'app'
+  const withShell = swHarness({
+    respond: () => { if (mode === 'app') return appShellDoc(); throw new TypeError('network down') },
+  })
+  await withShell.install()
+  await withShell.dispatch(nav('/'))
+  mode = 'throw'
+  const res = await withShell.dispatch(nav('/'))
+  assert.match(await res.text(), /app-shell/, 'throw with a stored shell → the shell, not the offline page')
+
+  const noShell = swHarness({ respond: () => { throw new TypeError('network down') } })
+  await noShell.install()
+  const res2 = await noShell.dispatch(nav('/'))
+  assert.match(await res2.text(), /网络不可用/, 'throw without a stored shell → the offline page')
+})
+
+test('the shell revalidation wait is bounded by SHELL_WAIT_MS and driven by Promise.race', async () => {
+  const src = renderServiceWorker()
+  assert.match(src, /const SHELL_WAIT_MS=\d+/, 'the bound exists as a named constant')
+  assert.match(src, /Promise\.race\(\[pending,new Promise\(\(_,rej\)=>setTimeout\(rej,SHELL_WAIT_MS\)\)\]\)/,
+    'the await is raced against the bound (no unbounded await on the shell fetch)')
+  assert.doesNotMatch(src, /revalidateShell\(\)\.catch\(offlineFallback\)/,
+    'the pre-2026-11-04 unbounded form is gone')
+  const sw = swHarness()
+  await sw.install()
+  await sw.dispatch(nav('/'))
+  assert.deepEqual(sw.timerMs, [10000], 'a live dispatch actually arms the bound')
 })
 
 test('the offline page copy is bilingual-tight and the SW still satisfies the older contracts', () => {
