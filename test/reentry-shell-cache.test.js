@@ -300,3 +300,140 @@ test('K2 a heavy row set is cut to the shell budget and the three numbers still 
     await t.stop()
   }
 })
+
+// --- 壳的 45,000 B 花在行上，不花在两份陈旧 id 清单上（change
+//     2026-11-06-fix-pocket-shell-rows-in-budget，M1/M2/M3）------------------
+//
+// 真机（2026-11-06 00:50，HEAD 9d9c858）：`/?revalidate=1` 的 boot 44,540 B 里
+// `ws.archivedSessionIds` 401 条占 18,848 B、`ws.hiddenSessionIds` 364 条占 17,109 B，
+// 合计 35,957 B —— 占掉整份壳预算的近八成，而这两份清单在壳里一行都不参与绘制
+// （`landingSummary` 早就按 hidden 与「未归属且已归档」逐行剔过）。剩下 8.5 KB 只装得下
+// 6 条 BOT 行：`stageSummary.sessions` 写着 29、四个工作区卡 `sessionIds` 全空，三次重进
+// 首帧都是 6 行 7 卡，其中 4 张是空卡。
+//
+// 改前的形状本条测不出来（钉 sha 无意义，故不引 pre-fix-baseline）：那两份清单恒随壳发行，
+// 任何「卡上有行」的断言在改前都只能拿到空数组。
+
+/** 真机比例的夹具：~1.4 KB 的行 × 24 + 6,000 条无行陈旧 id + 4 张卡。 */
+function heavyListFixture() {
+  const botIds = ROSTER_SESSIONS // 3 条 BOT 会话，由 team 卡承载
+  const wsIds = []
+  for (let w = 0; w < 3; w += 1) {
+    for (let i = 0; i < 7; i += 1) wsIds.push(`w${w}-s${i}`)
+  }
+  const rows = [...botIds, ...wsIds].map((sessionId) => ({
+    sessionId,
+    updatedAt: Date.now() - 60_000,
+    projections: {
+      values: {
+        // ~1.4 KB / 行：24 行约 34 KB，落在 45,000 内 —— 但两份清单一进壳就必超。
+        todos: Array.from({ length: 7 }, () => ({ text: 'y'.repeat(200), status: 'open' })),
+      },
+    },
+  }))
+  const stale = Array.from({ length: 6_000 }, (_, i) => `stale-${String(i).padStart(5, '0')}-xxxxxxxx`)
+  const snapshot = {
+    items: [0, 1, 2].map((w) => ({
+      workspaceId: `w${w}`,
+      title: `WS ${w}`,
+      path: `F:\ws${w}`,
+      // 卡上的成员里只有 7 条有行，其余是「有成员无行」的常态（真机 243/67/20/7）。
+      sessionIds: [...Array.from({ length: 40 }, (_, i) => `w${w}-none${i}`), ...wsIds.slice(w * 7, w * 7 + 7)],
+    })),
+    pinnedSessionIds: [],
+    archivedSessionIds: stale,
+  }
+  return { rows, snapshot, stale, botIds, wsIds }
+}
+
+async function heavyListBridge() {
+  const fixture = heavyListFixture()
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname) =>
+        pathname === '/api/session/list' ? { ok: true, value: { items: fixture.rows } } : undefined,
+      botRespond: (endpoint) => (endpoint === 'state' ? { ok: true, value: ROSTER_VALUE } : undefined),
+    },
+  })
+  t.bridge.workspaceSnapshot = fixture.snapshot
+  const cookie = await t.pairMobile()
+  await httpFetch(t.base + '/', { headers: { cookie } })
+  return { t, cookie, fixture }
+}
+
+const shellBootOf = async (t, cookie) =>
+  embeddedBoot(await (await httpFetch(t.base + '/?revalidate=1', { headers: { cookie } })).text())
+
+test('M1 the shell ships neither stale id list, and the embedded document keeps both', async () => {
+  const { t, cookie, fixture } = await heavyListBridge()
+  try {
+    const boot = await shellBootOf(t, cookie)
+    assert.ok(boot, '七数门全绿 ⇒ 壳文档必须带 boot')
+    assert.equal('archivedSessionIds' in boot.ws, false, '壳不发行 archivedSessionIds')
+    assert.equal('hiddenSessionIds' in boot.ws, false, '壳不发行 hiddenSessionIds')
+    assert.ok(Array.isArray(boot.ws.pinnedSessionIds), '置顶清单照旧随壳发行（卡序要用）')
+    // 裁的是副本：桥内存里那份共享快照被别人读。
+    assert.equal(t.bridge.workspaceSnapshot.archivedSessionIds.length, fixture.stale.length,
+      '裁剪不回写共享快照')
+    // embedded 形状没这半预算的限制，页面要靠这两个字段分「隐藏工作区」与「真无归属」。
+    const embedded = embeddedBoot(await (await httpFetch(t.base + '/', { headers: { cookie } })).text())
+    assert.deepEqual(embedded.ws.archivedSessionIds, fixture.stale, 'embedded 仍带全量 archivedSessionIds')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('M2/M3 the shell spends the budget on rows: every card paints, three numbers stay one', async () => {
+  const { t, cookie, fixture } = await heavyListBridge()
+  try {
+    const boot = await shellBootOf(t, cookie)
+    const shellBytes = await (await httpFetch(t.base + '/?revalidate=1', { headers: { cookie } })).text()
+      .then((text) => text.length)
+    assert.ok(shellBytes <= 65_536, `壳 ${shellBytes} B 必须 ≤ 65,536`)
+    const bootBytes = Buffer.byteLength(JSON.stringify(boot), 'utf8')
+    assert.ok(bootBytes <= 45_000, `boot ${bootBytes} B 必须 ≤ 45,000`)
+
+    // M2：行一条都没被裁 —— 钱花在行上，45,000 装得下这 24 行。
+    // 行集里还会带上 roster 自己合成的行（room 卡等），所以钉「一条不缺」而不是「条数相等」。
+    const ids = boot.sess.items.map((row) => row.sessionId)
+    const missing = fixture.rows.map((row) => row.sessionId).filter((id) => !ids.includes(id))
+    assert.deepEqual(missing, [], `壳裁掉了 ${missing.join(', ')}`)
+    assert.equal(new Set(ids).size, ids.length, '一个 id 只出现一次')
+    // 每张有行的工作区卡都必须非空（真机改前：34 行里只发行 6 条 BOT，4 张卡全 [0,0,0,0]）。
+    for (const item of boot.ws.items) {
+      assert.ok(item.sessionIds.length > 0, `${item.workspaceId}: 卡上有行`)
+      assert.ok(item.sessionIds.every((id) => ids.includes(id)), `${item.workspaceId}: 卡上的 id 都在行集里`)
+      assert.ok(item.sessionIds.length <= item.sessionTotal, `${item.workspaceId}: 行数不超过原成员数`)
+    }
+    // M3：三个数一个来源 —— 行集、摘要、卡上画出来的行。
+    assert.equal(boot.stageSummary.sessions, boot.sess.items.length, 'stageSummary.sessions === sess.items.length')
+    assert.equal(boot.stageSummary.workspaces, boot.ws.items.length, '工作区数取本次读数')
+    const botIds = botStage(boot.team, [], { mainBot: '', otherBots: '', rooms: '' })
+      .flatMap((card) => card.sessionIds || [])
+    const wsIds = boot.ws.items.flatMap((item) => item.sessionIds || [])
+    const ungrouped = ids.filter((id) => !wsIds.includes(id) && !botIds.includes(id))
+    assert.equal(wsIds.length + botIds.length + ungrouped.length, ids.length,
+      '每张卡画的行数 + 未分组 = 行集总数')
+    assert.ok(!('archivedSessionIds' in boot.ws) && !('hiddenSessionIds' in boot.ws),
+      '这条断言的另一半：清单不发行才谈得上「钱花在行上」')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('M3 the shell summary counts this document, not the warmed-up one', async () => {
+  // `pageWarmSummary('landing')` 缓存的是上一次全量文档的读数。壳若整份沿用它，
+  // `fitShellBudget` 的 tracks 判据就是 false，裁完行也不重算 —— 真机正是这样
+  // 留下 items=6 / sessions=29。这条把「壳的 sessions 只可能等于本次行集」钉住。
+  const { t, cookie } = await readyBridge()
+  try {
+    const boot = await shellBootOf(t, cookie)
+    assert.equal(boot.stageSummary.sessions, boot.sess.items.length)
+    assert.equal(boot.stageSummary.ready, true)
+    // messages 是唯一允许沿用预热读数的一格：壳没有尾巴包，本页画不出消息。
+    assert.equal(typeof boot.stageSummary.messages, 'number')
+  } finally {
+    await t.stop()
+  }
+})

@@ -1154,6 +1154,15 @@ test('AC-UI9 the settings field is a page-drawn picker, and a padded name still 
 //   余量 8 002 / 8 103，均 ≥ 8 000 硬底；**本批不提额**：309 000 不动。
 //   本批净 +82 B（js +86 / css −4）：删 5s 状态定时器、单行 session.list、复用
 //   .earlier-divider 与 min-height 替换，压回闸内；胶囊（~684 B）按 L3 defer。
+// 2026-11-06 壳行预算 + 冷启动遮罩拦截批（fix-pocket-shell-rows-in-budget）收口实测：
+//   实测 zh 300 911（css 50 446 + js 250 465）/ en 300 810（css 50 446 + js 250 364）。
+//   余量 8 089 / 8 190，均 ≥ 8 000 硬底；**本批不提额**：309 000 不动。
+//   本批净 −87 B（css +33 / js −120）。上一批只留 2 B 余量，这批先花后挣：
+//     +33 css：加 #bootOverlay{pointer-events:none}（判据 M6，遮罩不吃点击）；
+//     +59 js：M7 的 4s 硬上界（常量 + 闸 + 清表）与 M5 收口重写相抵后的净值
+//             （M5 删掉 ovSettle 里那趟 await requestVisibleTails 与 filled 判据，−94）；
+//    −179 js：剪掉 M5 之后没有调用点的 visibleTailsFilled 谓词（判据 §4b/M5 把它变成死字节）。
+//             该谓词的语义断言原样留在 test/boot-ready-visible-rows.test.js 的沙箱内。
 const ASSET_BUDGET_BYTES = 309_000
 // 余量硬底：新档至少要留这么多才允许合。它不是可调参数，是「下一批改动前必须再瘦身」的
 // 触发线——上一档就是因为没有这条，被四批功能吃到只剩 249 B。

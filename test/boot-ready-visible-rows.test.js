@@ -9,6 +9,11 @@
 //      tailArmedAt 挡住不再重拉，不盖章就永远等不到「已就绪」。
 // 另钉一条判据 3b 的机械保证：就绪流程与 renderWorkspaces 末尾那趟共享同一个在飞
 // Promise，就绪前不新增任何往返。
+//
+// 2026-11-06（判据 §4b/M5）：收遮罩改成只等 bootDrawn，出货资产里不再有读 filled 的调用点，
+// 谓词 visibleTailsFilled 已从 lib/pages.js 的页面脚本剪掉（178 B，账记在 mobile-assets 台账）。
+// 本文件改为在沙箱内按同式定义它：下面几条断言的口径一字未改，只是「这条谓词必须存在于
+// 出货资产」那半句随 M5 一起作废，不再钉。
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mobilePageAssets } from '../lib/pages.js'
@@ -58,7 +63,6 @@ const tailSandbox = ({ state = {}, rpcImpl }) => {
     extractFunction(js, 'tailPack'),
     extractFunction(js, 'applyBootTails'),
     extractFunction(js, 'requestVisibleTails'),
-    extractFunction(js, 'visibleTailsFilled'),
   ].join('\n')
 
   return new Function('rpc, taskState, noteSessionMessageAt, renderWorkspaces, fakeHost, state', `
@@ -74,6 +78,10 @@ const tailSandbox = ({ state = {}, rpcImpl }) => {
     let tailRound=Promise.resolve()
     const sessionSummaries=${JSON.stringify(state.rows ?? [])}
     ${body}
+    // 判据 §4b/M5（2026-11-06）：收遮罩不再读 filled，出货资产里那个谓词成了死字节并被剪掉
+    //（178 B，台账记在 test/mobile-assets.test.js）。这里按同式定义，只作本测试的观察器：
+    // 它读的仍是 tailCache 里那一位，所以下面几条断言的口径一字未改。
+    function visibleTailsFilled(host){return[...host.querySelectorAll('.task-row[data-id]')].every((r)=>{const c=tailCache.get(r.getAttribute('data-id'));return c&&c.filled===true})}
     return {
       requestVisibleTails: () => requestVisibleTails(fakeHost()),
       visibleTailsFilled: () => visibleTailsFilled(fakeHost()),

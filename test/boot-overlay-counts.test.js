@@ -124,7 +124,16 @@ function harness({ cards = 4, rows = 4, payloadWs = 4, payloadRows = 402, bootPa
   }
   const $ = (id) => documentStub.getElementById(id)
 
-  const body = `${ladderSource()}\n${cardSource()}\nreturn {ovData,ovReady,ovFail,ovState,ovLadder}`
+  // 判据 M5：收遮罩那条路不许等任何网络往返。替身故意给一条**永不 resolve** 的
+  // requestVisibleTails——旧实现（await 它）会让遮罩永远收不掉，M5 用例立刻红；
+  // 现在只数「有没有人发起过」这一个事实（应为 0）。
+  const rpcCalls = { tails: 0 }
+  const requestVisibleTailsStub = () => {
+    rpcCalls.tails += 1
+    return new Promise(() => {})
+  }
+
+  const body = `${ladderSource()}\n${cardSource()}\nreturn {ovData,ovReady,ovFail,ovState,ovLadder,ovSettle,bootMark,BOOT_OVERLAY_MAX_MS}`
   const make = new Function(
     '$',
     'setTimeout',
@@ -138,6 +147,7 @@ function harness({ cards = 4, rows = 4, payloadWs = 4, payloadRows = 402, bootPa
     'window',
     'takeHandoffBoot',
     'cachedBoot',
+    'requestVisibleTails',
     body,
   )
   // workspaces / sessionSummaries 是诱饵：真页面作用域里这两个数是 payload 全量，卡片不该读它们。
@@ -152,6 +162,7 @@ function harness({ cards = 4, rows = 4, payloadWs = 4, payloadRows = 402, bootPa
     {},
     () => bootPayload,
     null,
+    requestVisibleTailsStub,
   )
 
   return {
@@ -159,6 +170,7 @@ function harness({ cards = 4, rows = 4, payloadWs = 4, payloadRows = 402, bootPa
     rows: slots,
     overlay,
     tick,
+    rpcCalls,
     paint: (p) => {
       if (p.cards !== undefined) painted.cards = p.cards
       if (p.rows !== undefined) painted.rows = p.rows
@@ -302,6 +314,63 @@ test('反方向：DOM 画的与摘要不一致时，卡上只认摘要', () => {
   } finally {
     h.stop()
   }
+})
+
+// ---------------------------------------------------------------------------
+// 判据 M5／M6／M7：遮罩不许拦住已经画好的列表（intent.md §4b）
+//
+// 真机证据（F:\DSBOT\docs\2026-11-06-pocket-shell-rows-in-budget\reentry-probe-out.json）：
+//   t=5.68 s  rows 12 / cards 8 早就画好了，`#bootOverlay` 仍是 hidden=false，
+//             第一行中心 elementFromPoint 命中 DIV.switch-overlay、inRow=false
+//             ⇒「能滑、点不进去」；
+//   t=9.94 s  遮罩才收，命中才变成行内元素 STRONG。
+// 三条闸各管一段：M5 收卡不等网络往返、M6 遮罩不吃点击、M7 到点必须收（fail-closed）。
+// ---------------------------------------------------------------------------
+
+test('M5 列表画完即收遮罩：不等任何网络往返', async () => {
+  const h = harness({ bootPayload: { stageSummary: SUMMARY } })
+  try {
+    assert.equal(h.overlay.hidden, false, '露过卡才有「收卡」这回事')
+    // 真机那趟的形状：列表已经画完，旧 ovSettle 却还在 await rpc('session.tails')；
+    // 弱网下那条 rpc 不回，遮罩就一直盖着。这里 bootDrawn 一解锁，收卡不许再看任何 rpc。
+    h.bootMark()
+    await h.ovSettle()
+    assert.equal(h.rpcCalls.tails, 0, 'ovSettle 不许发起任何 rpc，更不许等它')
+    assert.equal(h.ovState[4], '已就绪', '四格都有真值 ⇒ 按摘要定稿「已就绪」')
+    h.tick(500)
+    assert.equal(h.overlay.hidden, true, '末行停留 500ms 后收卡')
+    assert.equal(h.rpcCalls.tails, 0, '收卡全程零网络往返')
+  } finally {
+    h.stop()
+  }
+})
+
+test('M7 遮罩有硬上界：到点必须收起，绝不永久停在「正在进入 Pocket」', () => {
+  const h = harness({ bootPayload: { stageSummary: SUMMARY } })
+  try {
+    assert.equal(h.overlay.hidden, false, '露过卡才上闸')
+    assert.ok(typeof h.BOOT_OVERLAY_MAX_MS === 'number' && h.BOOT_OVERLAY_MAX_MS > 0, '上界是个正数毫秒值')
+    // 列表迟迟画不出来 ⇒ bootDrawn 永不 resolve，收卡那条路根本走不到。
+    void h.ovSettle()
+    h.tick(h.BOOT_OVERLAY_MAX_MS - 1)
+    assert.equal(h.overlay.hidden, false, '上界之前不许收卡')
+    h.tick(1)
+    assert.equal(h.overlay.hidden, true, '到点必须收起，让页面自己的失败态与重试浮出来')
+    assert.equal(h.rows[4].cell.textContent.includes('已就绪'), false, 'fail-closed 不写「已就绪」')
+    assert.equal(h.ovState[4], -1, '第 5 格仍留白，不补写任何占位读数')
+  } finally {
+    h.stop()
+  }
+})
+
+test('M6 遮罩不吃点击：出货页里遮罩整体关掉指针事件', () => {
+  // 遮罩是一块全屏 fixed 覆盖层，只要它还在（hidden=false）就会接住所有点：真机上
+  // elementFromPoint 命中的是 DIV.switch-overlay 而不是行。卡里没有任何可点控件，
+  // 所以整块（含卡）一并穿透是对的——命中落回下层列表行。
+  // 运行时的证明在隔离桥的 CDP 走查里（同点 elementFromPoint 必须命中行内元素），
+  // 这里钉的是出货资产里的这条契约。
+  assert.ok(/#bootOverlay\{pointer-events:none\}/.test(SHIPPED), '出货页必须给 #bootOverlay 关掉指针事件')
+  assert.ok(/\.switch-overlay\[hidden\]\{display:none\}/.test(SHIPPED), '显隐规则还在（收起仍靠 hidden）')
 })
 
 // ---------------------------------------------------------------------------
