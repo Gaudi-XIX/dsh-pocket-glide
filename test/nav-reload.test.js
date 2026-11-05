@@ -194,7 +194,7 @@ test('C a boot payload that names the transport sets it before the first stream'
     /if\(b\.mode==='tunnel'\|\|b\.mode==='lan'\)setConnectionMode\(b\.mode\);/,
     'a boot payload that names the transport goes through the one transport switch the page has',
   )
-  const startup = sliceTo('const boot=takeHandoffBoot()', 'window.__pocketAppReady')
+  const startup = sliceTo('let boot=takeHandoffBoot()', 'window.__pocketAppReady')
   assert.ok(
     startup.includes('applyBootData(boot)') && !startup.includes('openSession('),
     'the payload is consumed and startup never opens a session — the landing is the list (0.4.36)',
@@ -206,7 +206,7 @@ test('REQ3 the handoff landing refills its short list like every other route', (
   // 都应该显示出来，至少刚刚我进来就没显示」。boot 现在带全量会话行，首屏即完整、
   // bootListPartial 不再触发；但补拉路径保留作安全网。这里钉住：补拉是无条件的
   // （只看 bootListPartial），且首屏不再第二次取 /api/boot（2026-10-23 已删该回路）。
-  const startup = sliceTo('const boot=takeHandoffBoot()', 'window.__pocketAppReady')
+  const startup = sliceTo('let boot=takeHandoffBoot()', 'window.__pocketAppReady')
   assert.match(startup, /if\(bootListPartial\)void fillListFromServer\(\)/, 'the refill is not gated on how the payload arrived')
   assert.doesNotMatch(startup, /if\(!handoff&&bootListPartial\)/, 'the old handoff guard is what hid the rest of the 24h window')
   assert.doesNotMatch(

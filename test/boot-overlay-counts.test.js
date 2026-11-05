@@ -41,7 +41,10 @@ function cardSource() {
   // `if(handoff){applyBootData(boot)` 为止（再往后是本页自己的加载流程，不属于这张卡）。
   const end = block.indexOf('if(handoff){applyBootData(boot)')
   assert.ok(end > start, '出货页里冷启动卡那一段的首尾锚点对不上')
-  return block.slice(start, end)
+  // 2026-11-06 首帧裁决在启动段加了一行 `const fb=await globalThis.__fB`（薄文档的 /api/boot
+  // 后路）。它属于加载流程、不属于这张卡，且 top-level await 在 new Function 里不合法；它的
+  // 行为由 test/first-frame-verdict.test.js 钉住，所以取样前只剔这一行，其余仍是出货真源码。
+  return block.slice(start, end).replace(/const fb=await globalThis\.__fB;[^\n]*\n/, '')
 }
 
 // 每条阶梯行的替身：真页面里 ladderRun 通过 row.querySelector('.bsc') 拿格子，再用

@@ -11,7 +11,12 @@ import assert from 'node:assert/strict'
 import { renderMobilePage } from '../lib/pages.js'
 
 const html = renderMobilePage({ locale: 'zh' })
-const script = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n')
+// 首帧裁决（2026-11-06）也是一段文档脚本，但它自带运行时副作用（读 window/document、
+// 挂定时器），不属于「可原样拎出来跑的函数」。取样时把它排除，跨度与之前一致。
+const script = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)]
+  .map((m) => m[1])
+  .filter((body) => !body.includes('window.__fB='))
+  .join('\n')
 
 const grab = (start, end) => {
   const from = script.indexOf(start)

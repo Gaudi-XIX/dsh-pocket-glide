@@ -260,33 +260,38 @@ test('AC-10 a different device fingerprint does not ride the same handoff note',
 
 test('AC-11 DSH_POCKET_BOOT_HANDOFF is on unless explicitly 0: unset, empty and 1 all hand off', async () => {
   const previous = process.env.DSH_POCKET_BOOT_HANDOFF
-  // The switch is read at request time (bootHandoffEnabled() -> process.env),
-  // so one real bridge serves all three states — each state gets its own
-  // boot+document pair and must land on the handoff shape.
+  // The switch is read at request time (bootHandoffEnabled() -> process.env).
+  // Since 2026-11-06 the note is issued at most once per 120 s window: a second
+  // /api/boot keeps the ledger's `issued` flag, so the next document is embedded.
+  // Each state therefore gets its own bridge (and thus its own ledger) instead of
+  // reusing one across all three states.
   const states = [
     ['unset', () => { delete process.env.DSH_POCKET_BOOT_HANDOFF }],
     ['empty string', () => { process.env.DSH_POCKET_BOOT_HANDOFF = '' }],
     ['1', () => { process.env.DSH_POCKET_BOOT_HANDOFF = '1' }]
   ]
-  const t = await startBridge({ harness: 'fake', harnessOptions: { respond } })
   try {
-    seedWorkspaces(t.bridge)
-    const cookie = await t.pairMobile()
     for (let i = 0; i < states.length; i++) {
       const [label, apply] = states[i]
       apply()
-      await httpFetch(t.base + '/api/boot', { headers: { cookie } })
-      const res = await httpFetch(t.base + '/', { headers: { cookie } })
-      const html = await res.text()
-      assert.equal(embeddedPayload(html), null,
-        `DSH_POCKET_BOOT_HANDOFF ${label} (state ${i}) means the handoff shape`)
-      assert.equal(res.headers.get('x-pocket-cache'), null,
-        `state ${i}: a handoff document is never marked for the app-shell cache`)
-      assert.equal(matches(t, /boot=handoff/).length, i + 1,
-        `state ${i}: the note was recorded and consumed exactly once`)
+      const t = await startBridge({ harness: 'fake', harnessOptions: { respond } })
+      try {
+        seedWorkspaces(t.bridge)
+        const cookie = await t.pairMobile()
+        await httpFetch(t.base + '/api/boot', { headers: { cookie } })
+        const res = await httpFetch(t.base + '/', { headers: { cookie } })
+        const html = await res.text()
+        assert.equal(embeddedPayload(html), null,
+          `DSH_POCKET_BOOT_HANDOFF ${label} (state ${i}) means the handoff shape`)
+        assert.equal(res.headers.get('x-pocket-cache'), null,
+          `state ${i}: a handoff document is never marked for the app-shell cache`)
+        assert.equal(matches(t, /boot=handoff/).length, 1,
+          `state ${i}: the note was recorded and consumed exactly once`)
+      } finally {
+        await t.stop()
+      }
     }
   } finally {
-    await t.stop()
     if (previous === undefined) delete process.env.DSH_POCKET_BOOT_HANDOFF
     else process.env.DSH_POCKET_BOOT_HANDOFF = previous
   }
@@ -393,10 +398,13 @@ test('AC-6b the service-worker revalidation asks for the shell, not the 1 MB boo
 // T4/T5 — AC-7 结构不变量、AC-8 三指标、AC-9 预算
 // ---------------------------------------------------------------------------
 
-test('AC-7 the page side keeps exactly its two handoff fetches and this file never fakes a response', () => {
+test('AC-7 the page side keeps exactly its handoff fetches and this file never fakes a response', () => {
   const pages = readFileSync(join(REPO, 'lib', 'pages.js'), 'utf8')
-  assert.equal(pages.match(/fetch\('\/api\/boot'/g).length, 2,
-    'only the pairing page and the reconnect page may fetch the payload')
+  // 2026-11-06 N2 之前这里是 2（配对页 + 重连页）。首帧裁决卡给**主页**加了第三条：
+  // 薄文档（boot=handoff）取不到 stash 时自取 /api/boot，否则只能等 RPC 腿（503/65 s）。
+  // 三条仍是各自唯一的写死点，没有第四套拼装逻辑。
+  assert.equal(pages.match(/fetch\('\/api\/boot'/g).length, 3,
+    'pairing page, reconnect page, and the home document fallback may fetch the payload')
   assert.equal(pages.match(/reconcileBoot|bootFromCache/g), null,
     'the second unconditional fetch stays deleted (card A removed it)')
   const self = readFileSync(join(HERE, 'handoff-boot-dedup.test.js'), 'utf8')

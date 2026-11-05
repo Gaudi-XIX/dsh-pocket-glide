@@ -6,6 +6,29 @@
 
 ## 未发布 — 目标 0.4.59
 
+### 首帧必有裁决：薄文档只发一张 + 6/10 秒必落结果（2026-11-06）
+
+用户报「手机打开 pocket 偶尔一片空白，不说为什么，也没有下一步」。根因是三层叠加：桥的 handoff
+台账「一读即删」让**同一设备后续的每张文档都可能再来一张无载荷薄文档**，而页面的 stash 只能读一次——
+第二张薄文档到手时缓存已空，只剩 `loadListData()` 的 RPC 腿（实测 503 或 65 s）；这条长腿失败时
+还未必有可见文本。本轮把三处一起收口：
+
+- **桥侧（N2）**：`handoffBootStash` 从 `Map<key, at>` 改为 `Map<key, {at, issued}>`。一张 handoff
+  文档发出即置 `issued`，**同一设备同一 120 s 窗口内不再发第二张**；窗口过期后裁剪，下一趟照旧。薄文档
+  里页面自取的 `/api/boot` 不会重新武装第二张（`issued` 挡住）。
+- **页面侧（N1/N4）**：文档带 `window.__POCKET_BOOT_STATE__`（`handoff|shell|embedded`）。薄文档缺
+  stash 且无内嵌载荷时，**head 脚本立即自取 `/api/boot`（4.5 s 上限）**，壳启动段先 await 它、拿不到
+  才退 RPC 腿（不再让 RPC 独占首帧）。首帧裁决定时器 6 s（Wi‑Fi）/ 10 s（`effectiveType !== '4g'`）
+  到点必落 **painted**（≥1 行或有成功数据回包）或 **failed**；`MutationObserver` + 数据到达标记
+  提前收口。每次落定发一条 `sendBeacon('/__diag')`：`first frame rows=N verdict=painted|failed
+  mode=handoff|stash|embedded|shell ms=T hit=inRow|overlay|none`。
+- **失败面（C1/C3）**：冷态（本趟零成功回包）只说「这趟没连上宿主」，给「怎么拿新地址」入口
+  （与 `/bye` 同一份文案、单一来源），藏起刷新钮并明说刷新无用；热态只谈数据与重试，不出现
+  「连接／正在连接」。
+- **预算（AC-P5）**：裁决脚本走**文档**、不进壳资产（`mobilePageAssets` 只收最后一个 `<script>`），
+  `ASSET_BUDGET_BYTES` 与 `ASSET_MIN_HEADROOM_BYTES` 未动。实测壳资产 zh 300 990 B / en 300 889 B
+  （上限 301 000 B），薄文档 19 845 B（上限 21 000 B）。
+
 ### 身份：全链改名 `dsh-pocket-glide`（2026-10-26）
 
 - **为什么改**：旧包名 `@defws/dsh-pocket` 只在本地 profile 里自娱自乐，对外从没落过地；而 npm 裸名 `dsh-pocket` 是别人的包（v2.12.0，GPL-2.0，GitHub ★2395），GitHub 上还另有一个同名不同源的 `shaobeichen/dsh-pocket`。三个「pocket」混在一处，聊天、日志、装错包全撞。第三个词定为 `glide`：手机端这条线的实质卖点是触控顺滑 + 首屏字节最省，不是「手机」也不是「直连」。
