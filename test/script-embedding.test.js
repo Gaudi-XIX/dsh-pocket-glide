@@ -76,10 +76,11 @@ test('the split document escapes it too', () => {
   })
 
   assert(html.includes('\\u003c/script'))
-  // 五段：boot + 外链 asset + 文档级提问卡 markup（head）+ 首帧裁决 + bootstrap。
+  // 六段：boot + 外链 asset + 文档级提问卡 markup（head）+ 首帧裁决 + bootstrap
+  // + boot 错误监听（带 nonce，必须在 <script src> 之前，2026-11-07 A3① 插桩）。
   // 首帧裁决（2026-11-06）必须走文档：壳资产预算只剩两百多字节，它进不去 app.js。
-  assert.equal((html.match(/<script/g) ?? []).length, 5, 'boot + asset + card markup + first frame + bootstrap, nothing more')
-  assert.equal((html.match(/<\/script>/g) ?? []).length, 5)
+  assert.equal((html.match(/<script/g) ?? []).length, 6, 'boot + asset + card markup + first frame + bootstrap + boot-error watch, nothing more')
+  assert.equal((html.match(/<\/script>/g) ?? []).length, 6)
 })
 
 test('the pairing page escapes the locale payload the same way', () => {

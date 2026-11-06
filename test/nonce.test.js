@@ -21,8 +21,8 @@ test('mobile page with a nonce tags every inline script', () => {
   const html = renderMobilePage({ locale: 'zh', boot, initialChat: true, nonce })
   const tags = openingScriptTags(html)
 
-  // 四段：boot payload、文档级提问卡 markup（head 里，主脚本渲染时要用）、首帧裁决（2026-11-06）、主脚本。
-  assert.equal(tags.length, 4, 'boot payload + card markup + first frame + app script')
+  // 五段：boot 错误监听（2026-11-07）、boot payload、文档级提问卡 markup（head 里，主脚本渲染时要用）、首帧裁决（2026-11-06）、主脚本。
+  assert.equal(tags.length, 5, 'boot error listener + boot payload + card markup + first frame + app script')
   for (const tag of tags) {
     assert.match(tag, new RegExp(` nonce="${nonce}"`), `${tag} carries the nonce`)
   }
@@ -37,11 +37,12 @@ test('split mobile page keeps extraction working and nonces the bootstrap', () =
     assets: { cssUrl: '/app.css?h=deadbeef', jsUrl: '/app.js?l=zh&h=deadbeef' }
   })
 
-  assert.match(html, /<script src="\/app\.js\?l=zh&h=deadbeef"><\/script>/, 'the external tag stays as-is')
+  assert.match(html, /<script src="\/app\.js\?l=zh&h=deadbeef"[^>]*><\/script>/, 'the external tag stays as-is (now carries the boot-error onerror hook)')
+  assert.match(html, /<script src="\/app\.js\?l=zh&h=deadbeef"[^>]*onerror=/, 'the external app script carries the boot-error hook')
   assert.match(html, new RegExp(`<script nonce="${nonce}">\\(function\\(\\)\\{`), 'the bootstrap is nonced')
   assert.match(html, new RegExp(`<script nonce="${nonce}">window\\.__POCKET_BOOT__=`), 'the boot payload is nonced')
   assert.doesNotMatch(html, /<style>/, 'the split still removes the inline style block')
-  assert.equal((html.match(/nonce/g) ?? []).length, 4, 'boot payload + card markup + first frame + bootstrap only')
+  assert.equal((html.match(/nonce/g) ?? []).length, 5, 'boot error listener + boot payload + card markup + first frame + bootstrap only')
 })
 
 test('mobile assets stay nonce-free', () => {

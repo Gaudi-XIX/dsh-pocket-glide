@@ -29,7 +29,11 @@ const { css, js } = mobilePageAssets({ locale: 'zh' })
 // 2026-10-28：提问卡的 markup 从主脚本搬到了文档级脚本（一份源码喂两页，而主脚本的字节预算
 // 容不下它）。P-9/P-14 看的是「出货到页面上的渲染源文本」，不是它住在哪一段 <script> 里，
 // 所以从这里取文档里那一份 —— 取到的仍是 ship 时的字节（stripAssetComments 之后）。
-const markup = (renderMobilePage({ locale: 'zh' }).match(/<script>([\s\S]*?)<\/script>/) || ['', ''])[1]
+// 2026-11-07 起文档头部多了一段 boot 错误监听脚本，卡片块不再固定是第一个 <script>，
+// 故按内容挑选含 question-shell 的那一块（后续断言依赖这段文本，不能改成对整页断言）。
+const markup = [...renderMobilePage({ locale: 'zh' }).matchAll(/<script>([\s\S]*?)<\/script>/g)]
+  .map((m) => m[1])
+  .find((s) => s.includes('<div class="question-shell')) ?? ''
 assert.notEqual(markup.indexOf('<div class="question-shell'), -1, 'the card markup ships in the document')
 
 // The page's OWN label table, so every copy asserted below is what the phone renders

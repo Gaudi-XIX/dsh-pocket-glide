@@ -170,3 +170,39 @@ test('AC-P4 a hot (payload-bearing) document shows no connecting copy and keeps 
   const script = verdictScript(html)
   assert.doesNotMatch(script, /连接/)
 })
+
+// 2026-11-07 A3②：首帧裁决的 diag 增补五个定因字段。它们的全部价值在于
+// 「关掉再开」那一次能区分「脚本没跑 / 跑了但抛错 / 跑了没数据」，所以
+// 断言必须打在真实的 beacon 正文上，而不是只靠前缀匹配继续绿。
+test('AC-P5 the diag carries the five A3.2 fields beside the untouched prefix', async () => {
+  const payload = JSON.parse(BOOT)
+  const html = renderMobilePage({
+    locale: 'zh', boot: null, icon: null, initialChat: false, bootState: 'handoff',
+    assets: { cssUrl: '/app.css?h=x', jsUrl: '/app.js?l=zh&h=x' }
+  })
+  const run = runVerdict(html, { shape: 'handoff', rows: 3, payload })
+  await run.context.__fB
+  run.limitTimer.fn()
+
+  const body = run.beacons[0].body
+  // The old prefix stays byte-identical: rows/verdict/mode/ms/hit, in that order.
+  assert.match(body, /rows=3 verdict=painted mode=handoff ms=5 hit=inRow/)
+  assert.match(body, / sess=\d+ /, 'sess = window.__POCKET_BOOT__.sess.items.length')
+  assert.match(body, / team=\d+ /, 'team is a reference count, never a verdict input')
+  assert.match(body, / ready=loading /, 'ready = document.readyState at settle time')
+  assert.match(body, / boot=yes /, 'boot=yes means the document shipped a sess-bearing payload')
+  assert.match(body, / scripts=\S*/, 'scripts lists document.scripts srcs, inline marked inline')
+})
+
+test('AC-P6 the verdict never reads state.sess and never sums sess with team', () => {
+  const html = renderMobilePage({
+    locale: 'zh', boot: null, icon: null, initialChat: false, bootState: 'handoff',
+    assets: { cssUrl: '/app.css?h=x', jsUrl: '/app.js?l=zh&h=x' }
+  })
+  const script = verdictScript(html)
+  // `__POCKET_BOOT_STATE__` is a status NAME (lib/pages.js:776); it has no .sess.
+  assert.doesNotMatch(script, /__POCKET_BOOT_STATE__\s*\.\s*sess/)
+  // rows is the DOM row count; sess+team would count BOT cards twice.
+  assert.doesNotMatch(script, /sess\s*\+\s*team/)
+  assert.doesNotMatch(script, /team\s*\+\s*sess/)
+})

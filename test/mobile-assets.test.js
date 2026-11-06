@@ -64,7 +64,10 @@ test('the assets are the inline blocks minus the comments that explain the sourc
 test('the split document is small and keeps the per-open data inline', () => {
   assert(split.length * 10 < inline.length, `expected a far smaller document, got ${split.length} vs ${inline.length}`)
   assert.match(split, /<link rel="stylesheet" href="\/app\.css\?h=deadbeef">/)
-  assert.match(split, /<script src="\/app\.js\?l=zh&h=deadbeef"><\/script>/)
+  assert.match(split, /<script src="\/app\.js\?l=zh&h=deadbeef"[^>]*><\/script>/)
+  // 2026-11-07：外部脚本标签挂了 boot 错误钩子（onerror → window.__pocketBootErr），
+  // 属性放宽之后必须另有正向断言证明钩子真的在，而不是"任意属性"混过去。
+  assert.match(split, /<script src="\/app\.js\?l=zh&h=deadbeef"[^>]*onerror=/, 'the app script carries the boot-error hook')
   assert.doesNotMatch(split, /<style>/)
   assert.match(split, /window\.__POCKET_BOOT__=/, 'the boot payload still travels with the document')
   assert.match(split, /__pocketAppReady!==true/, 'the bootstrap must check the script really ran')
@@ -110,7 +113,9 @@ test('the bridge serves the shell assets with a long private lifetime', async ()
     assert.equal(page.status, 200)
     const pageBody = await readBody(page)
     assert.match(pageBody, /<link rel="stylesheet" href="\/app\.css\?h=[0-9a-f]{12}">/)
-    assert.match(pageBody, /<script src="\/app\.js\?l=zh&h=[0-9a-f]{12}"><\/script>/)
+    assert.match(pageBody, /<script src="\/app\.js\?l=zh&h=[0-9a-f]{12}"[^>]*><\/script>/)
+    // 2026-11-07：外部脚本带 onerror 钩子，[^>]* 放宽后必须正向证明钩子在。
+    assert.match(pageBody, /<script src="\/app\.js\?l=zh&h=[0-9a-f]{12}"[^>]*onerror=/, 'the app script carries the boot-error hook')
     assert(pageBody.length < 60000, `the phone document should be small, saw ${pageBody.length}`)
 
     // The page references its own assets, so the policy must allow them: a CSP
@@ -125,7 +130,8 @@ test('the bridge serves the shell assets with a long private lifetime', async ()
     // after the last step instead of painting at once.
     const urls = t.bridge.mobileAssetBodies('zh').urls
     assert(pageBody.includes(`<link rel="stylesheet" href="${urls.cssUrl}">`), `document must reference ${urls.cssUrl}`)
-    assert(pageBody.includes(`<script src="${urls.jsUrl}"></script>`), `document must reference ${urls.jsUrl}`)
+    assert(pageBody.includes(`<script src="${urls.jsUrl}"`), `document must reference ${urls.jsUrl}`)
+    assert.match(pageBody, new RegExp(`<script src="${urls.jsUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*onerror=`), 'the app script carries the boot-error hook')
   } finally {
     await t.stop()
   }
