@@ -25,7 +25,7 @@ const ROSTER_MAIN = { id: 'b-main', name: '主 Bot' }
 const ROSTER_OTHERS = [{ id: 'b2', name: '副 Bot' }]
 const ROSTER_ROOMS = [{ id: 'r1', name: '群一' }]
 const ROSTER_SESSIONS = ['s-main', 's-other-1', 's-room-1']
-const ROSTER_ROWS = ROSTER_SESSIONS.map((sessionId) => ({ sessionId, updatedAt: Date.now() - 60_000 }))
+const ROSTER_ROWS = ROSTER_SESSIONS.map((sessionId) => ({ sessionId, updatedAt: Date.now() - 60_000, projections: { asOfSeq: 10 } }))
 const ROSTER_VALUE = {
   workspaceId: 'w-bot',
   mainBotIds: [ROSTER_MAIN.id],
@@ -38,13 +38,20 @@ function embeddedBoot(html) {
   return match ? JSON.parse(match[1]) : null
 }
 
+/** 与 session-tails.test.js 的 userRecord 同形：一页一条用户消息。 */
+function pageRecord() {
+  return { seq: 1, event: { type: 'user/message', time: Date.now() - 60_000, data: { message: { source: { kind: 'user' }, content: [{ type: 'text', text: 'x' }] }, stream: 'x', header: 'h', meta: 'm' } } }
+}
+
 /** 真桥：假 harness 供会话行 + roster state，快照给工作区卡。 */
 async function readyBridge() {
   const t = await startBridge({
     harness: 'fake',
     harnessOptions: {
       respond: (pathname) =>
-        pathname === '/api/session/list' ? { ok: true, value: { items: ROSTER_ROWS } } : undefined,
+        pathname === '/api/session/list' ? { ok: true, value: { items: ROSTER_ROWS } }
+        : pathname === '/api/session/page' ? { ok: true, value: { records: [pageRecord()], hasMore: false } }
+        : undefined,
       botRespond: (endpoint) => (endpoint === 'state' ? { ok: true, value: ROSTER_VALUE } : undefined),
     },
   })
@@ -325,6 +332,7 @@ function heavyListFixture() {
     sessionId,
     updatedAt: Date.now() - 60_000,
     projections: {
+      asOfSeq: 10,
       values: {
         // ~1.4 KB / 行：24 行约 34 KB，落在 45,000 内 —— 但两份清单一进壳就必超。
         todos: Array.from({ length: 7 }, () => ({ text: 'y'.repeat(200), status: 'open' })),
@@ -352,7 +360,9 @@ async function heavyListBridge() {
     harness: 'fake',
     harnessOptions: {
       respond: (pathname) =>
-        pathname === '/api/session/list' ? { ok: true, value: { items: fixture.rows } } : undefined,
+        pathname === '/api/session/list' ? { ok: true, value: { items: fixture.rows } }
+        : pathname === '/api/session/page' ? { ok: true, value: { records: [pageRecord()], hasMore: false } }
+        : undefined,
       botRespond: (endpoint) => (endpoint === 'state' ? { ok: true, value: ROSTER_VALUE } : undefined),
     },
   })
@@ -431,8 +441,15 @@ test('M3 the shell summary counts this document, not the warmed-up one', async (
     const boot = await shellBootOf(t, cookie)
     assert.equal(boot.stageSummary.sessions, boot.sess.items.length)
     assert.equal(boot.stageSummary.ready, true)
-    // messages 是唯一允许沿用预热读数的一格：壳没有尾巴包，本页画不出消息。
-    assert.equal(typeof boot.stageSummary.messages, 'number')
+    // messages 不允许沿用预热读数：壳没有尾巴包，本页数不出本次真值，留白宁可不出卡（R2）。
+    assert.equal(boot.stageSummary.messages, null)
+    // 二次渲染：门豁免 messages 后六数恒过，壳照常发货；留白延续到二次渲染。
+    const again = await shellBootOf(t, cookie)
+    assert.ok(again, '二次壳渲染照常发货（六数门不查 messages）')
+    assert.equal(again.stageSummary.messages, null, '留白延续到第二次壳渲染')
+    // AC-2 壳形状直接调用：tails:false 时壳分支不沿用任何旧读数。
+    const shellShape = await t.bridge.buildMobileBoot({ tails: false, stageSummary: { messages: 7 } })
+    assert.equal(shellShape.stageSummary.messages, null, '壳分支不沿用传入的旧读数')
   } finally {
     await t.stop()
   }

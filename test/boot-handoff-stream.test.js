@@ -152,6 +152,36 @@ test('R4.1 the tail leg ships one message count computed from exactly the tails 
     assert.equal(response.status, 200)
     const body = await response.json()
     assert.equal(body.ok, true)
+    assert.equal(body.value.messages, body.value.complete ? countVisibleMessageUnits(body.value.tails) : null, 'a complete pack carries its count; an incomplete one carries no number at all')
+    assert.deepEqual(body.stage, { messages: body.value.messages }, 'the ladder cell gets the same number')
+  } finally {
+    await t.stop()
+  }
+})
+
+test('R4.1 a clean tail pack ships its own count unconditionally', async () => {
+  const t = await startBridge({
+    harness: 'fake',
+    harnessOptions: {
+      respond: (pathname) =>
+        pathname === '/api/session/list'
+          ? { ok: true, value: { items: [{ sessionId: 's-clean', updatedAt: Date.now() - 60_000, projections: { asOfSeq: 5 } }] } }
+          : pathname === '/api/session/page'
+            ? { ok: true, value: { records: [{ seq: 1, event: { type: 'user/message', time: Date.now(), data: { message: { source: { kind: 'user' }, content: [{ type: 'text', text: 'clean' }] }, stream: 'x', header: 'h', meta: 'm' } } }], hasMore: false } }
+            : undefined,
+    },
+  })
+  try {
+    const cookie = await t.pairMobile('PocketR4/1.0')
+    const response = await httpFetch(`${t.base}/api/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ method: 'session.tails', payload: { sessions: ['s-clean'] } }),
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.ok, true)
+    assert.equal(body.value.complete, true, 'a clean batch is complete')
     assert.equal(body.value.messages, countVisibleMessageUnits(body.value.tails), 'the number equals the pack it rides with')
     assert.deepEqual(body.stage, { messages: body.value.messages }, 'the ladder cell gets the same number')
   } finally {

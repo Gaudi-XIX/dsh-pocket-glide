@@ -57,10 +57,25 @@ function makeBridge({ items = [], pages = null, pageDelay = 0, refreshed = null 
 
 test('empty and junk session lists answer with an empty payload, not an error', async () => {
   const bridge = makeBridge()
-  assert.deepEqual(await bridge.forwardRpc('session.tails', {}), { ok: true, value: { tails: {}, messages: 0 }, stage: { messages: 0 } })
-  assert.deepEqual(await bridge.forwardRpc('session.tails', { sessions: [] }), { ok: true, value: { tails: {}, messages: 0 }, stage: { messages: 0 } })
-  assert.deepEqual(await bridge.forwardRpc('session.tails', { sessions: [1, null, '', {}] }), { ok: true, value: { tails: {}, messages: 0 }, stage: { messages: 0 } })
+  assert.deepEqual(await bridge.forwardRpc('session.tails', {}), { ok: true, value: { tails: {}, messages: 0, complete: true }, stage: { messages: 0 } })
+  assert.deepEqual(await bridge.forwardRpc('session.tails', { sessions: [] }), { ok: true, value: { tails: {}, messages: 0, complete: true }, stage: { messages: 0 } })
+  assert.deepEqual(await bridge.forwardRpc('session.tails', { sessions: [1, null, '', {}] }), { ok: true, value: { tails: {}, messages: 0, complete: true }, stage: { messages: 0 } })
   assert.equal(bridge._pageCalls.length, 0, 'nothing to look up means the Host was not touched')
+})
+
+test('a batch with any errored tail answers messages=null and complete=false', async () => {
+  const at = Date.now() - MIN
+  const bridge = makeBridge({
+    items: [
+      { sessionId: 'good', updatedAt: at, projections: { asOfSeq: 42 } },
+      { sessionId: 'nocursor', updatedAt: 1 }
+    ]
+  })
+  const result = await bridge.forwardRpc('session.tails', { sessions: ['good', 'nocursor'] })
+  assert.equal(result.ok, true)
+  assert.equal(result.value.complete, false, 'one errored tail makes the whole batch incomplete')
+  assert.equal(result.value.messages, null, 'R1: a partial set carries no number at all')
+  assert.equal(result.stage.messages, null, 'the ladder cell keeps the same blank')
 })
 
 test('a tail answer carries the row stamp and compacted records', async () => {
