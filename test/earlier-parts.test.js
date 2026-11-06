@@ -63,8 +63,7 @@ test('the earlier-parts label ships per locale', () => {
 function buildItemSandbox() {
   const body = ['earlierItemHtml', 'esc'].map((name) => extractFunction(assets.zh.js, name)).join('\n')
   return new Function(`
-    const zh=true
-    const L={earlierParts:'更早的对话'}
+    const L={earlierParts:'更早的对话',eImg:'图片 × '}
     function formatMessageClock(t){return String(t)}
     ${body}
     return { render: earlierItemHtml }
