@@ -31,6 +31,36 @@ import {
 
 const DAY = 24 * 60 * 60 * 1000
 const row = (sessionId, updatedAt) => ({ sessionId, updatedAt, blank: false })
+// 镜像 lib/bridge.js 的 TAILS_MAX_SESSIONS：覆盖集合截到 30，超了桥侧判截断、消息格留白。
+const TAILS_MAX_SESSIONS = 30
+
+// 2026-11-09（M1）：buildMobileBoot 有两条会话集合，别混为一谈。
+//   · 预载集合 bootTailIds＝bootPreloadIds(cap 10 + 置顶全收)，管首屏画多少条尾巴；
+//   · 覆盖集合 tailIds＝预载集合逐字在前，再补 landing 可见行，截到 30，喂 session.tails；
+//     消息格数的就是它，少发一个就少算一个。
+// collectSessionTails 的入参是后者。预载规则只有一份实现（页桥共用 bootPreloadIds），
+// 所以按同一份输入复算，逐字比对覆盖集合的前缀即可——不必在生产代码里留测试观察点。
+function landingPreloadIds(bridge, items, now, { pinnedIds = [], hiddenIds = [] } = {}) {
+  const landing = bridge.landingSummary(items, bridge.workspaceSnapshot, now)
+  return bootPreloadIds({
+    rows: landing.rows,
+    pinnedIds,
+    zones: landing.zones,
+    ungroupedIds: landing.ungrouped,
+    hiddenIds,
+    now,
+    windowMs: DAY,
+    cap: 10,
+  })
+}
+
+function assertCoverOfPreload(coverIds, preloadIds, prefixMessage = '覆盖集合以预载集合逐字开头：桥侧不许另换一份预载排序') {
+  assert.ok(Array.isArray(coverIds), 'session.tails 确实收到了覆盖集合')
+  assert.deepEqual(coverIds.slice(0, preloadIds.length), preloadIds, prefixMessage)
+  assert.ok(coverIds.length <= TAILS_MAX_SESSIONS,
+    `覆盖集合不超过 ${TAILS_MAX_SESSIONS}，超了桥侧判截断、消息格留白`)
+  assert.equal(new Set(coverIds).size, coverIds.length, '覆盖集合也不重复请求')
+}
 
 function makeBridge({ items, pinnedSessionIds = [], workspaces = null, hiddenId = null, hiddenSessions = null }) {
   const bridge = Object.create(LanMobileBridge.prototype)
@@ -73,12 +103,14 @@ test('B2 冷启动预载＝置顶全部 ∪ 最新 10：12 个置顶不会被十
   const bridge = makeBridge({ items, pinnedSessionIds: pinned })
   await bridge.buildMobileBoot()
 
-  const ids = bridge.tailRequests
-  assert.equal(ids.length, 22, '12 个置顶 + 最新 10 个最新，各算各的')
-  assert.equal(new Set(ids).size, 22, '并集去重，同一个会话只读一次')
-  for (const id of pinned) assert.ok(ids.includes(id), `${id} 是置顶，不管多久都必须预载`)
-  assert.equal(ids.includes('fresh0'), true, '最新的一条在预载里')
-  assert.equal(ids.includes('fresh10'), false, '第 11 条新的不进预载——十个是定值，不随会话数增长')
+  const coverIds = bridge.tailRequests
+  const preloadIds = landingPreloadIds(bridge, items, now, { pinnedIds: pinned })
+  assert.equal(preloadIds.length, 22, '12 个置顶 + 最新 10 个最新，各算各的')
+  assert.equal(new Set(preloadIds).size, 22, '并集去重，同一个会话只读一次')
+  for (const id of pinned) assert.ok(preloadIds.includes(id), `${id} 是置顶，不管多久都必须预载`)
+  assert.equal(preloadIds.includes('fresh0'), true, '最新的一条在预载里')
+  assert.equal(preloadIds.includes('fresh10'), false, '第 11 条新的不进预载——十个是定值，不随会话数增长')
+  assertCoverOfPreload(coverIds, preloadIds)
 })
 
 test('B2 没有置顶时就是按时间倒序的最新 10 条', async () => {
@@ -93,7 +125,10 @@ test('B2 没有置顶时就是按时间倒序的最新 10 条', async () => {
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, 10)
     .map((item) => item.sessionId)
-  assert.deepEqual(bridge.tailRequests, expected, '进来的顺序是乱序的，取的是时间序前 10')
+  const preloadIds = landingPreloadIds(bridge, items, now)
+  assert.deepEqual(preloadIds, expected, '预载集合逐字就是时间序前 10：进来的顺序是乱序的，取的是时间序前 10')
+  assertCoverOfPreload(bridge.tailRequests, preloadIds,
+    '覆盖集合以时间序前 10 的预载集合逐字开头：桥侧不许另换一份预载排序')
 })
 
 test('B2 隐藏工作区的会话不进预载：过滤排在预载之前', async () => {
@@ -111,7 +146,15 @@ test('B2 隐藏工作区的会话不进预载：过滤排在预载之前', async
   })
   await bridge.buildMobileBoot()
 
-  assert.equal(bridge.tailRequests.includes('hiddenSess'), false, '藏起来的会话既不显示也不预载，即使被置顶')
+  const preloadIds = landingPreloadIds(bridge, items, now, {
+    pinnedIds: ['hiddenSess'],
+    hiddenIds: new Set(['hiddenSess']),
+  })
+  assert.equal(preloadIds.includes('hiddenSess'), false, '预载集合按 hiddenIds 排除隐藏会话')
+  assertCoverOfPreload(bridge.tailRequests, preloadIds,
+    '覆盖集合以预载集合逐字开头，隐藏会话两条腿都不进')
+  assert.equal(bridge.tailRequests.includes('hiddenSess'), false,
+    '藏起来的会话既不显示、不预载，也不进覆盖集合（M1：覆盖循环自己再挡一道）')
   assert.deepEqual(bridge.tailRequests, ['a', 'b'])
 })
 
@@ -311,8 +354,8 @@ test('单测 6：桥侧真正发出的 id 清单与同一输入下 bootPreloadId
     windowMs: 24 * 60 * 60 * 1000,
     cap: 10,
   })
-  assert.deepEqual(bridge.tailRequests, expected,
-    '桥侧不许另有一份排序：喂给 session.tails 的清单必须就是共用的那个纯函数的返回值')
+  assertCoverOfPreload(bridge.tailRequests, expected,
+    '桥侧不许另有一份排序：覆盖集合必须以共用纯函数的返回值逐字开头')
   assert.equal(bridge.tailRequests.includes('f-3'), false, '隐藏会话两头都排除')
 })
 
@@ -352,12 +395,23 @@ function barrierSource() {
   return html.slice(at, end + BARRIER_END.length)
 }
 
+/** 页侧覆盖上限取自出货页真身，不凭空喂魔数；并钉死与桥侧同口径（M1/R3）。 */
+function pageCoverMax() {
+  const html = renderMobileReconnectPage({ locale: 'zh' })
+  const match = /const TAIL_COVER_MAX=(\d+);/.exec(html)
+  assert.ok(match, '出货页里必须声明 TAIL_COVER_MAX')
+  assert.equal(Number(match[1]), TAILS_MAX_SESSIONS,
+    '页侧覆盖上限必须与桥侧 TAILS_MAX_SESSIONS 同口径：消息格数的是整份可见行集')
+  return Number(match[1])
+}
+
 /** 用切出来的真源码造一个 bgTails，变量全部由外面喂（模拟页面里的同名状态）。 */
 function makeBgTails({ rpc, stageDone, stageItems, stageWorkspaces = [], stagePinnedSessionIds = [], stageZones, stageHiddenIds = new Set(), stageArchivedIds = [] }) {
   const make = new Function(
     'bootPreloadIds',
     'unclaimedSessionIds',
     'BOOT_TAIL_PRELOAD',
+    'TAIL_COVER_MAX',
     'rpc',
     'stageDone',
     'stageItems',
@@ -372,6 +426,7 @@ function makeBgTails({ rpc, stageDone, stageItems, stageWorkspaces = [], stagePi
     bootPreloadIds,
     unclaimedSessionIds,
     10,
+    pageCoverMax(),
     rpc,
     stageDone,
     stageItems,

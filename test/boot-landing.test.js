@@ -293,8 +293,8 @@ test('an empty session list ships an empty boot list and no focus', async () => 
   assert.deepEqual(payload.sess.items, [])
 })
 
-// R11-1c: with more rows than the preview range, only the newest ten sessions get a
-// page in the document — the rest open through the ordinary RPC, exactly as before.
+// R11-1c: 预览页（这个是画首帧用的整页读取）只给最新十个会话——其余按普通 RPC 打开，
+// 与从前一致。尾包本身自 2026-11-09 起覆盖会话格数的整份行集（M1），两条腿的份量分开看。
 test('the preview range rides the document, and it is bounded', async () => {
   const items = Array.from({ length: 12 }, (_, index) => ({
     sessionId: `s${index + 1}`,
@@ -318,8 +318,12 @@ test('the preview range rides the document, and it is bounded', async () => {
   const payload = await bridge.buildMobileBoot()
 
   const shipped = Object.keys(payload.tails ?? {})
-  assert.equal(shipped.length, PREVIEW_SESSIONS_CAP, 'the newest ten visible rows ship a page, no more')
-  assert.equal(new Set(readSessions).size, PREVIEW_SESSIONS_CAP, 'and no other session is read')
+  // 2026-11-09（M1）：显示预载仍然是「最新十个」（readPreviewPages 只读这十个），但尾包要
+  // 覆盖会话格数的同一份行集——消息格数的就是这份 tails 画得出来的条数，少发就等于少算，
+  // 那一格就永远成不了值。整包仍受 TAILS_MAX_SESSIONS 封顶。
+  assert.equal(new Set(readSessions).size, PREVIEW_SESSIONS_CAP, 'preview pages are still read for the newest ten only')
+  assert.equal(shipped.length, items.length, 'every visible row ships a tail, so the messages cell counts what it paints')
+  assert.ok(shipped.length <= 30, 'the whole bundle is still bounded (TAILS_MAX_SESSIONS)')
   for (const entry of Object.values(payload.tails)) {
     assert.ok(entry.events.length <= PREVIEW_MESSAGES_CAP, `each preview page carries at most ${PREVIEW_MESSAGES_CAP} events`)
   }
