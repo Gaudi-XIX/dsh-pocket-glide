@@ -123,7 +123,7 @@ function buildHarness({
     Error
   }
   const names = Object.keys(scope)
-  const factory = new Function(...names, `${script}\nreturn { rpc, paintStageSums, stepCountEl, T, bgTails }`)
+  const factory = new Function(...names, `${script}\nreturn { rpc, paintStageSums, stepCountEl, T, bgTails, sumsReady }`)
   return { api: factory(...names.map((name) => scope[name])), requests, counts, script }
 }
 
@@ -327,13 +327,16 @@ const bootAnswer = (messages) => ({
   }
 })
 
-test('PIN page: the boot leg paints row 4 from that boot summary — even with no tail packs', async () => {
+test('PIN page: the boot leg paints all four cells from that boot summary — even with no tail packs', async () => {
   const { api, counts, script } = buildHarness({ html: renderPairingPinPage('zh') })
   const { value } = await runBootLeg(script, api.paintStageSums, { boot: bootAnswer(7), bgPack: null })
-  assert.equal(counts[4].textContent, '7 条消息', 'the message row takes the boot summary number itself')
-  assert.deepEqual(counts.slice(0, 4).map((count) => count.textContent), ['', '', '', ''], 'and no other row moves')
-  assert.equal(counts[5].textContent, '准备中', 'the preparing row is not a count')
+  assert.deepEqual(
+    counts.map((count) => count.textContent),
+    ['', '1 个 BOT 与群', '1 个工作区', '2 个会话', '7 条消息', '准备中'],
+    'every counted cell takes its number from the /api/boot stageSummary, not from a leg stage'
+  )
   assert.equal(value.stageSummary.messages, 7, 'the leg still hands the payload to the caller')
+  assert.equal(api.sumsReady(), true, 'one complete summary also satisfies the ready gate')
 })
 
 test('PIN page: a boot that never answers leaves row 4 blank — no 0 seed, no fake', async () => {
@@ -363,19 +366,19 @@ test('PIN page: the tail pack still merges into the stored boot, and row 4 keeps
     bgPack: { tails: { s1: { events: [] } }, messages: 40 }
   })
   assert.equal(counts[4].textContent, '4 条消息', 'row 4 is the boot summary, not the wider tail pack')
+  assert.equal(value.stageSummary.messages, 4, 'the local tail pack must never overwrite the boot truth we store')
   assert.ok(value.tails.s1, 'the tail pack is still merged into the payload the app document reads')
   const stored = JSON.parse([...storage.values()][0])
   assert.ok(stored.tails.s1, 'and the merged payload is what lands in sessionStorage')
 })
 
 // ---------------------------------------------------------------------------
-// quiet 抑制的执行级守卫（verify Major-1）
+// 尾包腿不得画卡的执行级守卫（打回单 2，2026-11-09）
 //
-// 上面那条「尾包并进来、第 4 格仍是 boot 数」给 runBootLeg 传的是字面替身
-// `async () => bgPack`，它把 quiet 形参和 rpc() 里 `if(y.stage&&!quiet)` 那一跳整个
-// 绕开——把那行 `!quiet` 删掉，出货套件一条都不会红（verify 实测新增红 0 条）。
-// 下面三条走**真** `bgTails(quiet)` → 真 `rpc()` 一跳，是这条不变量在出货侧的执行级
-// 防线：删 `!quiet` 第 1、3 条恰红，第 2 条是配对阳性对照。
+// session.tails 的 stage 是请求集合里的局部子集和，不是全量真值：任何一腿把它画上
+// 卡，卡上数字就不等于点进去真画出来的量。四格只认 /api/boot 的 stageSummary。
+// 下面两条走**真** `bgTails(quiet)` → 真 `rpc()` 一跳，分别取 quiet 开／关两种调用，
+// 断言无论哪种都不画任何格；第三条用真 bgTails 跑 boot 腿，确认卡上仍是 boot 数。
 //
 // 尾包腿的真回包形状与真 fetch 都走 buildHarness 的 tailStage 选项（见上）。
 
@@ -417,11 +420,16 @@ test('PIN page: the real tail leg stays quiet — its rpc hop must not paint row
   )
 })
 
-test('PIN page: the same real tail leg paints as soon as it is not asked to stay quiet', async () => {
-  const { api, counts } = tailLegHarness()
+test('PIN page: the real tail leg never paints a counted cell, quiet or not', async () => {
+  const { api, counts, requests } = tailLegHarness()
   await settleStageReads(api)
   await api.bgTails()
-  assert.equal(counts[4].textContent, '40 条消息', 'without quiet the rpc hop hands the ladder its own count')
+  assert.equal(requests.filter((r) => r.body.method === 'session.tails').length, 1, 'the real tail request still goes out')
+  assert.deepEqual(
+    counts.map((count) => count.textContent),
+    ['', '', '', '', '', '准备中'],
+    'the tail leg is a local subset: its stage must never become a card number'
+  )
 })
 
 test('PIN page: with the real tail leg in the chain row 4 still keeps the boot number', async () => {
@@ -439,4 +447,39 @@ test('PIN page: with the real tail leg in the chain row 4 still keeps the boot n
   assert.ok(value.tails.s1, 'the tail pack is still merged into the payload the app document reads')
   const stored = JSON.parse([...storage.values()][0])
   assert.ok(stored.tails.s1, 'and the merged payload is what lands in sessionStorage')
+})
+
+
+test('D1 reconnect page: the same boot leg paints its four cells from stageSummary', async () => {
+  const { api, counts, script } = buildHarness({ html: renderMobileReconnectPage('zh', 'lan', {}) })
+  const { value } = await runBootLeg(script, api.paintStageSums, { boot: bootAnswer(7), bgPack: null })
+  assert.deepEqual(
+    counts.map((count) => count.textContent),
+    ['1 个 BOT 与群', '1 个工作区', '2 个会话', '7 条消息', '准备中'],
+    'the five-row ladder reads all four cells from the same /api/boot truth as the PIN page'
+  )
+  assert.equal(value.stageSummary.sessions, 2, 'the stored truth is the boot summary itself')
+  assert.equal(api.sumsReady(), true, 'all four cells plus ready came from one complete summary')
+})
+
+test('D2 a boot summary missing one field leaves that cell blank and never writes 已就绪', async () => {
+  const { api, counts, script } = buildHarness({ html: renderPairingPinPage('zh') })
+  const partial = {
+    ok: true,
+    async json() {
+      return {
+        ws: { items: [] }, sess: { items: [] }, tails: {},
+        stageSummary: { ready: true, workspaces: 1, sessions: 2, bots: 1, botSessions: 1, rooms: 0 },
+        assets: null
+      }
+    }
+  }
+  const { value } = await runBootLeg(script, api.paintStageSums, {
+    boot: partial,
+    bgPack: { tails: { s1: { events: [] } }, messages: 40 }
+  })
+  assert.equal(counts[4].textContent, '', 'no messages field: the messages cell stays blank')
+  assert.equal(api.sumsReady(), false, 'an incomplete summary must not pass the ready gate')
+  assert.equal(counts[5].textContent, '准备中', 'and the preparing row never claims 已就绪')
+  assert.equal(value.stageSummary.messages, undefined, 'the local tail pack must not fill the missing truth')
 })
