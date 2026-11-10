@@ -373,7 +373,10 @@ test('the heading is the desktop\u2019s own wording in both locales', () => {
 // 未分组的行重新有卡可落（此前 2026-10-30 曾把整张桶卡退场，本轮反转回来）。
 // 这条断言跑的是真 renderWorkspaces + 真 ungroupedCards（不是源码切片）：切片在
 // 分支被删之后只会恒真，测不出页面到底画了什么。
-test('the ungrouped card is painted again, and its rows land there', () => {
+// 测试意图取代：本用例原钉用户 2026-11-02 判据④「未分组恢复显示」（桶卡重新画出、
+// 未分组行重新有卡可落），被本轮 m00110「未分组默认全部隐藏、主页不留一行」取代；
+// 取代关系由 intent.md:63 / §5:85 承载，上面 11-02 旧判据注释逐字留痕、判据正本不改。
+test('m00110 判据④：未分组桶卡整张退场，一行不落地', () => {
   const html = paintPage({
     workspaces: [{ workspaceId: WORKSPACE, title: 'defws', path: 'F:\\\\defws', sessionIds: ['a'] }],
     sessionSummaries: summaries(['a', 'orphan1', 'orphan2']),
@@ -382,13 +385,13 @@ test('the ungrouped card is painted again, and its rows land there', () => {
 
   assert.equal(
     (html.match(/<article class="ws-card/g) || []).length,
-    2,
-    'the workspace card AND the ungrouped bucket card are both painted (判据④ 恢复显示)',
+    1,
+    'm00110 判据④/intent.md:58：未分组桶卡整张退场，只画工作区卡',
   )
-  assert.ok(
-    (html.match(/<button class="task-row/g) || []).length >= 2,
-    'the ungrouped rows reach the page again: the bucket card no longer drops them',
-  )
+  assert.equal(taskRows(html), 1,
+    'intent.md:58：orphan1/orphan2 一条不落地，只画工作区卡那 1 行')
+  assert.equal((html.match(/data-ws=""/g) || []).length, 0,
+    'intent.md:58：首帧不画 data-ws="" 卡')
   assert.ok(html.includes('defws'), 'the workspace card itself still renders, header and all')
 })
 
@@ -402,10 +405,12 @@ test('the F:\\DSBOT workspace stays hidden: its rows never leak in as ungrouped'
     hiddenWsSessionIds: ['bot1'],
   })
 
-  assert.ok(
-    (html.match(/<article class="ws-card/g) || []).length >= 2,
-    'the bucket card still paints the genuinely unclaimed row alongside the workspace card',
-  )
+  assert.equal((html.match(/<article class="ws-card/g) || []).length, 1,
+    'm00110 判据④：未分组桶卡整张退场，只画工作区卡')
+  assert.equal(taskRows(html), 1,
+    'intent.md:58：真正未认领的 orphan1 也不落地成行')
+  assert.equal((html.match(/data-ws=""/g) || []).length, 0,
+    'intent.md:58：首帧不画 data-ws="" 卡')
   assert.equal(
     (html.match(/bot1/g) || []).length,
     0,

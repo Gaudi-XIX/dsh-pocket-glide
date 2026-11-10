@@ -390,47 +390,64 @@ test('subagent rows are not counted, even in a workspace that holds nothing else
   assert.equal(bridge.pageWarmSummary('landing').sessions, 1)
 })
 
-test('a pinned row survives the window, and an unclaimed row lands in the restored bucket', () => {
+// 测试意图取代：本用例原钉 2026-11-02 判据④「未分组恢复显示」（桶卡恢复、未归属行有卡可落），
+// 被本轮 m00110「未分组默认全部隐藏、主页不留一行」取代（取代关系见 intent.md:63 / §5:85）。
+// 旧语义逐字留痕在下面这段注释里，判据正本一字不改；断言改写成验证新不变量的精确正向断言。
+test('m00110 判据④：置顶行仍画，未分组行不落地，后台 ids 仍在 byCard', () => {
   // 置顶行不论多旧都在视图里（`bootRangeCap` 的 p 项）。
   //
   // 没有工作区认领的行（「未分组」那一桶）：用户 2026-11-02 判据④「未分组恢复显示」
-  // 把那张卡恢复回来之后，这些行在主页上又有卡可落了。桶卡**同样**套 `bootRangeCap`
-  // （`lib/pages.js:2486` 对每张卡都算 `lg`，桶卡就是一张普通卡）——这里 A===B===2 只是
-  // 因为桶里只有 1 条未归属行、正好等于 cap 下限 1，不是因为桶不套时间窗。
-  // 桥侧这一格读的是同一个 `unclaimedSessionIds`（两侧必须一致，判据 2），
-  // 所以期望 2 行：置顶行 + 未归属行；只有被窗口切掉的那条**已认领**旧行不进数。
+  // 把那张卡恢复回来之后，这些行在主页上又有卡可落了，旧用例因此期望 2 行。
+  // 本轮 m00110 取代该判据：桥侧 `paintCard('', order(leftover))` 只登记 byCard、
+  // 不落地到 painted.rows（`lib/bridge.js:1329`），页侧 `renderWorkspaces` 把
+  // `w.ungrouped===true` 整卡滤掉（`design.md:15`）——两侧同一口径，A===B===1。
   const rows = [rowOf('s-pin', OLD), rowOf('s-old', OLD), rowOf('s-orp', OLD)]
   const items = [{ workspaceId: 'w-a', sessionIds: ['s-pin', 's-old'] }]
   const bridge = makeBridge({ rows, items, pinnedSessionIds: ['s-pin'] })
   const A = bridge.pageWarmSummary('landing').sessions
   const B = taskRows(paintLanding({ workspaces: items, rows, pinned: ['s-pin'] }))
-  assert.equal(A, 2, 'the pinned row survives, the unclaimed row lands in the restored bucket, and the windowed-out claimed row does not count')
+  assert.equal(A, 1, 'm00110 判据④：未分组行不落地，只剩置顶行；窗口外的已认领旧行不进数')
   assert.equal(A, B, 'and the landing paints exactly the same rows')
+  const landing = bridge.landingSummary(rows, bridge.workspaceSnapshot, NOW)
+  assert.equal(landing.rows.some((row) => row.sessionId === 's-orp'), false,
+    'intent.md:58：首帧不画未分组行、也不留一行')
+  assert.deepEqual([...landing.ungrouped], ['s-orp'], 'intent.md:59：未分组会话仍在后台数据里')
+  assert.deepEqual(
+    landing.byCard.filter((card) => card.key === '').flatMap((card) => card.ids),
+    ['s-orp'],
+    'intent.md:59：未分组 id 仍在 byCard key:\'\' 后台数据里，点进会话仍可打开',
+  )
 })
 
-test('an unclaimed bucket holding only windowed-out rows is capped on the bridge side too (F-2)', () => {
-  // 未分组桶卡与其他卡一样套 `bootRangeCap`（`lib/pages.js:2486` 对每张卡都算 `lg`，
-  // 下限 1 行）。桥侧 `bootVisibleRows`（`lib/bridge.js:1133`）过去把**未归属**行
-  // 无条件全部保留（末段 `if (!claimed.has(id) || keep.has(id)) out.push(row)`），
-  // 于是桶里 ≥2 条全 OLD 行时：桥数 3、页面只画 cap 下限的 1 行 ⇒ A > B。
-  // 旧用例（上面那条）只摆 1 条未归属行，正好等于下限 1，测不出这个缺口。
-  // 这里摆 3 条全 OLD 的未归属行——断言必须 A===B（真实值是 1，不许放宽成 >= 或 >=1）。
-  // `items` 必须非空且带 sessionIds，否则桥侧 `membershipKnown`（`lib/bridge.js:8829`）为假、
-  // `sessions` 直接报 0（`lib/bridge.js:8861`），A 会变成 0 而测不出未归属桶的截断。
+// 测试意图取代：原钉 11-02 判据④ 下「桶卡 cap 下限 1 行、桥页两侧都算 1」，
+// 被本轮 m00110「未分组默认全部隐藏、主页不留一行」取代（intent.md:63 / §5:85）。
+test('m00110 判据④：只含窗口外行的未分组桶整张退场，桥页两侧都是 0 行', () => {
+  // 旧用例摆 3 条全 OLD 的未归属行，用来测 F-2「桥数 3、页面只画 cap 下限 1」的缺口。
+  // 本轮 m00110 取代后：桥侧 `paintCard('', order(leftover))` 只登记 byCard、
+  // 不落地 painted.rows（`lib/bridge.js:1329`），页侧整卡滤掉 `w.ungrouped===true`
+  // （`design.md:15`），两侧同一口径 A===B===0，一行的地板也不画。
+  // `items` 必须非空且带 sessionIds，否则桥侧 `membershipKnown`（`lib/bridge.js:8829`）
+  // 为假、`sessions` 直接报 0，A 会变成 0 而测不出同源判据。
   const rows = [rowOf('s-u1', OLD), rowOf('s-u2', OLD), rowOf('s-u3', OLD)]
   const items = [{ workspaceId: 'w-a', sessionIds: ['s-claimed-elsewhere'] }]
   const bridge = makeBridge({ rows, items })
   const A = bridge.pageWarmSummary('landing').sessions
   const B = taskRows(paintLanding({ workspaces: items, rows }))
-  assert.equal(B, 1, 'the bucket paints only its cap floor of one row')
+  assert.equal(B, 0, 'm00110 判据④：未分组桶卡整张不落地，一行的地板也不画')
   assert.equal(A, B, 'the bridge must cap the unclaimed bucket the same way the page does')
+  const landing = bridge.landingSummary(rows, bridge.workspaceSnapshot, NOW)
+  assert.equal(landing.rows.length, 0, 'intent.md:58：三条未归属行一条都不进首帧行集')
+  assert.deepEqual([...landing.ungrouped].sort(), ['s-u1', 's-u2', 's-u3'],
+    'intent.md:59：三条未分组会话仍在后台数据里，点进会话仍可打开')
+  assert.equal(landing.byCard.some((card) => card.key === '' && card.ids.length > 0), true,
+    'intent.md:59：byCard key:\'\' 桶仍登记 ids，点进可打开')
 })
 
-test('an unclaimed row inside the window: the bridge counts it and the landing paints it (F-2)', () => {
-  // F-2：`lib/bridge.js` 的 landingSummary 过去把「无工作区归属」的行全滤掉，于是
-  // 窗口内的未归属行桥侧不数、A 少一枚——可页面侧判据④ 恢复未分组卡之后，
-  // 这些行在主页上是**画得出来**的。用 RECENT 行（落在窗口内）才测得到这个缺口：
-  // 用 OLD 行的话它先被窗口切掉，改不改桥侧都是 1===1，测不出 F-2。
+// 测试意图取代：原钉 11-02 判据④ 下「未分组行在窗口内要画、桥侧要数」，
+// 被本轮 m00110 取代；F-2 的 A===B 同源判据保留，只把独立数字常量对齐新值。
+test('m00110 判据④：窗口内的未分组行也不落地，桥页两侧都是 1 行', () => {
+  // 一条已认领置顶行 + 一条未归属行，两条都在窗口内。旧判据下两侧都算 2 行；
+  // 本轮 m00110 后只有已认领行落地，A===B===1。桶仍在 byCard 后台可点开。
   const rows = [rowOf('s-pin', RECENT), rowOf('s-orp', RECENT)]
   const items = [{ workspaceId: 'w-a', sessionIds: ['s-pin'] }]
   const bridge = makeBridge({ rows, items, pinnedSessionIds: ['s-pin'] })
@@ -438,8 +455,16 @@ test('an unclaimed row inside the window: the bridge counts it and the landing p
   const B = taskRows(paintLanding({ workspaces: items, rows, pinned: ['s-pin'] }))
   const A = bridge.pageWarmSummary('landing').sessions
 
-  assert.equal(B, 2, 'the landing paints the claimed pinned row AND the unclaimed row (判据④ 未分组卡已恢复)')
+  assert.equal(B, 1, 'm00110 判据④：只画已认领的置顶行；未分组行不落地')
   assert.equal(A, B, 'and the bridge must count exactly what the landing paints — landingSummary must not drop the unclaimed row (F-2)')
+  const landing = bridge.landingSummary(rows, bridge.workspaceSnapshot, NOW)
+  assert.equal(landing.rows.some((row) => row.sessionId === 's-orp'), false,
+    'intent.md:58：窗口内的未分组行同样一条不落地')
+  assert.deepEqual(
+    landing.byCard.filter((card) => card.key === '').flatMap((card) => card.ids),
+    ['s-orp'],
+    'intent.md:59：未分组 id 仍在 byCard key:\'\' 后台数据里，点进会话仍可打开',
+  )
 })
 
 test('a few hundred live rows are reported in full, not truncated to a round number', () => {
@@ -580,7 +605,16 @@ test('the shell row set is the landing paint, id for id (bot cards, ungrouped, p
   assert.equal(bridge.pageWarmSummary('landing').sessions, shipped.length, '卡上的数与壳同源')
   // 三条容易假绿的边界，逐条钉住：
   assert.ok(shipped.includes('s-other'), '团队里有、会话列表里没有的 Bot 会话，桥要合成同一行')
-  assert.ok(shipped.includes('s-u1') && shipped.includes('s-u2'), '两个未归属会话进未分组卡，各画一次')
+  // 测试意图取代：原钉「两个未归属会话进未分组卡，各画一次」（11-02 判据④ 恢复显示），
+  // 被本轮 m00110 取代：首帧一行不画，但 ids 仍在 byCard key:'' 后台可点开。
+  assert.equal(shipped.includes('s-u1') || shipped.includes('s-u2'), false,
+    'm00110 判据④/intent.md:58：首帧不画未分组行、也不留一行')
+  assert.equal(painted.includes('s-u1') || painted.includes('s-u2'), false,
+    'design.md:15：页侧 renderWorkspaces 同一口径，未分组卡整张不落地')
+  const bucket = shell.byCard.find((card) => card.key === '' && card.ids.includes('s-u1'))
+  assert.ok(bucket, 'm00110 判据④：byCard 里仍有 key:\'\' 的未分组桶登记两条未归属会话')
+  assert.deepEqual(bucket.ids.slice().sort(), ['s-u1', 's-u2'],
+    'intent.md:59：两个未归属会话仍在 byCard key:\'\' 后台数据里，点进会话仍可打开')
   assert.equal(new Set(shipped).size, shipped.length, '同一个 id 不能被两张卡各画一遍')
   assert.equal(shipped.filter((id) => id === 's-a2').length, 1, '置顶的旧行只出现一次，且随卡走')
 })

@@ -404,11 +404,15 @@ test('M2/M3 the shell spends the budget on rows: every card paints, three number
     const bootBytes = Buffer.byteLength(JSON.stringify(boot), 'utf8')
     assert.ok(bootBytes <= 45_000, `boot ${bootBytes} B 必须 ≤ 45,000`)
 
-    // M2：行一条都没被裁 —— 钱花在行上，45,000 装得下这 24 行。
-    // 行集里还会带上 roster 自己合成的行（room 卡等），所以钉「一条不缺」而不是「条数相等」。
+    // 测试意图取代：M2 原钉「壳一条都没被裁、24 行全在」；本轮 m00110 判据④ 让
+    // 未被任何工作区卡认领的行（这里是 roster 合成的 3 条 BOT 会话）不落地首帧，
+    // 旧「一条不缺」语义作废。桥侧 byCard key:'' 仍登记它们，后台可点开（intent.md:59）。
     const ids = boot.sess.items.map((row) => row.sessionId)
     const missing = fixture.rows.map((row) => row.sessionId).filter((id) => !ids.includes(id))
-    assert.deepEqual(missing, [], `壳裁掉了 ${missing.join(', ')}`)
+    assert.deepEqual(missing, ['s-main', 's-other-1', 's-room-1'],
+      '意图取代：这 3 条 BOT roster 行无工作区认领，按 m00110 判据④ 不落地首帧')
+    assert.equal(ids.filter((id) => ['s-main', 's-other-1', 's-room-1'].includes(id)).length, 0,
+      'intent.md:58：主页不留一行未分组行')
     assert.equal(new Set(ids).size, ids.length, '一个 id 只出现一次')
     // 每张有行的工作区卡都必须非空（真机改前：34 行里只发行 6 条 BOT，4 张卡全 [0,0,0,0]）。
     for (const item of boot.ws.items) {

@@ -293,10 +293,12 @@ test('单测 2：三区段不吃置顶——窗外未置顶的照样进不来，
 })
 
 // ---------------------------------------------------------------------------
-// T6 单测 3：未分组不进预读，但仍然可见
+// T6 单测 3：未分组不进预读、不进首帧行集，但仍在后台可点开
 // ---------------------------------------------------------------------------
 
-test('单测 3：未分组的行不进预读集合，但仍在 landing 要画的行里', () => {
+// 测试意图取代：原钉 2026-11-02 判据④「未分组恢复显示」下「显示腿与预读腿读同一份行集」，
+// 被本轮 m00110「未分组默认全部隐藏、主页不留一行」取代（intent.md:63 / §5:85）。
+test('单测 3：未分组的行不进预读集合、不进首帧行集，但仍在后台数据里可点开', () => {
   const now = Date.now()
   const items = [row('s-1', now - 1000), row('s-loose', now - 500)]
   const bridge = makeBridge({
@@ -315,8 +317,13 @@ test('单测 3：未分组的行不进预读集合，但仍在 landing 要画的
   })
   assert.deepEqual(Array.from(landing.ungrouped), ['s-loose'], '没有工作区认领它，就是未分组')
   assert.equal(ids.includes('s-loose'), false, '未分组的行不进预读集合（判据 2 的资格三条之一）')
-  assert.ok(landing.rows.some((r) => r.sessionId === 's-loose'),
-    '但它仍在 landing 要画的行里：显示腿与预读腿读同一份行集，只是预读多一道资格过滤')
+  assert.equal(landing.rows.some((r) => r.sessionId === 's-loose'), false,
+    'm00110 判据④/intent.md:58：未分组行不进首帧行集，主页不留一行')
+  assert.deepEqual(
+    landing.byCard.filter((card) => card.key === '').flatMap((card) => card.ids),
+    ['s-loose'],
+    'intent.md:59：未分组 id 仍在 byCard key:\'\' 后台数据里，点进会话仍可打开',
+  )
 })
 
 // ---------------------------------------------------------------------------

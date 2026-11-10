@@ -352,21 +352,23 @@ test('AC3.4：BOT 卡的 toggle/more/pin 与工作区卡走同一套选择器与
 
   // 第一段：markup 面。真 renderWorkspaces 画出来的两类卡都得带同一组
   // `.ws-toggle` / `.task-pin` / `.older-row` 选择器与同一组 data-action 值。
+  const team = {
+    mainBotIds: ['b-main'],
+    bots: [
+      { id: 'b-main', sessionId: 's-main', name: '主 BOT' },
+      // 「其他 BOT」段放两个 bot：BOT 卡的一行＝一个 bot 的一个会话，所以只有
+      // 多 bot 的段才会出现「更多」（单行卡没有「更多」可点，那是对的）。
+      { id: 'b-o1', sessionId: 's-o1', name: '其他 BOT 一' },
+      { id: 'b-o2', sessionId: 's-o2', name: '其他 BOT 二' },
+    ],
+    rooms: [],
+  }
+  const summaries = [stale('s-main', 3), stale('s-o1', 3), stale('s-o2', 4), stale('w1', 3), stale('w2', 4), stale('w3', 5)]
   const html = paintLanding({
-    team: {
-      mainBotIds: ['b-main'],
-      bots: [
-        { id: 'b-main', sessionId: 's-main', name: '主 BOT' },
-        // 「其他 BOT」段放两个 bot：BOT 卡的一行＝一个 bot 的一个会话，所以只有
-        // 多 bot 的段才会出现「更多」（单行卡没有「更多」可点，那是对的）。
-        { id: 'b-o1', sessionId: 's-o1', name: '其他 BOT 一' },
-        { id: 'b-o2', sessionId: 's-o2', name: '其他 BOT 二' },
-      ],
-      rooms: [],
-    },
+    team,
     workspaces: [wsCard('ws-a', ['w1', 'w2', 'w3'], '工作区 A')],
-    summaries: [stale('s-main', 3), stale('s-o1', 3), stale('s-o2', 4), stale('w1', 3), stale('w2', 4), stale('w3', 5)],
-    expanded: ['bot:other', 'ws-a'],
+    summaries,
+    expanded: ['bot:main', 'bot:other', 'ws-a'],
   })
   assert.deepEqual(
     CARD_IDS(html),
@@ -382,14 +384,34 @@ test('AC3.4：BOT 卡的 toggle/more/pin 与工作区卡走同一套选择器与
     cardHtml(html, 'bot:room').includes(L.rooms + L.emptySection.replace('{name}', '')),
     'AC3.4 空态行文案取 L.emptySection、段名取该卡标题',
   )
-  assert.deepEqual(ROW_IDS(cardHtml(html, 'bot:other')), ['s-o1'], 'AC3.4 其他 BOT 段真画两行时窗内只显 1 行')
+  assert.deepEqual(ROW_IDS(cardHtml(html, 'bot:other')), ['s-o1', 's-o2'],
+    'm00110 判据③/intent.md:50：其他 BOT 段两个未隐藏 bot 两行都画，未隐藏 BOT 不因 updatedAt 超 24h 被裁')
+  assert.deepEqual(ROW_IDS(cardHtml(html, 'bot:main')), ['s-main'],
+    'm00110 判据③：主 BOT 同为 3 天前旧行、未标 hidden，就不因超 24h 被裁')
+  // ③ 的另一半：hidden 折叠只认用户点过的 hidden===true，不拿 updatedAt 当尺。
+  const withHidden = paintLanding({
+    team: {
+      ...team,
+      bots: [...team.bots, { id: 'b-hidden', sessionId: 's-hidden', name: '折叠掉的', hidden: true }],
+    },
+    workspaces: [wsCard('ws-a', ['w1', 'w2', 'w3'], '工作区 A')],
+    summaries: [...summaries, stale('s-hidden', 3)],
+    expanded: ['bot:main', 'bot:other', 'ws-a'],
+  })
+  assert.equal(ROW_IDS(withHidden).includes('s-hidden'), false,
+    'm00110 判据③：只有标了 hidden===true 的 BOT 行才折叠，不按 updatedAt 时间窗')
+  assert.deepEqual(ROW_IDS(cardHtml(withHidden, 'bot:other')), ['s-o1', 's-o2'],
+    'm00110 判据③：新增一个 hidden BOT 不改变两个未隐藏 BOT 的 3 天前旧行，仍各画一次')
   assert.deepEqual(ROW_IDS(cardHtml(html, 'ws-a')), ['w1'], 'AC3.4 工作区卡同一把尺：窗内 1 行、其余在「更多」后')
   for (const id of ['bot:other', 'ws-a']) {
     const card = cardHtml(html, id)
     assert.ok(card.includes('class="ws-toggle" data-action="toggle"'), `${id} 的 toggle 与工作区卡同形`)
     assert.ok(card.includes('data-action="pin" data-pin="'), `${id} 的 pin 与工作区卡同形`)
-    assert.ok(card.includes('class="older-row" data-action="more"'), `${id} 的「更多」与工作区卡同形`)
   }
+  assert.ok(cardHtml(html, 'ws-a').includes('class="older-row" data-action="more"'),
+    'AC3.4 工作区卡仍套 24h 时间窗：1 行之外还有「更多」')
+  assert.equal(cardHtml(html, 'bot:other').includes('class="older-row" data-action="more"'), false,
+    'm00110 判据③：BOT 卡两行全画、不再套时间窗，因此没有「更多」可点')
   assert.ok(!cardHtml(html, 'bot:main').includes('ws-new'), 'AC3.4 BOT 卡不画「+」（那颗只对工作区有意义）')
   assert.ok(cardHtml(html, 'ws-a').includes('class="ws-new"'), 'AC3.4 工作区卡照旧画「+」')
 
@@ -429,13 +451,15 @@ test('AC3.4：BOT 卡的 toggle/more/pin 与工作区卡走同一套选择器与
   assert.deepEqual(ws.effects, ['render', 'render', 'render', 'pin:ws-a::row'], 'AC3.4 工作区卡同一串')
   assert.deepEqual(bot.branchNames, ws.branchNames, 'AC3.4 两条通道走的分支序列相同')
   assert.deepEqual(
-    { a: bot.afterFirstToggle, b: bot.expandedAfterTwice, c: bot.revealedAfterMore, d: bot.revealedAfterPin },
-    { a: ws.afterFirstToggle, b: ws.expandedAfterTwice, c: ws.revealedAfterMore, d: ws.revealedAfterPin },
-    'AC3.4 两类卡的状态迁移逐字相同（展开→收起、「更多」加行、pin 不动已披露行数）',
+    { a: bot.afterFirstToggle, b: bot.expandedAfterTwice, c: bot.revealedAfterMore - bot.rows, d: bot.revealedAfterPin - bot.rows },
+    { a: ws.afterFirstToggle, b: ws.expandedAfterTwice, c: ws.revealedAfterMore - ws.rows, d: ws.revealedAfterPin - ws.rows },
+    'AC3.4 两类卡的状态迁移逐字相同（展开→收起、「更多」加行、pin 不动已披露行数）；③ 后 bot:other 画 2 行、ws-a 画 1 行，c/d 按各自增量对账',
   )
   assert.equal(bot.afterFirstToggle, true, 'AC3.4 toggle 第一次展开')
   assert.equal(bot.expandedAfterTwice, false, 'AC3.4 toggle 第二次收起')
   assert.equal(bot.revealedAfterMore, bot.rows + MORE_ROWS, 'AC3.4 「更多」把已披露行数加上 MORE_ROWS')
-  assert.equal(bot.revealedAfterMore, ws.revealedAfterMore, 'AC3.4 两类卡的「更多」加同一个量')
+  assert.equal(bot.revealedAfterMore - bot.rows, ws.revealedAfterMore - ws.rows,
+    'AC3.4 两类卡的「更多」加同一个量（③ 后初始行数不同，绝对值不再相等，增量仍同源）')
+  assert.equal(ws.revealedAfterMore - ws.rows, MORE_ROWS, 'AC3.4 「加同一个量」的精确值就是 MORE_ROWS')
   assert.equal(bot.revealedAfterPin, bot.rows + MORE_ROWS, 'AC3.4 pin 不覆盖已披露行数')
 })

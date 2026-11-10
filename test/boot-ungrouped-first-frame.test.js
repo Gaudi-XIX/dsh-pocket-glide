@@ -74,13 +74,15 @@ test('未分组桶的 ids 作为 workspaceId "" 的项交给页面，首帧行�
   const b = await boot()
   const face = dataFace(b)
 
-  assert.equal(face.ids.length, 7, '夹具：3 行在工作区卡 + 4 行两边都不在')
+  assert.equal(face.ids.length, 3, '夹具：3 行在工作区卡；4 行未分组按 m00110 判据④ 不落地到首帧行集')
   assert.deepEqual(face.neither, [], '判据 §2 V2：每一行都在 B.ws.items 里')
-  assert.ok(face.ungroupedItem, '判据 §4 V6：首帧有 data-ws="" 这一张卡')
+  assert.ok(face.ungroupedItem, 'intent.md:59：未分组 ids 仍在 ws.items 后台数据项里，点进会话仍可打开')
+  assert.deepEqual(face.ids.filter((id) => ORPHANS.includes(id)), [],
+    'm00110 判据④：首帧不画未分组行、也不留一行')
   assert.deepEqual([...face.ungroupedItem.sessionIds].sort(), [...ORPHANS].sort(),
     '这张卡认领的正是那 4 条未归属行')
   assert.equal(face.ungroupedItem.sessionTotal, ORPHANS.length,
-    '卡上数字等于首屏真画出的量')
+    '后台卡上的数字等于它认领的未归属行数（intent.md:59；首帧不画这张卡）')
   assert.equal(face.ungroupedItem.sessionIds.length, ORPHANS.length,
     '不许出现卡在但一行没有、要等后台补的形态')
 })
@@ -88,7 +90,7 @@ test('未分组桶的 ids 作为 workspaceId "" 的项交给页面，首帧行�
 test('V1 数据面：行数、sess.items、stageSummary.sessions 同源', async () => {
   const b = await boot()
   assert.equal(b.stageSummary.sessions, b.sess.items.length)
-  assert.equal(b.sess.items.length, 7)
+  assert.equal(b.sess.items.length, 3, 'm00110 判据④：首帧行集只含 3 行已认领')
   assert.equal(
     b.ws.items.filter((item) => String(item.workspaceId ?? '') !== '').length,
     2,
