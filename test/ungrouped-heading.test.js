@@ -373,25 +373,30 @@ test('the heading is the desktop\u2019s own wording in both locales', () => {
 // 未分组的行重新有卡可落（此前 2026-10-30 曾把整张桶卡退场，本轮反转回来）。
 // 这条断言跑的是真 renderWorkspaces + 真 ungroupedCards（不是源码切片）：切片在
 // 分支被删之后只会恒真，测不出页面到底画了什么。
-// 测试意图取代：本用例原钉用户 2026-11-02 判据④「未分组恢复显示」（桶卡重新画出、
-// 未分组行重新有卡可落），被本轮 m00110「未分组默认全部隐藏、主页不留一行」取代；
-// 取代关系由 intent.md:63 / §5:85 承载，上面 11-02 旧判据注释逐字留痕、判据正本不改。
-test('m00110 判据④：未分组桶卡整张退场，一行不落地', () => {
+// 测试意图取代（2026-11-11 本单 m00030 反转 m00110，见本 change intent.md §2.1）：
+// 未分组桶卡恢复落地、首帧默认折叠（D1/D2），卡头数量 = sessionTotal 或真画行数（D3）。
+// 旧 m00110 判据「整张退场」的注释逐字留在上面，判据正本不改；本段两例按新判据重写，
+// 「隐藏成员不透传」这条负载断言原样保留。
+test('m00030 判据④：未分组桶卡首帧落地、默认折叠，orphan 行不落进工作区卡', () => {
   const html = paintPage({
-    workspaces: [{ workspaceId: WORKSPACE, title: 'defws', path: 'F:\\\\defws', sessionIds: ['a'] }],
+    workspaces: [{ workspaceId: WORKSPACE, title: 'defws', path: 'F:\\\\\\\\defws', sessionIds: ['a'] }],
     sessionSummaries: summaries(['a', 'orphan1', 'orphan2']),
-    expanded: [WORKSPACE, ''],
+    expanded: [WORKSPACE],
   })
 
   assert.equal(
     (html.match(/<article class="ws-card/g) || []).length,
-    1,
-    'm00110 判据④/intent.md:58：未分组桶卡整张退场，只画工作区卡',
+    2,
+    'm00030 反转 m00110：未分组桶卡落地，与工作区卡同画',
   )
+  assert.equal((html.match(/data-ws=""/g) || []).length, 1,
+    'intent §3.1 D1：首帧有 data-ws="" 未分组卡')
+  assert.equal((html.match(/aria-expanded="false"/g) || []).length, 1,
+    'intent §3.1 D2：fixture 未预展开时未分组卡首帧折叠')
   assert.equal(taskRows(html), 1,
-    'intent.md:58：orphan1/orphan2 一条不落地，只画工作区卡那 1 行')
-  assert.equal((html.match(/data-ws=""/g) || []).length, 0,
-    'intent.md:58：首帧不画 data-ws="" 卡')
+    'intent §3.1 D2：折叠卡不画行；工作区卡那 1 行照旧')
+  assert.ok(html.includes('<span class="ws-last-time">2</span>'),
+    'intent §3.1 D3：折叠可见区只有标题＋一个数量数字 2（= 桶里 orphan1/orphan2）')
   assert.ok(html.includes('defws'), 'the workspace card itself still renders, header and all')
 })
 
@@ -399,22 +404,24 @@ test('m00110 判据④：未分组桶卡整张退场，一行不落地', () => {
 // 以「未分组」的名义透传出来——隐藏成员的 id 到场时必须把那些行从桶里剔除。
 test('the F:\\DSBOT workspace stays hidden: its rows never leak in as ungrouped', () => {
   const html = paintPage({
-    workspaces: [{ workspaceId: WORKSPACE, title: 'defws', path: 'F:\\\\defws', sessionIds: ['a'] }],
+    workspaces: [{ workspaceId: WORKSPACE, title: 'defws', path: 'F:\\\\\\\\defws', sessionIds: ['a'] }],
     sessionSummaries: summaries(['a', 'orphan1', 'bot1']),
-    expanded: [WORKSPACE, ''],
+    expanded: [WORKSPACE],
     hiddenWsSessionIds: ['bot1'],
   })
 
-  assert.equal((html.match(/<article class="ws-card/g) || []).length, 1,
-    'm00110 判据④：未分组桶卡整张退场，只画工作区卡')
+  assert.equal((html.match(/<article class="ws-card/g) || []).length, 2,
+    'm00030 反转 m00110：未分组桶卡落地，工作区卡＋未分组卡各一张')
+  assert.equal((html.match(/data-ws=""/g) || []).length, 1,
+    '未分组卡恰一张')
+  assert.ok(html.includes('<span class="ws-last-time">1</span>'),
+    '桶里只剩 orphan1：数量数字成值 1 次且等于真画量')
   assert.equal(taskRows(html), 1,
-    'intent.md:58：真正未认领的 orphan1 也不落地成行')
-  assert.equal((html.match(/data-ws=""/g) || []).length, 0,
-    'intent.md:58：首帧不画 data-ws="" 卡')
+    '真正未认领的 orphan1 折叠不成行，工作区卡那 1 行照旧')
   assert.equal(
     (html.match(/bot1/g) || []).length,
     0,
-    'the hidden F:\\\\DSBOT row is neither shown nor relabelled as ungrouped',
+    'the hidden F:\\DSBOT row is neither shown nor relabelled as ungrouped',
   )
 })
 

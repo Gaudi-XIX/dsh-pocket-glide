@@ -175,12 +175,15 @@ test('③(c) 主 BOT 区与群聊区在两例都不出现折叠入口', () => {
   }
 })
 
-test('④ 主页不再画「未分组」整卡：cards 不含 w.ungrouped===true', () => {
+test('④ 未分组桶首帧落地但默认折叠（2026-11-11 单按 intent §3.1 反转 m00030 的「整卡不画」：卡要画、首帧折、数字随行）', () => {
   const workspaces = [{ workspaceId: 'ws-a', sessionIds: ['w1'], title: '工作区 A', path: '/ws-a' }]
   const summaries = [sum('w1'), sum('orphan')]
   const html = paint({ workspaces, summaries, expanded: ['ws-a'] })
   assert.ok(html.includes('data-ws="ws-a"'), '工作区卡照常画')
-  assert.ok(!html.includes('data-ws=""'),
-    '删掉 .filter(w=>w.ungrouped!==true) 就会多出 data-ws="" 的未分组卡')
-  assert.ok(!ROW_IDS(html).includes('orphan'), '桶里的行不落地到主页可见行')
+  assert.ok(html.includes('data-ws=""'), '未分组桶首帧落地（D1）')
+  const un = cardHtml(html, '')
+  assert.ok(un.includes('aria-expanded="false"'), 'D2：未分组卡首帧默认折叠')
+  assert.equal((un.match(/class="task-row/g) || []).length, 0, 'D2：折叠态不画行')
+  assert.ok(un.includes('未分组') && un.includes('>1<'), 'D3：卡头只留标题＋会话数量（桶内 1 行）')
+  assert.equal((un.match(/ws-last-time/g) || []).length, 1, 'D3：数字只此一格')
 })

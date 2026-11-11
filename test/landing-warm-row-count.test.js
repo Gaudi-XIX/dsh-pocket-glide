@@ -405,9 +405,16 @@ test('m00110 判据④：置顶行仍画，未分组行不落地，后台 ids �
   const items = [{ workspaceId: 'w-a', sessionIds: ['s-pin', 's-old'] }]
   const bridge = makeBridge({ rows, items, pinnedSessionIds: ['s-pin'] })
   const A = bridge.pageWarmSummary('landing').sessions
-  const B = taskRows(paintLanding({ workspaces: items, rows, pinned: ['s-pin'] }))
-  assert.equal(A, 1, 'm00110 判据④：未分组行不落地，只剩置顶行；窗口外的已认领旧行不进数')
-  assert.equal(A, B, 'and the landing paints exactly the same rows')
+  const html = paintLanding({ workspaces: items, rows, pinned: ['s-pin'] })
+  const paintedIds = [...html.matchAll(/class="task-row[^"]*"[^>]*data-id="([^"]*)"/g)].map((m) => m[1])
+  const claimedIds = new Set(items.flatMap((w) => w.sessionIds))
+  const claimedPainted = paintedIds.filter((id) => claimedIds.has(id))
+  assert.equal(A, 1, '桥首帧只数已认领的置顶行：窗口外的已认领旧行不进数')
+  // 2026-11-11 取代（intent §3.1 D1–D3，apply T4.3 授权）：未分组桶重新落地成一张首帧折叠的卡。
+  // 桥侧 landing.rows 仍只装已认领行（R1 冻结不动），同源判据改为「桥数 === 页侧已认领画出行数」，
+  // 未归属行单列在桶卡里画，不再用「整张退场」的旧口径。
+  assert.deepEqual(claimedPainted, ['s-pin'], '桥首帧数 === 页侧已认领行的 id 集（顺序也算）')
+  assert.ok(paintedIds.includes('s-orp'), '未归属行现在在未分组桶卡里画出来（intent §3.1 D1）')
   const landing = bridge.landingSummary(rows, bridge.workspaceSnapshot, NOW)
   assert.equal(landing.rows.some((row) => row.sessionId === 's-orp'), false,
     'intent.md:58：首帧不画未分组行、也不留一行')
@@ -432,9 +439,15 @@ test('m00110 判据④：只含窗口外行的未分组桶整张退场，桥页�
   const items = [{ workspaceId: 'w-a', sessionIds: ['s-claimed-elsewhere'] }]
   const bridge = makeBridge({ rows, items })
   const A = bridge.pageWarmSummary('landing').sessions
-  const B = taskRows(paintLanding({ workspaces: items, rows }))
-  assert.equal(B, 0, 'm00110 判据④：未分组桶卡整张不落地，一行的地板也不画')
-  assert.equal(A, B, 'the bridge must cap the unclaimed bucket the same way the page does')
+  const html = paintLanding({ workspaces: items, rows })
+  const paintedIds = [...html.matchAll(/class="task-row[^"]*"[^>]*data-id="([^"]*)"/g)].map((m) => m[1])
+  const claimedIds = new Set(items.flatMap((w) => w.sessionIds))
+  const claimedPainted = paintedIds.filter((id) => claimedIds.has(id))
+  assert.equal(A, 0, '桥首帧不数未归属行：三条全 OLD 的桶行不进 landing.rows')
+  // 2026-11-11 取代（intent §3.1 D1–D3，apply T4.3 授权）：未分组桶落地成一张首帧折叠的卡；
+  // harness 按 :183 预展开空串桶，故桶内行按 bootRangeCap 的 cap 地板画出来（旧注释 :576 同式）。
+  assert.deepEqual(claimedPainted, [], '已认领行一条都没画，桥页两侧同源')
+  assert.ok(paintedIds.length > 0, '桶内未归属行在未分组桶卡里画出来，不再整张退场')
   const landing = bridge.landingSummary(rows, bridge.workspaceSnapshot, NOW)
   assert.equal(landing.rows.length, 0, 'intent.md:58：三条未归属行一条都不进首帧行集')
   assert.deepEqual([...landing.ungrouped].sort(), ['s-u1', 's-u2', 's-u3'],
@@ -452,11 +465,17 @@ test('m00110 判据④：窗口内的未分组行也不落地，桥页两侧都�
   const items = [{ workspaceId: 'w-a', sessionIds: ['s-pin'] }]
   const bridge = makeBridge({ rows, items, pinnedSessionIds: ['s-pin'] })
 
-  const B = taskRows(paintLanding({ workspaces: items, rows, pinned: ['s-pin'] }))
+  const html = paintLanding({ workspaces: items, rows, pinned: ['s-pin'] })
   const A = bridge.pageWarmSummary('landing').sessions
+  const paintedIds = [...html.matchAll(/class="task-row[^"]*"[^>]*data-id="([^"]*)"/g)].map((m) => m[1])
+  const claimedIds = new Set(items.flatMap((w) => w.sessionIds))
+  const claimedPainted = paintedIds.filter((id) => claimedIds.has(id))
 
-  assert.equal(B, 1, 'm00110 判据④：只画已认领的置顶行；未分组行不落地')
-  assert.equal(A, B, 'and the bridge must count exactly what the landing paints — landingSummary must not drop the unclaimed row (F-2)')
+  assert.equal(A, 1, '桥首帧只数已认领的置顶行：未归属行不进 landing.rows')
+  // 2026-11-11 取代（intent §3.1 D1–D3，apply T4.3 授权）：未分组桶重新落地成卡；
+  // 桥数 === 页侧已认领画出行数（F-2 同源判据保留），桶内行单独核，不再要求两侧总行数相等。
+  assert.deepEqual(claimedPainted, ['s-pin'], '桥数与页侧已认领行同源（F-2）')
+  assert.ok(paintedIds.includes('s-orp'), '窗口内未归属行在未分组桶卡里画出来')
   const landing = bridge.landingSummary(rows, bridge.workspaceSnapshot, NOW)
   assert.equal(landing.rows.some((row) => row.sessionId === 's-orp'), false,
     'intent.md:58：窗口内的未分组行同样一条不落地')
@@ -599,18 +618,24 @@ test('the shell row set is the landing paint, id for id (bot cards, ungrouped, p
   const shell = bridge.landingSummary(rows, bridge.workspaceSnapshot, NOW)
   const shipped = shell.rows.map((row) => row.sessionId)
 
-  assert.deepEqual(shipped, painted, '壳里的行集必须逐 id 等于首帧画出来的行（顺序也算）')
+  // 2026-11-11 取代（intent §3.1 D1–D3，apply T4.3 授权）：未分组桶重新落地成卡，
+  // 页侧会画出桶内未归属行；桥侧 landing.rows 仍只装已认领行（R1 冻结不动）。
+  // 同源判据改为「页侧已认领 id 集 === 桥的 shipped」，桶内行单独核，旧逐 id 全等留痕于此。
+  const unownedIds = ['s-u1', 's-u2']
+  const claimedPainted = painted.filter((id) => !unownedIds.includes(id))
+  assert.deepEqual(claimedPainted, shipped, '页侧已认领行的 id 集 === 桥首帧行集（顺序也算）')
   // 三个数同源：摘要的 sessions 就是这一份行集的长度，不是原件、也不是减法。
   assert.equal(shell.sessions, shipped.length, 'stageSummary.sessions === |P|')
   assert.equal(bridge.pageWarmSummary('landing').sessions, shipped.length, '卡上的数与壳同源')
   // 三条容易假绿的边界，逐条钉住：
   assert.ok(shipped.includes('s-other'), '团队里有、会话列表里没有的 Bot 会话，桥要合成同一行')
   // 测试意图取代：原钉「两个未归属会话进未分组卡，各画一次」（11-02 判据④ 恢复显示），
-  // 被本轮 m00110 取代：首帧一行不画，但 ids 仍在 byCard key:'' 后台可点开。
+  // 被 m00110 取代为首帧一行不画；2026-11-11 再被 intent §3.1 D1 取代：桶卡回来了、首帧默认折叠。
+  // 两段被取代的旧口径逐字留痕在上，判据正本一字不改（apply T4.3 授权放宽）。
   assert.equal(shipped.includes('s-u1') || shipped.includes('s-u2'), false,
-    'm00110 判据④/intent.md:58：首帧不画未分组行、也不留一行')
-  assert.equal(painted.includes('s-u1') || painted.includes('s-u2'), false,
-    'design.md:15：页侧 renderWorkspaces 同一口径，未分组卡整张不落地')
+    '桥首帧行集仍只装已认领行：未分组桶的 ids 不进 landing.rows')
+  assert.deepEqual(painted.filter((id) => unownedIds.includes(id)).sort(), unownedIds,
+    '页侧未分组桶卡把两条未归属行画出来（harness 预展开空串桶）')
   const bucket = shell.byCard.find((card) => card.key === '' && card.ids.includes('s-u1'))
   assert.ok(bucket, 'm00110 判据④：byCard 里仍有 key:\'\' 的未分组桶登记两条未归属会话')
   assert.deepEqual(bucket.ids.slice().sort(), ['s-u1', 's-u2'],
