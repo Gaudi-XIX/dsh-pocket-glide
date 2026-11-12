@@ -222,7 +222,8 @@ test('AC2.2：同一 sessionId 同时在 session.list 与 bot.team 时，行取 
   assert.equal(b1.updatedAt, 111, 'AC2.2 在表里的行必须保住宿主真值 111，不许被 bot.team 的 999999 覆盖')
   assert.equal(b1.error, true, 'AC2.2 邻字段也不覆盖：error 仍是宿主那一份')
   assert.equal(b1.projections.values.title, '宿主标题', '已有标题不被 bot.team 的名字改写')
-  assert.equal(b1.botTag, L.tagMain, 'botTag 是页面自己的装饰（主 BOT 的行带「主」）')
+  assert.equal(L.tagMain, '', '中英两态 tagMain 显示值已置空')
+  assert.ok(!b1.botTag, '主 BOT 行的 botTag 为假值')
   assert.equal(b1.running, true, 'bot.team 说它在工作 ⇒ 补上 running（这一格页面才有资格写）')
 
   const fresh = summaries.find((r) => r.sessionId === 's-new')
@@ -309,6 +310,8 @@ test('AC3.2：卡片顺序恒为 [主 BOT, 其他 BOT, 群, …各工作区…]'
     'AC3.2 顺序必须是 主 BOT → 其他 BOT → 群 → 各工作区（读 #workspaces 里 article.ws-card 的 document order）',
   )
   assert.deepEqual(ROW_IDS(cardHtml(html, 'bot:main')), ['s-main'], 'AC3.2 主 BOT 卡只装它自己那一行')
+  const mainCard = cardHtml(html, 'bot:main')
+  assert.equal((mainCard.match(/<span class="ws-status">/g) || []).length, 0, 'AC3.2 主 BOT 卡内没有行内 ws-status 装饰标签')
   assert.deepEqual(ROW_IDS(cardHtml(html, 'bot:other')), ['s-other'], 'AC3.2 其他 BOT 段')
   assert.deepEqual(ROW_IDS(cardHtml(html, 'bot:room')), ['room-1'], 'AC3.2 群段的行以群 id 为会话 id')
   assert.ok(
