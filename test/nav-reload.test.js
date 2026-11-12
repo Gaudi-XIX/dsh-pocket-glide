@@ -204,10 +204,11 @@ test('C a boot payload that names the transport sets it before the first stream'
 test('REQ3 the handoff landing refills its short list like every other route', () => {
   // 用户 2026-10-15 REQ3：「进入对话以后的显示逻辑仍然有问题。24 小时之内的所有会话
   // 都应该显示出来，至少刚刚我进来就没显示」。boot 现在带全量会话行，首屏即完整、
-  // bootListPartial 不再触发；但补拉路径保留作安全网。这里钉住：补拉是无条件的
-  // （只看 bootListPartial），且首屏不再第二次取 /api/boot（2026-10-23 已删该回路）。
+  // bootListPartial 不再触发；但补拉路径保留作安全网。这里钉住：补拉以 bootListPartial
+  // 为门、stash 源（boot===handoffBoot）除外（其首帧已完整），且首屏不再第二次取
+  // /api/boot（2026-10-23 已删该回路）。
   const startup = sliceTo('let boot=takeHandoffBoot()', 'window.__pocketAppReady')
-  assert.match(startup, /if\(bootListPartial\)void fillListFromServer\(\)/, 'the refill is not gated on how the payload arrived')
+  assert.match(startup, /if\(bootListPartial&&boot!==handoffBoot\)void fillListFromServer\(\)/, 'the stash-sourced handoff boot is already complete, only other partial sources refill')
   assert.doesNotMatch(startup, /if\(!handoff&&bootListPartial\)/, 'the old handoff guard is what hid the rest of the 24h window')
   assert.doesNotMatch(
     startup,
