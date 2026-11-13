@@ -99,7 +99,7 @@ DSH 在电脑上跑重构、排查、改代码、跑测试时，一个任务常�
 
 ### 从 npm 装
 
-> 首次发布落地前 npm 上还没有这个包；若 `dsh plugin add` 报找不到，改用下面的「从仓库装」。
+> `dsh-pocket-glide@0.4.59` 已发布到 npm，直接从 npm 装即可；下面的「从仓库装」留给开发调试。
 
 ```bash
 dsh plugin --profile <你的 profile> add dsh-pocket-glide
