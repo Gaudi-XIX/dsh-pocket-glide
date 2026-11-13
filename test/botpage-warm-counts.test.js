@@ -60,7 +60,7 @@ test('a workspace with no rows yet is still a card, so it is still counted', () 
     items: [
       { workspaceId: 'w-a', sessionIds: ['s-1'] },
       { workspaceId: 'w-b', sessionIds: [] },
-      { workspaceId: 'w-c', path: 'F:\\\\defws', title: 'no sessions field' },
+      { workspaceId: 'w-c', path: 'F:\\\\workspace', title: 'no sessions field' },
     ],
   })
   assert.equal(bridge.pageWarmSummary('landing').workspaces, 3,

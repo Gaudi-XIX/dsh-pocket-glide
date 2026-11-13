@@ -50,7 +50,7 @@ const HIDDEN = 'bot-ws'
 // carries a `workspaceId` (0 of 1,087). A fixture that gave rows a workspaceId
 // would let a filter that only reads rows pass here and do nothing on the phone.
 const twoWorkspaces = [
-  { workspaceId: WORKSPACE, title: 'defws', path: 'F:\\defws', sessionIds: ['a', 'b'] },
+  { workspaceId: WORKSPACE, title: 'defws', path: 'F:\\workspace', sessionIds: ['a', 'b'] },
   { workspaceId: HIDDEN, title: 'DS Bot', path: 'F:\\DSBOT', sessionIds: ['bot1', 'bot2'] },
 ]
 
@@ -369,7 +369,7 @@ test('the heading is the desktop\u2019s own wording in both locales', () => {
   assert.ok(en.includes('"ungrouped":"Ungrouped"'), 'en: and Ungrouped (group.ungrouped, en dictionary)')
 })
 
-// 用户 2026-11-02 判据④：「未分组恢复显示」——屏蔽对象只剩 F:\DSBOT 一个工作区，
+// 用户 2026-11-02 判据④：「未分组恢复显示」——屏蔽对象只剩一个工作区，
 // 未分组的行重新有卡可落（此前 2026-10-30 曾把整张桶卡退场，本轮反转回来）。
 // 这条断言跑的是真 renderWorkspaces + 真 ungroupedCards（不是源码切片）：切片在
 // 分支被删之后只会恒真，测不出页面到底画了什么。

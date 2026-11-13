@@ -19,7 +19,7 @@ function dsBotRoot() {
   const candidates = [
     process.env.DSH_BOT_SRC,
     process.env.DSH_HOME && join(process.env.DSH_HOME, 'profiles', 'desktop', 'node_modules', 'ds-bot'),
-    'F:/AgentData/dsh/data/profiles/desktop/node_modules/ds-bot',
+    'F:/data/profiles/desktop/node_modules/ds-bot',
   ].filter(Boolean)
   return candidates.find((dir) => existsSync(join(dir, 'src', 'host', 'channel.js')))
 }

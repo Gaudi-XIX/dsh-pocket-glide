@@ -7,7 +7,7 @@
 // re-run this script; the diff of the generated file is the receipt.
 //
 // Usage: node tools/sync-step-process.mjs [path\to\app.asar]
-//   default asar: D:\DSH\resources\app.asar
+//   asar: path to the host's app.asar (…/resources/app.asar)
 //
 // Source of the tables: @deepseek-ai/dsh-client-ui-chat/lib/client.js inside the
 // host bundle. NOTE: the mapping function (tool name -> activity category) is NOT
@@ -24,8 +24,11 @@
 import { openSync, readSync, closeSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
-const DEFAULT_ASAR = 'D:\\DSH\\resources\\app.asar'
-const asarPath = process.argv[2] || DEFAULT_ASAR
+const asarPath = process.argv[2]
+if (!asarPath) {
+  console.error('Usage: node tools/sync-step-process.mjs <path to app.asar>')
+  process.exit(1)
+}
 const OUT = new URL('../lib/step-process.generated.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
 
 const CLIENT_JS = 'dsh/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js'
@@ -140,7 +143,7 @@ const stamp = new Date().toISOString()
 const clientHash = createHash('sha256').update(clientJs).digest('hex').slice(0, 12)
 const banner = `// GENERATED FILE — DO NOT EDIT BY HAND.
 // Regenerate with:  node tools/sync-step-process.mjs [path\\to\\app.asar]
-// Source: ${asarPath}  (dsh ${hostPkg.version}, client.js sha256:${clientHash})
+// Source: <host>/resources/app.asar  (dsh ${hostPkg.version}, client.js sha256:${clientHash})
 // Extracted at: ${stamp}
 // Namespaces (verbatim, zh then en): message.stepProcess.* / message.turnProcess.* / settings.transcript.*
 // The tool-name -> category mapping is intentionally NOT generated; it stays a
@@ -154,7 +157,7 @@ const body = [
   emit('STEP_PROCESS_LABELS'),
   emit('TURN_PROCESS_LABELS'),
   emit('TRANSCRIPT_LABELS'),
-  `export const GENERATED_FROM = ${JSON.stringify({ asar: asarPath, dshVersion: hostPkg.version, clientHash, extractedAt: stamp }, null, 2)}\n`,
+  `export const GENERATED_FROM = ${JSON.stringify({ asar: 'resources/app.asar', dshVersion: hostPkg.version, clientHash, extractedAt: stamp }, null, 2)}\n`,
 ].join('\n')
 
 writeFileSync(OUT, body, 'utf8')

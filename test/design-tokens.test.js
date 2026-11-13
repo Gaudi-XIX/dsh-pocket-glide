@@ -6,8 +6,8 @@
 //    把用到的别名贴回快照并改采集日期。
 //
 // 采集命令（2026-10-23 实采）：
-//   grep -a -o -- '--dsw-alias-[a-z0-9-]*' D:/DSH/resources/*.asar | sort -u
-//   grep -a -o -- '--dsw-focus-ring-[a-z-]*' D:/DSH/resources/*.asar | sort -u
+//   grep -a -o -- '--dsw-alias-[a-z0-9-]*' <host>/resources/*.asar | sort -u
+//   grep -a -o -- '--dsw-focus-ring-[a-z-]*' <host>/resources/*.asar | sort -u
 //
 // 为什么快照放常量而不是读宿主：CI 没有宿主安装目录，测试一旦读它必挂。所以本文件**不出现
 // 宿主安装包的归档文件名**（机械核法：对该文件名做 grep，计数必须为 0）；路径只在上面注释里以

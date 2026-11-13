@@ -1,10 +1,16 @@
 # Changelog
 
 本档只记**版本级的对外变化**：装机、使用与行为契约。逐笔施工账（谁在哪个包改了什么、证据在哪）
-在 `git log` 与 flow change 卡（`F:\defws\.agents\flow\changes\`）里，不在这里重复。
+在 `git log` 与 flow change 卡里，不在这里重复。
 最新的一节对应当前 `package.json` 的 `version`。
 
-## 未发布 — 目标 0.4.59
+## 0.4.59 — 2026-11-13
+
+### 首次发布到 npm，三处对外文档重写（2026-11-13）
+
+- **安装面**：`dsh plugin --profile <name> add dsh-pocket-glide` 成为主安装路径；仓库里的本地安装脚本保留给开发调试，不再是对外唯一入口。
+- **文档**：README 按「只解决哪两件事 / 手机页面的技术维度 / 哲学 / 与别的做法分界 / 为顺滑付的工程账 / 确实不做」重写；GitHub 仓库简介、npm description、DSH 插件市场简介三处同步同一套说法。
+- **打包面**：`files` 增加排除项——本机专用的复活脚本、cookie 清理脚本、手工备份、把 `link:` 指向某台机器检出目录的安装脚本、从本机 app.asar 重生成表的脚本，都不再随包发布；包内代码注释里的本机检出路径一并清掉。测试夹具里的示例工作区路径改成中性名。
 
 ### 首帧必有裁决：薄文档只发一张 + 6/10 秒必落结果（2026-11-06）
 
@@ -34,7 +40,7 @@
 - **为什么改**：旧包名 `@defws/dsh-pocket` 只在本地 profile 里自娱自乐，对外从没落过地；而 npm 裸名 `dsh-pocket` 是别人的包（v2.12.0，GPL-2.0，GitHub ★2395），GitHub 上还另有一个同名不同源的 `shaobeichen/dsh-pocket`。三个「pocket」混在一处，聊天、日志、装错包全撞。第三个词定为 `glide`：手机端这条线的实质卖点是触控顺滑 + 首屏字节最省，不是「手机」也不是「直连」。
 - **改到哪**：`package.json` 名（去 scope）、`cordis.patch.yml` 的条目名、`tools/install-to-profile.mjs` 的 `PACKAGE_NAME`/`LINK_PATH`、运行态键（`dsh-pocket-*` → `dsh-pocket-glide-*`：localStorage 的开机载荷/已读台账/最后消息戳、`/sw.js` 的 `dsh-pocket-boot` 与 `dsh-pocket-no-sw`）、client 半区日志前缀与样式 id、全部相关测试断言。
 - **刻意不动**：client 半区 `postMessage` 的 `source` 字面量（内嵌配对页与宿主插件是同一批代码，一起改无收益却动到跨 window 契约）、CSS 类名（纯视觉标识，改了要连带改十几条选择器断言）、旧数据目录探测路径（`%LOCALAPPDATA%\dsh-pocket`、`~/.dsh-pocket` 是**历史数据的位置**，不是插件身份——改名后仍要把老用户的 pin 与 cloudflared 缓存迁过来）。
-- **仓库历史归零**：原 `Gaudi-XIX/dsh-pocket` → `dsh-pocket-glide`（10-22 改名）+ 本轮以当前工作树为唯一根提交，402+7 笔旧历史、9 个标签、2 个 stash 一并退出远端；旧历史打包在 `F:\defws\_archive\pre-rename-20261026\` 的 bundle 里。
+- **仓库历史归零**：原 `Gaudi-XIX/dsh-pocket` → `dsh-pocket-glide`（10-22 改名）+ 本轮以当前工作树为唯一根提交，402+7 笔旧历史、9 个标签、2 个 stash 一并退出远端；旧历史打包在 `<workspace>\_archive\pre-rename-20261026\` 的 bundle 里。
 - **npm 侧**：`dsh-pocket-glide` 在 registry 上无主（404），登录账号 `gaudixix` 具备发文权；**未执行 `npm publish`**（公开发布属红线，等指令）。
 
 本版修三件事：**手机发出去的消息会静默丢掉**（A 组）、隧道侧的五条缺陷（B 组，其中三条 P0），
@@ -74,7 +80,7 @@
 - **B3 隧道 URL 正则加 `(?!api\.)` 负前瞻**：cloudflared 日志里会打印 `api.trycloudflare.com`，原先会被误当成隧道地址。
 - **B4 致命错误分诊 + 单飞守卫**：`isFatalCloudflaredError()` 只把「换 token 才有救」的五类错（invalid tunnel secret / failed to unmarshal / invalid token / 401 unauthorized / not a valid tunnel）判为致命，并给 error 打 `fatal = true`、`code = 'tunnel/fatal'`；其余退出按「还能重拨」处理。quick 腿连开两次会先终止仍在跑的旧载体，模块内只留一个活引用；URL 已交出去之后载体再死，`onExit` 恰好报一次。
 - **B5 服务面 keepalive 补全**：accept 到的 socket 打 `setKeepAlive(true, 20_000)`；同时钉 `server.keepAliveTimeout = 20_000`、`server.headersTimeout = 25_000`——这组值把空闲上限从 Node 默认的 5 s 抬到 20 s（探测仍在同一时刻到点，探测本身抢不到关闭之前，真实收益是 5 s→20 s）；`headersTimeout` 必须严格大于 `keepAliveTimeout`，否则 Node 启动即抛 `ERR_INVALID_ARG_VALUE`。
-- **这条的边界**：隧道「两条腿」里 cloudflared → Cloudflare 边缘那条是外部进程，本仓拿不到它的 socket，改不到。所以 keepalive 只在 **LAN 直连**档有真实收益；隧道态空闲 5 分钟后仍有一次重连代价，验收判据见 `F:\defws\docs\dsh-mobile-ecosystem-survey-final-20261023.md` §8 的 P0-2 行（真机：隧道态下页面挂 5 分钟不发请求，再次操作首包 < 2 s）与 §10.1 的现状表。
+- **这条的边界**：隧道「两条腿」里 cloudflared → Cloudflare 边缘那条是外部进程，本仓拿不到它的 socket，改不到。所以 keepalive 只在 **LAN 直连**档有真实收益；隧道态空闲 5 分钟后仍有一次重连代价，验收判据见 `<workspace>\docs\dsh-mobile-ecosystem-survey-final-20261023.md` §8 的 P0-2 行（真机：隧道态下页面挂 5 分钟不发请求，再次操作首包 < 2 s）与 §10.1 的现状表。
 
 ### D 组：手机静态资产改成压缩送达
 
@@ -127,7 +133,7 @@
 
 ### 未做：C 组 cookie `Secure`（0.4.59 发布前已由 W3 补做）
 
-按「这一跳是否 TLS」判要碰登录态：判错一次就是手机掉登录，而验证它需要 LAN 直连、隧道、反代三档真机各走一遍。本版不修（`F:\defws\.agents\flow\changes\2026-10-24-pocket-send-loss-and-tunnel-p0\tasks.md` T4 标 `SKIP-BY-LEAD`），隧道态登录态维持现状。**2026-10-25 由卡 `2026-10-24-pocket-tunnel-resilience` 的 W3 补做（见上节）；三档真机走查仍未做**，本机只有单测与真实 HTTP 端到端用例。上面这段保留为当时的判断与理由。
+按「这一跳是否 TLS」判要碰登录态：判错一次就是手机掉登录，而验证它需要 LAN 直连、隧道、反代三档真机各走一遍。本版不修（`<workspace>\.agents\flow\changes\2026-10-24-pocket-send-loss-and-tunnel-p0\tasks.md` T4 标 `SKIP-BY-LEAD`），隧道态登录态维持现状。**2026-10-25 由卡 `2026-10-24-pocket-tunnel-resilience` 的 W3 补做（见上节）；三档真机走查仍未做**，本机只有单测与真实 HTTP 端到端用例。上面这段保留为当时的判断与理由。
 
 ### 读数
 
@@ -155,7 +161,7 @@
 
 真机症状（m00600，逐字）：「不停在弹这两个提示，这两个提示是什么机制带回来的？如果连接不上，那就应该要采取别的措施呀」。
 
-取证（`C:\Users\toast\.dsh\pocket\logs\pocket.log`，东八）：提示的两个来源各自都在「宿主卡住」时反复触发——`reconnectBar` 每 8 秒宽限到期就弹一次，一帧回来立刻解锁，下一帧又断就又弹；`session/list` 一个时段 71 条传输失败，其中重启后 32 条里 16 条与通知轮询同源、15 条与页面调用同源。两条提示的原文都被写成「断开」，而桥手里的事实常常只是「宿主这次没在 12 秒内答完」。
+取证（`<home>\.dsh\pocket\logs\pocket.log`，东八）：提示的两个来源各自都在「宿主卡住」时反复触发——`reconnectBar` 每 8 秒宽限到期就弹一次，一帧回来立刻解锁，下一帧又断就又弹；`session/list` 一个时段 71 条传输失败，其中重启后 32 条里 16 条与通知轮询同源、15 条与页面调用同源。两条提示的原文都被写成「断开」，而桥手里的事实常常只是「宿主这次没在 12 秒内答完」。
 
 改四处（全在 `lib/pages.js`）：
 
@@ -219,11 +225,11 @@
 
 ### 会话折叠改按 Bot 身份认亲：同一 Bot 的会话不再因工作目录变过多出一行（2026-10-23，0.4.56）
 
-真机反馈（用户原话）：「我看我现在这个 DS 的工作区里面，这个会话就有两个你的对话，那应该就是出了一个 bug 呗」。实测：Chief 共 15 段会话，14 段的行内 `workingDirectory` 是 `F:\DSBOT`，第 0 段（`session-55a9adf5-0cbb-4e09-8222-cbde3a052f82`，2026-10-20 12:56 开）记录里是 `F:\AgentData`。折叠键是「标题 + 工作目录」两样都对上才算同一个 Bot，目录一变就认不出，于是这一段单独站成第二行。消息一条没丢，是显示上少折了一行；同类隐患还有一条——给某个 Bot 改名后，它旧段挂着旧标题也会各站一行。
+真机反馈（用户原话）：「我看我现在这个 DS 的工作区里面，这个会话就有两个你的对话，那应该就是出了一个 bug 呗」。实测：Chief 共 15 段会话，14 段的行内 `workingDirectory` 是 `<workspace>`，第 0 段（`session-55a9adf5-0cbb-4e09-8222-cbde3a052f82`，2026-10-20 12:56 开）记录里是 `<data root>`。折叠键是「标题 + 工作目录」两样都对上才算同一个 Bot，目录一变就认不出，于是这一段单独站成第二行。消息一条没丢，是显示上少折了一行；同类隐患还有一条——给某个 Bot 改名后，它旧段挂着旧标题也会各站一行。
 
 改法是把「猜」换成「认」：
 
-- **桥侧**（`lib/bridge.js`、`lib/projections.js`、`lib/constants.js`）：宿主会话行不带 `botId`（`agentTeam` 行里只有 sessionId），所以由桥读 ds-bot 自己的 roster `C:\Users\toast\.dsh\bot\state.json` 的 `bots[].segments[].sessionId` 反查 Bot 名，在 `session.list` 应答里给每行盖 `projections.values.botName`（`SESSION_ROW_VALUE_KEYS` 加入 `botName`，否则投影会把它裁掉）。roster 按 mtime 缓存 5 秒（`BOT_NAMES_CACHE_MS`）；读不到、形状不认识或缓存未命中一律返回空 Map，整条链路 fail-open 落回旧折叠，页面不因此报错。盖章**返回新数组、行对象也是替换而非改写**——list 来自桥自己的缓存（`applyDescendantRunning` 无脏行时返回原数组引用），原地写会让下次刷新依赖缓存被触碰的顺序。**首屏两条入口同样盖章**（`buildMobileBoot`，即文档内联的 boot 与 `/api/boot`）：否则首屏先把一个 Bot 的段画成两行，等 `session.list` 应答才折成一行，冷启动会看见「两行 → 一行」抖一次。
+- **桥侧**（`lib/bridge.js`、`lib/projections.js`、`lib/constants.js`）：宿主会话行不带 `botId`（`agentTeam` 行里只有 sessionId），所以由桥读 ds-bot 自己的 roster `<home>\.dsh\bot\state.json` 的 `bots[].segments[].sessionId` 反查 Bot 名，在 `session.list` 应答里给每行盖 `projections.values.botName`（`SESSION_ROW_VALUE_KEYS` 加入 `botName`，否则投影会把它裁掉）。roster 按 mtime 缓存 5 秒（`BOT_NAMES_CACHE_MS`）；读不到、形状不认识或缓存未命中一律返回空 Map，整条链路 fail-open 落回旧折叠，页面不因此报错。盖章**返回新数组、行对象也是替换而非改写**——list 来自桥自己的缓存（`applyDescendantRunning` 无脏行时返回原数组引用），原地写会让下次刷新依赖缓存被触碰的顺序。**首屏两条入口同样盖章**（`buildMobileBoot`，即文档内联的 boot 与 `/api/boot`）：否则首屏先把一个 Bot 的段画成两行，等 `session.list` 应答才折成一行，冷启动会看见「两行 → 一行」抖一次。
 - **页面侧**（`lib/pages.js`）：`mergeBotParts` 新增 `botOf(row)`；取到 Bot 名的行**只按 Bot 名折叠**（同一个 Bot 的每一段就是一个会话，无论跑在哪个目录，键里不看文件夹），并且这类行不进 title/folder 两张表，不会吞掉邻居。没有 `botName` 的行完全走原来的三条规则（同标题+同目录、上级目录、`MERGE_LEGACY_FOLDER`），所以用户自建的同名会话照旧不会被误折。
 
 回归锁：`test/bot-names.test.js` 8 项（roster 反查 4 项；`botNamesForSessions` 的 5 秒缓存窗口、读不到 roster 时 fail-open 各 1 项；盖章返回新数组、不写进桥的缓存行 1 项；首屏 boot 与 `session.list` 同口径盖章 1 项）；`test/optimistic-running.test.js` 加 3 项（同一 Bot 跨目录折成一行、Bot 改名前后仍折、Bot 行不吞同名用户会话）。全量 `node --test --test-concurrency=1 test/*.test.js` = **1458 tests / 1454 pass / 2 fail / 2 skipped**，两条红全在 `test/tunnel.test.js`（`:314`、`:335`）且与本线无关：本机 MSYS 的 GNU tar 把 `C:\` 当远程主机名（`tar (child): Cannot connect to C: resolve failed`）；**改动后未由独立审查复跑**，以上为本机（作者）自测读数；两条红是 shell 差异、不是机器差异——同一台机器换一种 shell 跑全量，`test/tunnel.test.js` 全绿，只有 MSYS 壳解析到 GNU tar 时红（pwsh 下解析到的是 System32 的 `tar.exe`）。WP1 字节预算守住：本线代码一度把 zh shell assets 顶到 391,738 B（超 238 B），精简注释与紧凑写法后回到 391,500 B 以内，没有抬 `ASSET_BUDGET_BYTES`。
@@ -2132,7 +2138,7 @@ localStorage——quick tunnel 每换一个新域名就是新 origin，本地已
 ## 0.4.0 — 2026-10-08
 
 本版为「九卡特性批」：九张 change（两轨并行）+ 独立审查（渲染层 P1 修复 + 桥安全 PASS-with-notes 两条 P3 顺手修）。
-逐卡账在 `F:\defws\.agents\flow\changes\2026-10-07-*`（各卡 planning-context + HANDOFF）。
+逐卡账在 `<workspace>\.agents\flow\changes\2026-10-07-*`（各卡 planning-context + HANDOFF）。
 
 ### 新增（用户可见）
 

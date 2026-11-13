@@ -1,7 +1,7 @@
 {
   "name": "dsh-pocket-glide",
-  "version": "0.4.58",
-  "description": "Pocket DSH — the light mobile companion plugin for DeepSeek Harness (DSH). Pair by QR, then tap a push notification to jump straight back in: instant open, optimistic sends, smooth streaming, permission approvals and queued prompts on the go — plus a full phone window onto your DS Bot team (member chats, group rooms, tool approvals). Runs in-process, dials out via a Cloudflare quick tunnel that heals itself after a restart.",
+  "version": "0.4.59",
+  "description": "Pocket DSH — the light mobile companion plugin for DeepSeek Harness. Host-rendered phone pages, no build step and no desktop pixels streamed: tap a push to land in the conversation, sends appear optimistically, streaming never steals your scroll, approvals and queued prompts happen on the phone, and the DS Bot team is a tap away. Plain web link, LAN pairing or a Cloudflare quick tunnel that pushes its new address back after a restart.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -12,6 +12,19 @@
   "scripts": {
     "test": "node --test --test-concurrency=1 test/*.test.js",
     "test:real-webserver": "node test-real-webserver.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "mobile",
+    "phone-remote",
+    "cloudflare-tunnel"
+  ],
+  "homepage": "https://github.com/Gaudi-XIX/dsh-pocket-glide#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gaudi-XIX/dsh-pocket-glide.git"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -39,6 +52,14 @@
     "client/**/*.js",
     "test",
     "tools",
+    "!tools/dsh-revive.ps1",
+    "!tools/clean-auth-cookies.mjs",
+    "!tools/**/*.bak*",
+    "!tools/install-to-profile.mjs",
+    "!tools/sync-step-process.mjs",
+    "!tools/probe-updatequeue.mjs",
+    "!tools/render-stub.mjs",
+    "!tools/render-stub-desktop.mjs",
     "cordis.patch.yml",
     "README.md",
     "LICENSE",

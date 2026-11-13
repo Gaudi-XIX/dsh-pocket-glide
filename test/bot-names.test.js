@@ -60,7 +60,7 @@ test('an unknown or empty state yields no names, so nothing is stamped', () => {
 });
 
 test('the roster path defaults to the Host data root, not the profile directory', () => {
-  // The roster lives under DSH_HOME (this machine: F:\AgentData\dsh\data), which is
+  // The roster lives under DSH_HOME (the shared data root), which is
   // NOT under the per-user profile directory. The old literal
   // `join(homedir(), '.dsh', 'bot', 'state.json')` named a path that does not exist
   // on this machine — and `homedir` was never even imported, so the call threw on

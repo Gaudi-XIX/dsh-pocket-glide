@@ -821,7 +821,7 @@ test('A21 the clock returns once the session is idle', () => {
 // 四轮变异跑完后再次全量运行本档：pass 35 / fail 0；
 // 源码 sha256 与备份 `pages-backup-mock-wp8.js` 完全相同（17F2D089…A2E4B），
 // 确认变异没有留下任何残留。
-// 说明：这轮变异在仓库外的副本 `F:\defws\tmp\mock-pocket\` 上进行 —— 写这份测试
+// 说明：这轮变异在仓库外的副本上做 —— 写这份测试
 // 时 `lib/pages.js` 里还没有 WP-1..WP-5 的产品码（grep renderMessageTail /
 // formatMessageClock / usage-pill / msg-tail / eventTime / normalizeUsage 全无命中），
 // 而本执行者的权限只允许新增测试档、不许改产品码。故先用按卡片设计稿实现的副本
@@ -860,4 +860,4 @@ test('A21 the clock returns once the session is idle', () => {
 
 // ── 轮次分隔：以上至「已还原。」为 M6 条目终点（2026-10-06 clock 卡变异实证）；以下两行是 2026-10-04 复跑轮（M1-M5）的轮尾注，hash/脚本均非 M6 真值。
 // 还原后：源码 sha256 回到基线 9283ffe72e0ca278，档内 pass 35 / fail 0。
-// 变异脚本 `F:\defws\tmp\mutate-footer.mjs`，全程不经 git（工作树带着未提交改动）。
+// 变异脚本是一次性脚本，全程不经 git（工作树带着未提交改动）。

@@ -80,7 +80,7 @@ test('② 声明 MIT ⇒ LICENSE 正文在场、随包发布、不是未填模�
 // 这正是原地雷的成因）；③ 写之前的源树体检（缺件拒写）与「备份先于改动」仍在，
 // 因为地雷的正解不是改名，是「不合格一个字节都不写」。
 // ⚠️ 口径：钉的是**包名** `@defws/dsh-phone-native`，不是 `phone-native` 这个子串——脚本头注
-// 故意留了一句「它曾指向 `F:/defws/dsh-phone-native`，该目录已不存在」当事故说明。那是历史，
+// 故意留了一句「它曾指向一个已不存在的 dsh-phone-native 目录」当事故说明。那是历史，
 // 不是回归；把它读成回归再去删注释，就把事故的唯一痕迹抹掉了。
 test('③ install-to-profile 只可能装现役包，且不合格拒写', () => {
   const src = read(join('tools', 'install-to-profile.mjs'))

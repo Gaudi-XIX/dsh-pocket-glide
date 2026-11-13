@@ -322,7 +322,7 @@ test('反方向：DOM 画的与摘要不一致时，卡上只认摘要', () => {
 // ---------------------------------------------------------------------------
 // 判据 M5／M6／M7：遮罩不许拦住已经画好的列表（intent.md §4b）
 //
-// 真机证据（F:\DSBOT\docs\2026-11-06-pocket-shell-rows-in-budget\reentry-probe-out.json）：
+// 真机证据（仓库 docs/2026-11-06-pocket-shell-rows-in-budget/reentry-probe-out.json）：
 //   t=5.68 s  rows 12 / cards 8 早就画好了，`#bootOverlay` 仍是 hidden=false，
 //             第一行中心 elementFromPoint 命中 DIV.switch-overlay、inRow=false
 //             ⇒「能滑、点不进去」；
