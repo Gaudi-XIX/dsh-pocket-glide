@@ -1,7 +1,7 @@
 {
   "name": "dsh-pocket-glide",
   "version": "0.4.59",
-  "description": "Pocket DSH — the light mobile companion plugin for DeepSeek Harness. Host-rendered phone pages, no build step and no desktop pixels streamed: tap a push to land in the conversation, sends appear optimistically, streaming never steals your scroll, approvals and queued prompts happen on the phone, and the DS Bot team is a tap away. Plain web link, LAN pairing or a Cloudflare quick tunnel that pushes its new address back after a restart.",
+  "description": "Pocket DSH: a zero-build phone plugin for DeepSeek Harness. The host renders narrow screens, no desktop pixels streamed; optimistic sends, steady scroll, on-phone approvals, LAN or outbound tunnel.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

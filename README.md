@@ -28,11 +28,11 @@ DSH 在电脑上跑重构、排查、改代码、跑测试时，一个任务常�
 | 维度 | 我们选在哪 | 换来的与付出的 |
 |---|---|---|
 | 运行位置 | 宿主进程内的 Cordis 插件，随 DSH 起停，无独立进程、无守护、无云端 | 装一次就接上，不用另起服务；代价是宿主不跑，手机页也不在 |
-| 页面交付 | 宿主现场产出 HTML/CSS/JS，零构建步骤、零前端框架运行时 | 首屏字节完全可控，微信 WebView 里也不闪退；代价是页面逻辑手写，改版门槛比组件框架高 |
+| 页面交付 | 宿主现场产出 HTML/CSS/JS，零构建步骤、零前端框架运行时 | 首屏字节完全可控；代价是页面逻辑手写，改版门槛比组件框架高 |
 | 体积纪律 | 逐语言的壳资产预算 309,000 B、最低余量 8,000 B；首帧薄文档上限 21,000 B，全部写成测试断言 | 每次冷启动都是可预期的轻；代价是加任何功能先得省出等量字节 |
-| 链路 | 手机到桥用 SSE（`EventSource`），桥到宿主用 WebSocket 多路复用通道 | 单向流够用、过代理稳、断线可退避重连；代价是双向场景要靠桥补 |
+| 链路 | 局域网内手机到桥走 SSE（`EventSource`）；走出站隧道时改走增量事件轮询（1.5 s 起，退避到 6 s，空闲 30 s）；桥到宿主是出站 WebSocket 多路复用通道 | 局域网下有实时单向流；隧道态不被中间层吞帧，代价是秒级延迟；桥到宿主那半条是出站的，宿主不开入站端口 |
 | 首帧 | 文档带 `handoff` / `shell` / `embedded` 三态；薄文档 4.5 s 内自取 `/api/boot`；6 s（Wi-Fi）/ 10 s（弱网）必落 `painted` 或 `failed` | 不出现没有尽头的白屏，失败也说得清是哪一种；代价是多一套首帧状态机和诊断埋点 |
-| 网络 | 局域网直连 `0.0.0.0:43127`（占用顺延），外加 Cloudflare Quick Tunnel 出站穿透 | 不碰路由器、不要公网 IP，扫码就能连；代价是临时域名不固定，靠重启后把新地址推回手机来兜 |
+| 网络 | 局域网直连 `0.0.0.0:43127`（占用顺延），外加 Cloudflare Quick Tunnel 出站穿透 | 不碰路由器、不要公网 IP，扫码就能连；代价是临时域名不固定，换址后靠下一条推送、或在微信里发一句话把新地址带回来兜 |
 | 交互反馈 | 发送乐观上屏、骨架先到、忙态描边、按压底色；不用 spinner、不用整屏 loading | 手指落下就有回应；代价是失败要能撤回，状态机比「等接口」复杂得多 |
 | 视口 | 流式增量落屏；上滑即解除贴底；回底要手动点箭头；软键盘唤起时输入区动态上浮 | 阅读位置不被抢走，输入不被键盘吃掉；代价是滚动与渲染耦合，验收要逐帧看 |
 | 状态呈现 | 思考链与工具调用收在同一张折叠卡里直播；子代理折叠行；消息时间今天给时刻、同年补月日、跨年补全年 | 信息密度高但不跳屏；代价是折叠状态要跨重连与分段回填保持一致 |
@@ -52,7 +52,7 @@ DSH 在电脑上跑重构、排查、改代码、跑测试时，一个任务常�
 * **状态必须诚实**：加载、失败、断开、等待，各说各的，不拿一个转圈盖住四种情况；
 * **不抢视口**：滚动、键盘、流式输出，都不许动用户正在读的位置；
 * **减法要明说**：做不到的事写在文档里，不用「即将支持」拖过去；
-* **一次点击完成**：通知点开就是那个会话，中间不设第二道门；
+* **入口固定**：通知里的链接一律落到工作区页，不替你擅自挑一个会话跳进去；
 * **加东西先付字节**：预算写进测试，谁加功能谁先省出空间。
 
 设计语言的落点是一句话：好的工具在需要时出现，事情办完就退场，用户记住的是事情办完了，不是这个工具长什么样。
@@ -76,12 +76,11 @@ DSH 在电脑上跑重构、排查、改代码、跑测试时，一个任务常�
 ## 五、为顺滑付的工程账
 
 * **内容寻址的长缓存**：壳脚本与样式按内容哈希命名，改一个字节就换一个地址，所以可以放心给一周缓存；
-* **过渡页预热**：主页与 DS Bot 页互跳时，桥在过渡动画期间就预读对面的数据（`page.cue`），落屏即有内容；
 * **首帧必落裁决**：三态文档 + 自取引导包 + 6/10 秒定时裁决，每次落定都记一条诊断，白屏从「偶尔发生」变成可计数的事件；
-* **统计单一来源**：冷启动文档里的阶段统计与 `page.cue` 走同一份计算，卡片上的数和点进去看到的必须是同一份；
+* **统计单一来源**：冷启动文档里的阶段统计与主页那一屏的七个读数走同一份 `landingSummary` 计算，卡片上的数和点进去看到的必须是同一份；
 * **乐观上屏与有期限的运行态**：点了发送字就上屏；「进行中」标记带过期时间，不会永远挂着骗人；
 * **增量落屏**：新消息只画新增的那几行，不整屏重绘，长会话滚到一半也不会被拽回去；
-* **重启自愈**：电脑重启后临时隧道换了域名，新地址自动推回手机，点一下接着用。
+* **换址找得回来**：电脑重启后临时隧道换了域名，下一条推送正文末尾会带上当下地址；在微信里发一句话，回话里也会把当前地址给你。
 
 ---
 
@@ -92,13 +91,15 @@ DSH 在电脑上跑重构、排查、改代码、跑测试时，一个任务常�
 * **不做全量桌面配置与插件管理**：环境变量、profile、插件安装属于桌面职责，窄屏上配这些容易误触，要改就回电脑前；
 * **不做文件树与在机代码编辑器**：手机负责提需求和放行，读 diff、审代码留在大屏；
 * **不自建云端与账号体系**：纯本地运行，出站穿透，不在第三方留存内容；
-* **不打包原生 App**：纯 Web 链接，免装免审，微信内秒开秒关。
+* **不打包原生 App**：纯 Web 链接，免装免审，微信里点开就用、关掉就退。
 
 ---
 
 ## 七、安装
 
-### 从 npm 装（推荐）
+### 从 npm 装
+
+> 首次发布落地前 npm 上还没有这个包；若 `dsh plugin add` 报找不到，改用下面的「从仓库装」。
 
 ```bash
 dsh plugin --profile <你的 profile> add dsh-pocket-glide
@@ -127,7 +128,7 @@ node tools/install-to-profile.mjs
 在桌面配对面板里填推送凭据（微信 Server酱 / WxPusher / Bark）：
 
 * 任务完成或等待输入时，手机收到提醒；
-* 触发远程重启后，新生成的公网地址自动推到手机。
+* 触发远程重启后，下一条推送（或在微信里发一句话）会带上新生成的公网地址。
 
 ---
 
@@ -144,19 +145,23 @@ node tools/install-to-profile.mjs
 
 ---
 
-## 九、三份对外简介（随 README 同步维护）
+## 九、三处对外简介（随 README 同步维护）
 
 **GitHub 仓库简介（About）：**
 
-> DSH 的手机接入层：宿主按窄屏直接产页面，不搬桌面像素。微信提醒点链接直达会话，发送乐观上屏、流式不拽滚动、审批与排队在手机上完成，还能直接管 DS Bot 团队。纯 Web 链接免安装，局域网直连或 Cloudflare 临时隧道出站，重启换址自动推回；零构建，壳字节预算写进测试。
+> DSH 的手机接入层：宿主按窄屏直接产页面，不搬桌面像素。微信提醒点开进工作区，会话就在最上面；发送乐观上屏、流式不拽滚动、审批与排队在手机上完成，还能直接管 DS Bot 团队。纯 Web 链接免安装，局域网直连或 Cloudflare 临时隧道出站，换址后由下一条推送带回新地址；零构建，壳字节预算写进测试。
 
 **npm 包简介（description）：**
 
-> Pocket DSH — the light mobile companion plugin for DeepSeek Harness. Host-rendered phone pages, no build step and no desktop pixels streamed: tap a push to land in the conversation, sends appear optimistically, streaming never steals your scroll, approvals and queued prompts happen on the phone, and the DS Bot team is a tap away. Plain web link, LAN pairing or a Cloudflare quick tunnel that pushes its new address back after a restart.
+> Pocket DSH: a zero-build phone plugin for DeepSeek Harness. The host renders narrow screens, no desktop pixels streamed; optimistic sends, steady scroll, on-phone approvals, LAN or outbound tunnel.
 
-**DSH 插件市场简介：**
+**DSH 插件市场简介（`description.zh`）：**
 
-> 把 DSH 的手机面做成拇指够得着的一列：宿主按窄屏直接产页面，零构建、零前端框架。微信提醒一点直达会话，发送乐观上屏，流式不拽滚动，权限审批与排队在手机上完成；新建会话、换模型、传图片文件、看子代理都有。主页右下角可进 DS Bot 团队——成员私聊、群聊、工具审批卡。局域网扫码直连，或走出站 Cloudflare 临时隧道，电脑重启换址会自动推回手机。壳字节预算写进测试，微信 WebView 里也秒开。
+> 把 DSH 的手机面做成拇指够得着的一列：宿主按窄屏直接产页面，零构建、零前端框架，不搬桌面像素。排序是响应速度 > 状态诚实 > 熟悉感 > 品牌感 > 美观。微信提醒点开进工作区，会话就在最上面；发送乐观上屏，流式不拽滚动，权限审批与排队在手机上完成；新建会话、换模型、传图片文件、看子代理都有。主页右下角可进 DS Bot 团队——成员私聊、群聊、工具审批卡。局域网扫码直连，或走出站 Cloudflare 临时隧道，换址后由下一条推送带回新地址。壳字节预算写进测试。
+
+**DSH 插件市场简介（`description.en`）：**
+
+> Turn DSH's phone side into one thumb-reachable column: the host renders pages for narrow screens, zero build, no front-end framework, no desktop pixels streamed. The order is responsiveness > honest state > familiarity > brand > looks. A WeChat push opens the workspace with the conversation on top; sends appear optimistically, streaming never steals your scroll, approvals and queued prompts happen on the phone, plus new sessions, model switching, image and file uploads, and sub-agent rows. The DS Bot team is a tap away with member DMs, group chat and tool-approval cards. Pair over LAN by QR, or go out through a Cloudflare quick tunnel; after a restart the next push carries the new address. A shell byte budget is asserted in tests.
 
 ---
 
